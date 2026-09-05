@@ -1303,4 +1303,395 @@ export function mirrorMoves(cage, moved) {
   return out;
 }
 
+/* ------------------------------------------------------------- editing */
+
+/**
+ * Pull a new face out of the ones selected.
+ *
+ * The single most used thing in the workspace: it is how a limb is drawn out of
+ * a body. The chosen faces are lifted off, the hole they leave is walled in, and
+ * what comes back is the lifted faces, which is what the drag then moves. Faces
+ * picked together are lifted as one piece, so a run of them comes out as a limb
+ * rather than as a row of separate stubs.
+ */
+export function extrudeFaces(cage, faceIds, distance = 0) {
+  const pick = new Set(faceIds);
+  if (!pick.size) return null;
+  const out = cloneCage(cage);
+  const adj = adjacency(cage);
+
+  // Which points are on the boundary of the lifted patch, and which are inside
+  // it. An inside point moves and takes everything with it; a boundary one is
+  // duplicated so the wall has something to stand on.
+  const onPatch = new Set();
+  for (const fi of pick) for (const v of cage.faces[fi]) onPatch.add(v);
+
+  const boundary = new Set();
+  for (const e of adj.edges.values()) {
+    const inside = e.faces.filter((f) => pick.has(f)).length;
+    if (inside > 0 && inside < e.faces.length) {
+      boundary.add(e.a);
+      boundary.add(e.b);
+    }
+    // An edge of the patch that has nothing on its far side is on the cage's
+    // own rim, and counts as boundary too.
+    if (inside === e.faces.length && e.faces.length === 1) {
+      boundary.add(e.a);
+      boundary.add(e.b);
+    }
+  }
+
+  const lifted = new Map();
+  const normalAt = (v) => {
+    let n = [0, 0, 0];
+    for (const fi of new Set(adj.facesAt[v])) {
+      if (!pick.has(fi)) continue;
+      n = add(n, faceNormal(cage, fi));
+    }
+    const u = unit(n);
+    return len(u) ? u : [0, 0, 1];
+  };
+  for (const v of onPatch) {
+    const moved = add(cage.points[v], mul(normalAt(v), distance));
+    lifted.set(v, out.points.push(moved) - 1);
+  }
+
+  // The lifted faces, and a wall round the edge of the patch.
+  const faces = [];
+  cage.faces.forEach((face, fi) => {
+    if (!pick.has(fi)) faces.push(face.slice());
+  });
+  for (const fi of pick) faces.push(cage.faces[fi].map((v) => lifted.get(v)));
+
+  for (const e of adj.edges.values()) {
+    const inside = e.faces.filter((f) => pick.has(f)).length;
+    const onRim = inside === e.faces.length && e.faces.length === 1;
+    if (!(inside > 0 && inside < e.faces.length) && !onRim) continue;
+    // Wound to match the face it came off, so the wall faces outward too.
+    const fi = e.faces.find((f) => pick.has(f));
+    const face = cage.faces[fi];
+    const i = face.indexOf(e.a);
+    const forward = face[(i + 1) % face.length] === e.b;
+    const [a, b] = forward ? [e.a, e.b] : [e.b, e.a];
+    faces.push([a, b, lifted.get(b), lifted.get(a)]);
+  }
+
+  out.faces = faces;
+  void boundary;
+  return { cage: compactCageKeeping(out, lifted), lifted: [...lifted.values()] };
+}
+
+/** The average normal of one face. */
+function faceNormal(cage, fi) {
+  const face = cage.faces[fi];
+  let n = [0, 0, 0];
+  for (let i = 1; i + 1 < face.length; i++) {
+    n = add(
+      n,
+      cross(
+        sub(cage.points[face[i]], cage.points[face[0]]),
+        sub(cage.points[face[i + 1]], cage.points[face[0]])
+      )
+    );
+  }
+  const u = unit(n);
+  return len(u) ? u : [0, 0, 1];
+}
+
+/** Compact, and renumber the points a caller is still holding on to. */
+function compactCageKeeping(cage, lifted) {
+  const before = cage.points.length;
+  const used = new Set();
+  for (const face of cage.faces) for (const v of face) used.add(v);
+  if (used.size === before) return cage;
+
+  const map = new Map();
+  const points = [];
+  for (let v = 0; v < before; v++) {
+    if (!used.has(v)) continue;
+    map.set(v, points.length);
+    points.push(cage.points[v]);
+  }
+  const faces = cage.faces.map((face) => face.map((v) => map.get(v)));
+  const creases = {};
+  for (const [k, w] of Object.entries(cage.creases || {})) {
+    const [a, b] = k.split('_').map(Number);
+    if (map.has(a) && map.has(b)) creases[edgeKey(map.get(a), map.get(b))] = w;
+  }
+  for (const [k, v] of lifted) lifted.set(k, map.get(v));
+  return { points, faces, creases, corners: {}, symmetry: cage.symmetry };
+}
+
+/* -------------------------------------------------------- selection sets */
+
+/** The points a set of faces is made of. */
+export function pointsOfFaces(cage, faceIds) {
+  const out = new Set();
+  for (const fi of faceIds) for (const v of cage.faces[fi]) out.add(v);
+  return [...out];
+}
+
+/**
+ * One more ring of faces out, or one fewer.
+ *
+ * Growing takes every face that shares a point with the selection; shrinking
+ * drops every face that has a point on its edge. Between them they are how a
+ * selection is worked up to the right size without clicking forty times.
+ */
+export function growFaces(cage, faceIds, adj = adjacency(cage)) {
+  const have = new Set(faceIds);
+  const touched = new Set();
+  for (const fi of have) for (const v of cage.faces[fi]) {
+    for (const other of adj.facesAt[v]) touched.add(other);
+  }
+  return [...touched];
+}
+
+export function shrinkFaces(cage, faceIds, adj = adjacency(cage)) {
+  const have = new Set(faceIds);
+  const edgeOfSet = new Set();
+  for (const e of adj.edges.values()) {
+    const inside = e.faces.filter((f) => have.has(f)).length;
+    if (inside > 0 && inside < e.faces.length) {
+      edgeOfSet.add(e.a);
+      edgeOfSet.add(e.b);
+    }
+  }
+  return [...have].filter((fi) => !cage.faces[fi].some((v) => edgeOfSet.has(v)));
+}
+
+/**
+ * The whole loop an edge belongs to.
+ *
+ * A loop runs end to end: at each vertex it carries straight on, which on a
+ * cage means taking the edge that shares no face with the one arrived on. At a
+ * vertex where four edges meet there is exactly one such edge, and that is what
+ * makes a loop the natural run of edges along a shape rather than round it.
+ */
+export function edgeLoop(cage, a, b, adj = adjacency(cage)) {
+  const out = [[a, b]];
+  const seen = new Set([edgeKey(a, b)]);
+
+  const straightOn = (from, at) => {
+    const here = adj.edges.get(edgeKey(from, at));
+    if (!here) return null;
+    const faces = new Set(here.faces);
+    for (const k of adj.edgesAt[at]) {
+      if (k === here.key) continue;
+      const e = adj.edges.get(k);
+      if (e.faces.some((f) => faces.has(f))) continue;
+      return e;
+    }
+    return null;
+  };
+
+  // Forwards from one end, then backwards from the other, so an open run comes
+  // out whole rather than as the half the walk happened to start on.
+  for (const [first, second] of [[a, b], [b, a]]) {
+    let from = first;
+    let at = second;
+    let guard = 0;
+    while (guard++ < 1e4) {
+      const next = straightOn(from, at);
+      if (!next || seen.has(next.key)) break;
+      seen.add(next.key);
+      out.push([next.a, next.b]);
+      from = at;
+      at = next.a === at ? next.b : next.a;
+    }
+  }
+  return out;
+}
+
+/**
+ * The ring an edge belongs to: the edges parallel to it, round the same band.
+ *
+ * Where a loop runs along a shape, a ring runs round it, crossing a band of
+ * quads by stepping from each edge to the one opposite in the quad beside it.
+ * It is the same walk Insert Edge makes, which is not a coincidence: inserting
+ * a loop is cutting across exactly this ring.
+ */
+export function edgeRingSet(cage, a, b, adj = adjacency(cage)) {
+  const out = [[a, b]];
+  const seen = new Set([edgeKey(a, b)]);
+  for (const step of edgeRing(cage, adj, a, b)) {
+    const k = edgeKey(step.e2[0], step.e2[1]);
+    if (seen.has(k)) break;
+    seen.add(k);
+    out.push([step.e2[0], step.e2[1]]);
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------- moving points */
+
+export const SOFT_EXTENTS = [
+  ['none', 'Off'],
+  ['distance', 'Distance'],
+  ['faces', 'Face count']
+];
+
+export const TRANSITIONS = [
+  ['smooth', 'Smooth'],
+  ['linear', 'Linear'],
+  ['bulge', 'Bulge']
+];
+
+/**
+ * How much of a move each point takes.
+ *
+ * The chosen points take all of it. With soft modification on, the ones around
+ * them take a share that falls off with how far away they are, which is what
+ * makes a drag a swell in the surface rather than a dent with a hard rim. How
+ * it falls off is the transition, and the three are the three Fusion offers.
+ */
+export function softWeights(cage, chosen, opts = {}, adj = adjacency(cage)) {
+  const weight = new Map();
+  for (const v of chosen) weight.set(v, 1);
+  const mode = opts.extent || 'none';
+  if (mode === 'none') return weight;
+
+  const shape = (t) => {
+    const x = Math.max(0, Math.min(1, 1 - t));
+    if (opts.transition === 'linear') return x;
+    if (opts.transition === 'bulge') return Math.sqrt(Math.max(0, 1 - (1 - x) * (1 - x)));
+    return x * x * (3 - 2 * x); // smoothstep
+  };
+  const scale = Math.max(0, opts.weight ?? 1);
+
+  if (mode === 'faces') {
+    // How many steps across the cage, which is what a face count means.
+    const rings = Math.max(1, Math.round(opts.faces ?? 1));
+    let front = new Set(chosen);
+    const seen = new Set(chosen);
+    for (let r = 1; r <= rings; r++) {
+      const next = new Set();
+      for (const v of front) {
+        for (const k of adj.edgesAt[v]) {
+          const e = adj.edges.get(k);
+          const other = e.a === v ? e.b : e.a;
+          if (seen.has(other)) continue;
+          seen.add(other);
+          next.add(other);
+        }
+      }
+      for (const v of next) weight.set(v, shape(r / (rings + 1)) * scale);
+      front = next;
+      if (!front.size) break;
+    }
+    return weight;
+  }
+
+  // By distance, from whichever chosen point is nearest.
+  const reach = Math.max(1e-9, opts.distance ?? 10);
+  for (let v = 0; v < cage.points.length; v++) {
+    if (weight.has(v)) continue;
+    let best = Infinity;
+    for (const c of chosen) best = Math.min(best, len(sub(cage.points[v], cage.points[c])));
+    if (best >= reach) continue;
+    weight.set(v, shape(best / reach) * scale);
+  }
+  return weight;
+}
+
+/**
+ * Move, turn or scale a set of points, and mirror it if the form is symmetric.
+ *
+ * One place, so live symmetry, soft weighting and the three kinds of transform
+ * are decided once rather than in each of the manipulator's handles.
+ */
+export function transformPoints(cage, weights, transform) {
+  const out = cloneCage(cage);
+  const moved = new Map();
+
+  for (const [v, w] of weights) {
+    if (!(w > 0)) continue;
+    const from = cage.points[v];
+    const to = transform(from, v);
+    moved.set(v, add(from, mul(sub(to, from), w)));
+  }
+
+  const all = mirrorMoves(cage, moved);
+  for (const [v, p] of all) out.points[v] = p;
+  return out;
+}
+
+/** Move by a vector. */
+export function translation(delta) {
+  return (p) => add(p, delta);
+}
+
+/** Turn about a line. */
+export function rotation(origin, axis, angle) {
+  const dir = unit(axis);
+  return (p) => rotateAbout(p, origin, dir, angle);
+}
+
+/**
+ * Scale about a point.
+ *
+ * A factor per axis, in the frame given, so scaling along one handle of the
+ * manipulator stretches rather than swelling.
+ */
+export function scaling(origin, frame, factors) {
+  return (p) => {
+    const d = sub(p, origin);
+    const local = [dot(d, frame.x), dot(d, frame.y), dot(d, frame.z)];
+    return add(
+      origin,
+      add(
+        mul(frame.x, local[0] * factors[0]),
+        add(mul(frame.y, local[1] * factors[1]), mul(frame.z, local[2] * factors[2]))
+      )
+    );
+  };
+}
+
+/**
+ * The frame a manipulator sits in.
+ *
+ * World is the model's own. View lines it up with the screen, which is what you
+ * want for pushing something toward yourself. Selection uses the surface's own
+ * normal, so pulling up means out of the shape rather than up the world.
+ */
+export function selectionFrame(cage, verts, kind, camera) {
+  const centre = centroidOf(cage, verts);
+  if (kind === 'view' && camera) {
+    return { origin: centre, x: camera.x, y: camera.y, z: camera.z };
+  }
+  if (kind === 'selection') {
+    const adj = adjacency(cage);
+    let n = [0, 0, 0];
+    const seen = new Set();
+    for (const v of verts) {
+      for (const fi of adj.facesAt[v]) {
+        if (seen.has(fi)) continue;
+        seen.add(fi);
+        n = add(n, faceNormal(cage, fi));
+      }
+    }
+    const z = unit(n);
+    if (len(z)) {
+      const x = unit(Math.abs(z[0]) < 0.9 ? cross(z, [1, 0, 0]) : cross(z, [0, 1, 0]));
+      return { origin: centre, x, y: cross(z, x), z };
+    }
+  }
+  return { origin: centre, x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+}
+
+export function centroidOf(cage, verts) {
+  if (!verts.length) return [0, 0, 0];
+  let c = [0, 0, 0];
+  for (const v of verts) c = add(c, cage.points[v]);
+  return mul(c, 1 / verts.length);
+}
+
+/** The outward normal at a point, over the faces that meet there. */
+export function pointNormal(cage, v, adj = adjacency(cage)) {
+  let n = [0, 0, 0];
+  for (const fi of new Set(adj.facesAt[v])) n = add(n, faceNormal(cage, fi));
+  const u = unit(n);
+  return len(u) ? u : [0, 0, 1];
+}
+
 export { unit as formUnit, add as formAdd, sub as formSub, mul as formMul, dot as formDot };

@@ -7032,6 +7032,230 @@ async function run() {
     scope.dispose();
   });
 
+  /* -------- batch 10, session two: edit form -------- */
+
+  test('edit form: pulling a face out adds a wall and keeps it closed', () => {
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    const made = FM.extrudeFaces(box, [0], 10);
+    assert(made, 'it pulled');
+    const cage = made.cage;
+    assert(FM.boundaryLoops(cage).length === 0, 'and the cage is still closed');
+    // The face that was lifted, plus four walls, in place of the one it left.
+    assert(cage.faces.length === box.faces.length + 4, `six plus four walls, got ${cage.faces.length}`);
+    assert(made.lifted.length === 4, `the four corners came back, got ${made.lifted.length}`);
+
+    // It really moved: the lifted face is ten further along its own normal.
+    const before = box.points.map((p) => p[2]);
+    const after = made.lifted.map((v) => cage.points[v][2]);
+    assert(
+      Math.max(...after) > Math.max(...before) + 5 ||
+        Math.min(...after) < Math.min(...before) - 5,
+      'and it stands clear of the face it came off'
+    );
+
+    const scope = new K.Scope();
+    const solid = formSolid(cage, 2, scope);
+    assert(K.status(solid) === 'NoError', 'and it is still a real solid');
+    scope.dispose();
+  });
+
+  test('edit form: two faces pulled together come out as one limb', () => {
+    // Side by side, they share an edge, and the wall must not be built down
+    // the middle of the pair or the limb comes out as two stubs.
+    const grid = FM.boxCage(FXY, [30, 30, 30], [3, 1, 1]);
+    const top = grid.faces
+      .map((f, i) => i)
+      .filter((i) => grid.faces[i].every((v) => grid.points[v][2] > 14));
+    assert(top.length === 3, `three faces across the top, got ${top.length}`);
+
+    const made = FM.extrudeFaces(grid, top.slice(0, 2), 8);
+    assert(made, 'it pulled');
+    assert(FM.boundaryLoops(made.cage).length === 0, 'and stayed closed');
+    // Six points lifted, not eight: the shared edge is not doubled.
+    assert(made.lifted.length === 6, `six points lifted, got ${made.lifted.length}`);
+  });
+
+  test('edit form: grow takes in the ring around, shrink gives it back', () => {
+    const box = FM.boxCage(FXY, [30, 30, 30], [3, 3, 3]);
+    const adj = FM.adjacency(box);
+    const one = [0];
+    const grown = FM.growFaces(box, one, adj);
+    assert(grown.length > 1, `it grew, ${grown.length} faces`);
+    assert(grown.includes(0), 'and kept what it started with');
+
+    const back = FM.shrinkFaces(box, grown, adj);
+    assert(back.length < grown.length, `and shrank again, ${back.length}`);
+    assert(back.length >= 1, 'without vanishing');
+  });
+
+  test('edit form: a loop runs across the quads and a ring runs along them', () => {
+    const cyl = FM.cylinderCage(FXY, 15, 40, 8, 3, false);
+    const adj = FM.adjacency(cyl);
+    // An edge running up the side of the tube.
+    const up = [...adj.edges.values()].find((e) => {
+      const a = cyl.points[e.a];
+      const b = cyl.points[e.b];
+      return Math.abs(a[2] - b[2]) > 1;
+    });
+    assert(up, 'found an edge up the side');
+
+    // The loop runs up the side of the tube, so it is as long as the tube has
+    // rows: three. The ring runs round it, so it is one edge per side: eight.
+    const loop = FM.edgeLoop(cyl, up.a, up.b, adj);
+    const ring = FM.edgeRingSet(cyl, up.a, up.b, adj);
+    assert(loop.length === 3, `three up the side, got ${loop.length}`);
+    assert(ring.length === 8, `eight round the tube, got ${ring.length}`);
+
+    // And they only share the edge they both started from.
+    const key = ([x, y]) => `${Math.min(x, y)}_${Math.max(x, y)}`;
+    const inLoop = new Set(loop.map(key));
+    const shared = ring.filter((e) => inLoop.has(key(e)));
+    assert(shared.length === 1, `they cross once, got ${shared.length}`);
+  });
+
+  test('edit form: soft weights fall off, and hard ones do not', () => {
+    const grid = FM.planeCage(FXY, 60, 60, 6, 6);
+    const middle = grid.points
+      .map((p, i) => i)
+      .filter((i) => Math.hypot(grid.points[i][0], grid.points[i][1]) < 1e-6);
+    assert(middle.length === 1, 'one point in the middle');
+
+    const hard = FM.softWeights(grid, middle, { extent: 'none' });
+    assert(hard.size === 1, 'nothing else moves with it');
+
+    const soft = FM.softWeights(grid, middle, {
+      extent: 'distance',
+      distance: 25,
+      transition: 'linear',
+      weight: 1
+    });
+    assert(soft.size > 1, `and with soft on, ${soft.size} points share the move`);
+    assert(soft.get(middle[0]) === 1, 'the chosen one takes all of it');
+
+    // Further away is less, which is the whole of what soft modification means.
+    const byDistance = [...soft.entries()]
+      .map(([v, w]) => ({ d: Math.hypot(grid.points[v][0], grid.points[v][1]), w }))
+      .sort((a, b) => a.d - b.d);
+    for (let i = 1; i < byDistance.length; i++) {
+      assert(
+        byDistance[i].w <= byDistance[i - 1].w + 1e-9,
+        `weight never rises with distance, ${byDistance[i].w} at ${byDistance[i].d}`
+      );
+    }
+    assert(byDistance[byDistance.length - 1].w < 0.5, 'and the far ones barely move');
+  });
+
+  test('edit form: a face count reaches exactly that many rings out', () => {
+    const grid = FM.planeCage(FXY, 60, 60, 6, 6);
+    const corner = [0];
+    const one = FM.softWeights(grid, corner, { extent: 'faces', faces: 1, weight: 1 });
+    const two = FM.softWeights(grid, corner, { extent: 'faces', faces: 2, weight: 1 });
+    assert(two.size > one.size, `two rings reach further than one, ${two.size} against ${one.size}`);
+    assert(one.size === 3, `a corner has two neighbours plus itself, got ${one.size}`);
+  });
+
+  test('edit form: moving points moves only what was weighted', () => {
+    const grid = FM.planeCage(FXY, 40, 40, 4, 4);
+    const chosen = [0, 1];
+    const weights = FM.softWeights(grid, chosen, { extent: 'none' });
+    const moved = FM.transformPoints(grid, weights, FM.translation([0, 0, 5]));
+
+    for (let v = 0; v < grid.points.length; v++) {
+      const want = chosen.includes(v) ? 5 : 0;
+      near(moved.points[v][2], want, 1e-9, `point ${v}`);
+    }
+  });
+
+  test('edit form: a turn about an axis is a turn, not a shift', () => {
+    const grid = FM.planeCage(FXY, 40, 40, 2, 2);
+    const all = grid.points.map((_, i) => i);
+    const weights = FM.softWeights(grid, all, { extent: 'none' });
+    const turned = FM.transformPoints(
+      grid,
+      weights,
+      FM.rotation([0, 0, 0], [0, 0, 1], Math.PI / 2)
+    );
+    // A quarter turn about Z takes (20, 20) to (-20, 20).
+    const corner = grid.points.findIndex((p) => p[0] > 19 && p[1] > 19);
+    near(turned.points[corner][0], -20, 1e-9, 'x came from y');
+    near(turned.points[corner][1], 20, 1e-9, 'and y from x');
+    // And nothing changed size.
+    const before = Math.hypot(...grid.points[corner]);
+    const after = Math.hypot(...turned.points[corner]);
+    near(after, before, 1e-9, 'a turn keeps its distance');
+  });
+
+  test('edit form: scaling along one axis stretches rather than swells', () => {
+    const grid = FM.planeCage(FXY, 40, 40, 2, 2);
+    const all = grid.points.map((_, i) => i);
+    const weights = FM.softWeights(grid, all, { extent: 'none' });
+    const frame = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+    const wide = FM.transformPoints(
+      grid,
+      weights,
+      FM.scaling([0, 0, 0], frame, [2, 1, 1])
+    );
+    const corner = grid.points.findIndex((p) => p[0] > 19 && p[1] > 19);
+    near(wide.points[corner][0], 40, 1e-9, 'twice as wide');
+    near(wide.points[corner][1], 20, 1e-9, 'and the same the other way');
+  });
+
+  test('edit form: a symmetric form moves both halves at once', () => {
+    const ball = FM.quadballCage(FXY, 20, 2);
+    const sym = FM.mirrorInternal(ball, { origin: [0, 0, 0], n: [1, 0, 0] });
+    assert(sym.symmetry?.kind === 'mirror', 'it is symmetric');
+
+    // One point well off the seam, moved outward.
+    const v = sym.points.findIndex((p) => p[0] > 5);
+    assert(v >= 0, 'found a point on the near side');
+    const weights = FM.softWeights(sym, [v], { extent: 'none' });
+    const moved = FM.transformPoints(sym, weights, FM.translation([0, 0, 8]));
+
+    // Its twin at minus x moved with it, and by the mirrored amount.
+    const before = sym.points[v];
+    const twin = sym.points.findIndex(
+      (p, i) =>
+        i !== v &&
+        Math.abs(p[0] + before[0]) < 1e-6 &&
+        Math.abs(p[1] - before[1]) < 1e-6 &&
+        Math.abs(p[2] - before[2]) < 1e-6
+    );
+    assert(twin >= 0, 'the twin exists');
+    near(moved.points[v][2], before[2] + 8, 1e-6, 'the one that was dragged moved');
+    near(moved.points[twin][2], before[2] + 8, 1e-6, 'and so did its twin');
+    near(moved.points[twin][0], -moved.points[v][0], 1e-6, 'and they are still a mirror pair');
+  });
+
+  test('edit form: without symmetry only what was picked moves', () => {
+    const ball = FM.quadballCage(FXY, 20, 2);
+    const v = ball.points.findIndex((p) => p[0] > 5);
+    const weights = FM.softWeights(ball, [v], { extent: 'none' });
+    const moved = FM.transformPoints(ball, weights, FM.translation([0, 0, 8]));
+    let changed = 0;
+    for (let i = 0; i < ball.points.length; i++) {
+      if (Math.abs(moved.points[i][2] - ball.points[i][2]) > 1e-9) changed++;
+    }
+    assert(changed === 1, `one point moved, got ${changed}`);
+  });
+
+  test('edit form: the selection frame follows what it is told to', () => {
+    const grid = FM.planeCage(FXY, 40, 40, 2, 2);
+    const face = grid.faces[0];
+
+    const world = FM.selectionFrame(grid, face, 'world');
+    assert(world.z.join(',') === '0,0,1', 'world space is the model own');
+
+    // Selection space points out of the surface, which for a flat grid on XY
+    // is straight up whatever the face happens to be.
+    const sel = FM.selectionFrame(grid, face, 'selection');
+    near(Math.abs(sel.z[2]), 1, 1e-9, 'selection space follows the surface');
+    near(FM.formDot(sel.x, sel.z), 0, 1e-9, 'and its axes are square to each other');
+
+    // And it sits at the middle of what was picked.
+    const middle = FM.centroidOf(grid, face);
+    near(sel.origin[0], middle[0], 1e-9, 'at the middle of the selection');
+  });
+
   /* -------- report -------- */
 
   const summary = {

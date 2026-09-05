@@ -8,8 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.3.0**. 305 tests. Batches 1 to 9 shipped, and the first
-half of Batch 10.
+Current version: **2.4.0**. 317 tests. **Every batch on this list has shipped.**
 
 ---
 
@@ -200,6 +199,11 @@ recurring:
   Keep ids across a rebuild and look the body up again, never the object.
 - A demo that puts everything at the origin proves the arithmetic and shows
   nothing. Lay the work out along an axis before taking the picture.
+- The name check applies to methods on a class as much as to fields on an
+  object. A second `worldToScreen` with a different signature won silently and
+  returned NaN from every call.
+- Anything meant to be grabbed needs to be thick enough to hit. Drawing it
+  correctly is a different question from being able to pick it.
 
 ---
 
@@ -838,36 +842,70 @@ keeping: a subdivision surface has few exact answers and those are three of them
   buttons, exactly as the cross-cutting note warns. Insert, Weld, Crease and
   Display are dropdown groups now.
 
-### Session two, not started
+### Session two, shipped in v2.4.0
 
-**Edit Form**, which is the direct manipulation half and the reason the rest was
-built first. Everything below is documented on Fusion's own Edit Form reference
-page, which gives the option set verbatim:
+**Edit Form**, the direct manipulation half.
 
-- A **3D gizmo** on the selection: translate along an axis or in a plane, rotate
-  about an axis, scale. Transform Mode picks which manipulators show: Multi,
-  Translation, Rotation, Scale.
-- **Coordinate Space**: World, View, Selection, Local Per Entity.
-- **Selection Filter**: Vertex, Edge, Face, All, Body. Vertex picking does not
-  exist anywhere in the app yet and will have to be built; face and edge picking
-  already work on a cage.
-- **Soft Modification**: Extent as a distance, a face count or a rectangular
-  face count; Transition smooth, linear or bulge; a weight.
-- **Selection helpers**: Grow and Shrink, Loop Grow and Shrink, Ring Grow and
-  Shrink, Select Next, Invert, Range.
-- **Live symmetry**: a drag on one half moves the other as it happens.
-  `mirrorMoves` in `form.js` already does the arithmetic; nothing calls it yet.
-- **Edit Form can also pull a new face out** of a selected one, which is how a
-  limb is drawn out of a body and the single most used thing in the workspace.
+- A manipulator on the selection: three arrows to drag along, three squares to
+  drag in, three rings to turn about, three cubes to scale by and one to scale
+  everything. Transform Mode narrows it to Multi, Translation, Rotation or
+  Scale.
+- Coordinate Space: World, View, Selection, and Local Per Entity, which moves
+  each point along its own normal.
+- Selection Filter: Vertex, Edge, Face, All and Body. Vertex picking is new to
+  the whole app: cage points are drawn as marks of their own and hit tested in
+  screen space, because a click cannot land on a point any other way.
+- Soft Modification: extent by distance or by face count, transition smooth,
+  linear or bulge, and a weight.
+- Grow, Shrink, Loop, Ring, Invert and Select All.
+- Live symmetry: a drag on one half moves the other as it happens.
+- Pull, which lifts the picked faces and hands them back as the selection.
 
-The groundwork is all in place: cage picking works through the ordinary face and
-edge selection, `doc.forms` holds the cage, and `editCage` in `app.js` is the
-one place a change goes through.
+A whole drag is one undo entry: the cage as it stood before the press.
+
+### What was learned
+
+- **`worldToScreen` already existed**, taking three numbers rather than a point
+  and returning `clientX`/`clientY` rather than `x`/`y`. Adding a second one
+  later in the same class silently won, and every projection came back NaN. This
+  is the same mistake as Batch 9's `mesh` field, one level up: check what a name
+  already means on a class, not just on an object.
+- **A sign in the closest-approach formula** dragged everything backwards. The
+  vector between the two origins runs from the line to the ray. Measured by
+  dragging up and reading the number, which is the only way that kind of error
+  shows itself.
+- **A handle a pixel thick is not a handle.** The shafts and rings drew
+  correctly and could not be grabbed at all. Thickness for picking is a separate
+  question from thickness for drawing.
+- **A demo that selects everything and then tests Grow** proves nothing. Reset
+  the state between what is being demonstrated.
 
 ### Done when
 
 Version 2.4.0, and a face can be dragged out into a limb with the other half of
-a mirrored body following it.
+a mirrored body following it. **Both are done**: the driven demo pulls a face
+out of a box and drags it 18 mm into a limb, and drags one point of a mirrored
+quadball while checking its twin moves by the same amount.
+
+---
+
+## Where to go next
+
+Every batch on the list has shipped. What is left is written up in README.md
+under **What is not here**, and it is all of the form "this stops here, for this
+reason" rather than "this is missing". The gaps worth the next session, in the
+order they would be felt:
+
+1. **Chord-length and rule fillets.** Constant and variable radius work; these
+   two do not exist. The smallest real gap in the Solid tab.
+2. **Sheet metal miters and named rules.** A miter between two flanges is not
+   cut automatically, and there is one rule per document rather than a library.
+3. **Three-bend corner relief**, where sheet metal currently handles two.
+4. **Face groups you can edit by hand**, rather than only regenerate by angle,
+   which would give the Mesh tab its Create Face Group and Combine Face Groups.
+5. **Performance.** A rebuild still replays the whole timeline with no caching
+   of unchanged prefixes. Worth doing when a rebuild first crosses a second on
+   a real part, and not before.
 
 ---
 

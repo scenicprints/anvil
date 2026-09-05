@@ -908,6 +908,254 @@ export class Viewport {
    * What is under the cursor. Edges win over faces within a few pixels, which
    * is what makes picking an edge to fillet feel reliable.
    */
+  /* ---------------------------------------------------------------- */
+  /* The cage's own points, and the manipulator                        */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Draw a control cage's points so they can be picked.
+   *
+   * Nothing else in the app selects a vertex: a solid's corners are wherever
+   * the triangles happen to meet and mean nothing. A cage's points are the
+   * thing being shaped, so they are drawn as marks of their own and hit tested
+   * in screen space, which is the only way a point can be clicked at all.
+   */
+  setCagePoints(points, chosen) {
+    if (!points?.length) {
+      if (this.cageMarks) {
+        this.cageMarks.visible = false;
+        this.cageChosen.visible = false;
+      }
+      this.cagePoints = null;
+      this.invalidate();
+      return;
+    }
+    this.cagePoints = points;
+
+    const flat = new Float32Array(points.length * 3);
+    points.forEach((p, i) => {
+      flat[i * 3] = p[0];
+      flat[i * 3 + 1] = p[1];
+      flat[i * 3 + 2] = p[2];
+    });
+
+    if (!this.cageMarks) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(flat, 3));
+      this.cageMarks = new THREE.Points(
+        geom,
+        new THREE.PointsMaterial({
+          color: 0x2a2822,
+          size: 7,
+          sizeAttenuation: false,
+          depthTest: false
+        })
+      );
+      this.cageMarks.renderOrder = 5;
+      this.overlayGroup.add(this.cageMarks);
+
+      const geom2 = new THREE.BufferGeometry();
+      geom2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+      this.cageChosen = new THREE.Points(
+        geom2,
+        new THREE.PointsMaterial({
+          color: 0xd84b1e,
+          size: 11,
+          sizeAttenuation: false,
+          depthTest: false
+        })
+      );
+      this.cageChosen.renderOrder = 6;
+      this.overlayGroup.add(this.cageChosen);
+    } else {
+      this.cageMarks.geometry.dispose();
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(flat, 3));
+      this.cageMarks.geometry = geom;
+    }
+    this.cageMarks.visible = true;
+
+    const picked = [...(chosen || [])].filter((i) => points[i]);
+    const sel = new Float32Array(picked.length * 3);
+    picked.forEach((v, i) => {
+      sel[i * 3] = points[v][0];
+      sel[i * 3 + 1] = points[v][1];
+      sel[i * 3 + 2] = points[v][2];
+    });
+    this.cageChosen.geometry.dispose();
+    const g2 = new THREE.BufferGeometry();
+    g2.setAttribute('position', new THREE.BufferAttribute(sel, 3));
+    this.cageChosen.geometry = g2;
+    this.cageChosen.visible = picked.length > 0;
+    this.invalidate();
+  }
+
+  /** Which cage point is under the pointer, if any. */
+  pickCagePoint(clientX, clientY) {
+    if (!this.cagePoints || !this.cageMarks?.visible) return null;
+    const rc = this.raycastRay(clientX, clientY);
+    rc.params.Points = { threshold: this.pixelSize() * 9 };
+    const hits = rc.intersectObject(this.cageMarks, false);
+    if (!hits.length) return null;
+    // Nearest to the camera among those within reach, which is what a click
+    // through a cage should find.
+    let best = hits[0];
+    for (const h of hits) if (h.distance < best.distance) best = h;
+    return best.index ?? null;
+  }
+
+  /** The pointer, as a ray in the world. */
+  pointerRay(clientX, clientY) {
+    const rc = this.raycastRay(clientX, clientY);
+    return {
+      origin: rc.ray.origin.toArray(),
+      direction: rc.ray.direction.toArray()
+    };
+  }
+
+  /**
+   * The manipulator: arrows to move along, squares to move in, rings to turn
+   * about, and cubes to scale by.
+   *
+   * Built once and re-pointed, because building it is the slow part and it
+   * moves on every click. It is kept at a constant size on screen, so it is the
+   * same thing to grab whether the model is 2 mm or 2 metres across.
+   */
+  setGizmo(frame, mode) {
+    if (!frame) {
+      if (this.gizmo) this.gizmo.visible = false;
+      this.gizmoFrame = null;
+      this.invalidate();
+      return;
+    }
+    if (!this.gizmo) this._buildGizmo();
+    this.gizmoFrame = frame;
+
+    const m = new THREE.Matrix4();
+    m.set(
+      frame.x[0], frame.y[0], frame.z[0], frame.origin[0],
+      frame.x[1], frame.y[1], frame.z[1], frame.origin[1],
+      frame.x[2], frame.y[2], frame.z[2], frame.origin[2],
+      0, 0, 0, 1
+    );
+    this.gizmo.matrixAutoUpdate = false;
+    this.gizmo.matrix.copy(m);
+    this.gizmo.visible = true;
+
+    const want = (kind) =>
+      mode === 'multi' ||
+      (mode === 'translation' && (kind === 'move' || kind === 'movePlane')) ||
+      (mode === 'rotation' && kind === 'rotate') ||
+      (mode === 'scale' && (kind === 'scale' || kind === 'scaleAll'));
+    for (const child of this.gizmo.children) {
+      child.visible = want(child.userData.handle.kind);
+    }
+    this._sizeGizmo();
+    this.invalidate();
+  }
+
+  _buildGizmo() {
+    const g = new THREE.Group();
+    g.renderOrder = 10;
+    const AXES = [
+      { dir: [1, 0, 0], colour: 0xc0392b },
+      { dir: [0, 1, 0], colour: 0x27803a },
+      { dir: [0, 0, 1], colour: 0x2c5f9e }
+    ];
+    const mat = (colour) =>
+      new THREE.MeshBasicMaterial({ color: colour, depthTest: false, transparent: true, opacity: 0.95 });
+
+    AXES.forEach((a, i) => {
+      const dir = new THREE.Vector3(...a.dir);
+
+      // The shaft and its head, as one thing to grab.
+      // Thick enough to hit. A shaft a pixel wide is drawn correctly and
+      // cannot be grabbed, which is the same as not being there.
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.8, 10), mat(a.colour));
+      shaft.position.copy(dir.clone().multiplyScalar(0.4));
+      shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      shaft.userData.handle = { kind: 'move', axis: i };
+      g.add(shaft);
+
+      const head = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.14, 10), mat(a.colour));
+      head.position.copy(dir.clone().multiplyScalar(0.87));
+      head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      head.userData.handle = { kind: 'move', axis: i };
+      g.add(head);
+
+      // The square between the other two axes: drag in that plane.
+      const u = AXES[(i + 1) % 3].dir;
+      const v = AXES[(i + 2) % 3].dir;
+      const quad = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.22, 0.22),
+        new THREE.MeshBasicMaterial({
+          color: a.colour,
+          depthTest: false,
+          transparent: true,
+          opacity: 0.35,
+          side: THREE.DoubleSide
+        })
+      );
+      quad.position.set(
+        (u[0] + v[0]) * 0.28,
+        (u[1] + v[1]) * 0.28,
+        (u[2] + v[2]) * 0.28
+      );
+      quad.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+      quad.userData.handle = { kind: 'movePlane', axis: i };
+      g.add(quad);
+
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.03, 8, 48), mat(a.colour));
+      ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+      ring.userData.handle = { kind: 'rotate', axis: i };
+      g.add(ring);
+
+      const cube = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), mat(a.colour));
+      cube.position.copy(dir.clone().multiplyScalar(1.05));
+      cube.userData.handle = { kind: 'scale', axis: i };
+      g.add(cube);
+    });
+
+    const middle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 0.12, 0.12),
+      mat(0x8a8578)
+    );
+    middle.userData.handle = { kind: 'scaleAll', axis: -1 };
+    g.add(middle);
+
+    this.gizmo = g;
+    this.overlayGroup.add(g);
+  }
+
+  /** Hold the manipulator at one size on screen, whatever the model measures. */
+  _sizeGizmo() {
+    if (!this.gizmo?.visible || !this.gizmoFrame) return;
+    const size = this.pixelSize() * 95;
+    const f = this.gizmoFrame;
+    const m = new THREE.Matrix4();
+    m.set(
+      f.x[0] * size, f.y[0] * size, f.z[0] * size, f.origin[0],
+      f.x[1] * size, f.y[1] * size, f.z[1] * size, f.origin[1],
+      f.x[2] * size, f.y[2] * size, f.z[2] * size, f.origin[2],
+      0, 0, 0, 1
+    );
+    this.gizmo.matrix.copy(m);
+  }
+
+  /** Which handle of the manipulator is under the pointer. */
+  pickGizmo(clientX, clientY) {
+    if (!this.gizmo?.visible) return null;
+    this._sizeGizmo();
+    this.gizmo.updateMatrixWorld(true);
+    const rc = this.raycastRay(clientX, clientY);
+    const hits = rc.intersectObjects(
+      this.gizmo.children.filter((c) => c.visible),
+      false
+    );
+    if (!hits.length) return null;
+    return { ...hits[0].object.userData.handle, point: hits[0].point.toArray() };
+  }
+
   pickEntity(clientX, clientY, opts = {}) {
     const rc = this.raycastRay(clientX, clientY);
     const visible = [...this.bodies.entries()].filter(([, b]) => b.mesh.visible);
@@ -1104,6 +1352,9 @@ export class Viewport {
     this.renderer.setScissorTest(false);
     this.renderer.setViewport(0, 0, rect.width, rect.height);
     this.renderer.clear();
+    // The manipulator is held at one size on screen, so it has to be resized
+    // whenever the view moves rather than only when the selection changes.
+    this._sizeGizmo();
     this.renderer.render(this.scene, this.camera);
 
     // View cube, drawn over the top right corner.

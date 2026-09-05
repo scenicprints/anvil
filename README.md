@@ -660,6 +660,32 @@ than two things that happen to match, and it remembers that. **Circular** does
 the same about an axis. **Display** shows the cage, the surface, or the cage
 over the surface, which is the one to work in.
 
+**Edit Form** is where the shaping happens. Click the cage to pick a vertex, an
+edge or a face, and a manipulator appears on what you picked: arrows to drag
+along, squares to drag in, rings to turn about, cubes to scale by. **Transform
+mode** narrows it to one of those when the others are in the way. **Coordinate
+space** decides which way its axes run: the model's own, the screen's, the
+surface's, or each point's own normal, which is how a whole face is pushed out
+of a rounded body without shearing it. **Selection filter** says what a click
+can land on.
+
+**Soft modification** is what makes a drag a swell in the surface rather than a
+dent with a hard rim: the points around the ones picked take a share of the move
+that falls off with distance, or with how many faces out they are, smoothly,
+linearly or with a bulge. **Grow**, **Shrink**, **Loop**, **Ring** and **Invert**
+work a selection up to the right size without forty clicks. A loop runs along the
+shape and a ring runs round it, which is the difference between picking the line
+up a tube and picking the band round it.
+
+**Pull** lifts the picked faces off, walls in the hole they leave, and hands the
+lifted faces back as the selection, so the drag that follows draws them out into
+a limb. Faces picked together come out as one piece rather than as a row of
+stubs.
+
+A form that has been made symmetric moves both halves at once, as the drag
+happens rather than as a repair afterwards. A whole drag is one undo, not one
+per frame.
+
 **Finish Form** turns it into a solid, and refuses a form that is not closed
 rather than handing the kernel something that looks right and is not watertight.
 **Thicken** is for the ones that are meant to be open.
@@ -915,11 +941,11 @@ analyses at all.
 variable radius work), and Fusion's compute options for patterns that hit
 different geometry. Silhouette Split works only where the parting line is flat.
 
-**Where the form tools stop, for now.** Edit Form, the gizmo that moves, rotates
-and scales what is selected, is not here yet: the cage is changed by the
-commands on the tab rather than by dragging it. That means no soft modification,
-no selection grow, loop or ring, and no live symmetry mirroring of a drag. It is
-the next thing, and it is why the rest of this was built first.
+**Where the form tools stop.** A circular symmetry is remembered but a drag is
+not mirrored round it: only mirror symmetry follows a drag live. Range selection
+and Select Next are not there; Grow, Shrink, Loop, Ring, Invert and Select All
+are. Edit Form cannot pull a face out by holding a key while dragging, the way
+Fusion does; Pull is its own button, which does the same thing in two steps.
 
 **Where the mesh tools stop.** Face groups are worked out from the angle between
 triangles rather than kept as a stored grouping you can edit by hand, so

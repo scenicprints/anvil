@@ -153,8 +153,14 @@ async function boot() {
     if (state.sketcher.active) state.sketcher.updateOverlay();
   };
   state.vp.onPointerDown = (e) => handleViewportDown(e);
-  state.vp.onPointerMove = (e) => handleViewportMove(e);
-  state.vp.onPointerUp = (e) => state.sketcher.onPointerUp(e);
+  state.vp.onPointerMove = (e) => {
+    if (state.editForm?.drag && editFormPointerMove(e)) return true;
+    return handleViewportMove(e);
+  };
+  state.vp.onPointerUp = (e) => {
+    if (state.editForm?.drag && editFormPointerUp(e)) return true;
+    return state.sketcher.onPointerUp(e);
+  };
   state.vp.onContextMenu = (e) => showMarkingMenu(e);
 
   // Its own listener rather than a line in handleViewportMove, because that
@@ -416,6 +422,10 @@ function handleViewportDown(e) {
   }
 
   if (e.button !== 0) return false;
+
+  // Shaping a form takes the click before anything else does, so a drag on the
+  // manipulator is not read as the start of an orbit.
+  if (state.editForm && editFormPointerDown(e)) return true;
 
   // A dialog that is waiting to be pointed at gets the click first.
   if (state.editing?.pickInto) {
@@ -1147,6 +1157,13 @@ function wireKeys() {
       return;
     }
 
+    // Shaping is a mode, and Escape is how every other mode here is left.
+    if (state.editForm && e.key === 'Escape') {
+      endEditForm();
+      e.preventDefault();
+      return;
+    }
+
     if (state.sketcher.active && state.sketcher.onKeyDown(e)) {
       syncToolButtons();
       e.preventDefault();
@@ -1589,6 +1606,30 @@ async function runCommand(cmd) {
       break;
     case 'finishForm':
       cmdFinishForm();
+      break;
+    case 'editForm':
+      cmdEditForm();
+      break;
+    case 'formPull':
+      cmdFormPull();
+      break;
+    case 'formGrow':
+      cmdFormGrow(false);
+      break;
+    case 'formShrink':
+      cmdFormGrow(true);
+      break;
+    case 'formLoop':
+      cmdFormLoop(false);
+      break;
+    case 'formRing':
+      cmdFormLoop(true);
+      break;
+    case 'formInvert':
+      cmdFormInvert();
+      break;
+    case 'formSelectAll':
+      cmdFormSelectAll();
       break;
     case 'loft':
       startLoft();
@@ -4683,6 +4724,23 @@ const RIBBON_MENUS = {
     ['primSphere', 'Sphere'],
     ['primTorus', 'Torus'],
     ['primPipe', 'Pipe']
+  ],
+  formFaces: [
+    ['formBridge', 'Bridge'],
+    ['formFillHole', 'Fill Hole'],
+    ['formDelete', 'Delete Faces']
+  ],
+  formTidy: [
+    ['formFlatten', 'Flatten'],
+    ['formUniform', 'Make Uniform']
+  ],
+  formSelect: [
+    ['formGrow', 'Grow'],
+    ['formShrink', 'Shrink'],
+    ['formLoop', 'Loop'],
+    ['formRing', 'Ring'],
+    ['formInvert', 'Invert'],
+    ['formSelectAll', 'Select all']
   ],
   formInsert: [
     ['formInsertEdge', 'Insert Edge'],
@@ -10357,6 +10415,622 @@ function formThickenFields() {
   ];
 }
 
+/* -------- vectors, for the drag arithmetic -------- */
+
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const addv = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const mulv = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const distance3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+/**
+ * Where along a line the pointer's ray comes nearest to it.
+ *
+ * The standard two-line closest approach, and the one place a sign matters:
+ * the vector between the two origins runs from the line to the ray, not the
+ * other way, and getting it backwards drags everything the wrong way.
+ */
+function closestOnLine(ray, origin, dir) {
+  const w = sub3(origin, ray.origin);
+  const a = dot3(dir, dir);
+  const b = dot3(dir, ray.direction);
+  const c = dot3(ray.direction, ray.direction);
+  const d = dot3(dir, w);
+  const e = dot3(ray.direction, w);
+  const denom = a * c - b * b;
+  // A ray straight down the axis tells you nothing about where along it you
+  // are, so the drag holds still rather than leaping.
+  if (Math.abs(denom) < 1e-9) return 0;
+  return (b * e - c * d) / denom;
+}
+
+/** Where the pointer's ray meets a plane, or null if it runs along it. */
+function rayPlane(ray, origin, normal) {
+  const denom = dot3(normal, ray.direction);
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = dot3(sub3(origin, ray.origin), normal) / denom;
+  if (t < 0) return null;
+  return addv(ray.origin, mulv(ray.direction, t));
+}
+
+/** Which way the camera is looking, for the handle that scales everything. */
+function cameraForward() {
+  const m = state.vp.camera.matrixWorld.elements;
+  return [m[8], m[9], m[10]];
+}
+
+/* ---------------------------------------------------------------- */
+/* Edit Form                                                         */
+/* ---------------------------------------------------------------- */
+
+const TRANSFORM_MODES = [
+  ['multi', 'Multi'],
+  ['translation', 'Translation'],
+  ['rotation', 'Rotation'],
+  ['scale', 'Scale']
+];
+
+const COORD_SPACES = [
+  ['world', 'World space'],
+  ['view', 'View space'],
+  ['selection', 'Selection space'],
+  ['local', 'Local per entity']
+];
+
+const SELECT_FILTERS = [
+  ['all', 'All'],
+  ['vertex', 'Vertex'],
+  ['edge', 'Edge'],
+  ['face', 'Face'],
+  ['body', 'Body']
+];
+
+/**
+ * Edit Form: the state of a shaping session.
+ *
+ * Kept on `state` rather than in a feature, because it is a mode you are in
+ * rather than a thing in the model. Nothing here is saved: what is saved is the
+ * cage, which the drags change.
+ */
+function newEditForm(body) {
+  return {
+    bodyId: body.id,
+    form: body.form,
+    mode: 'multi',
+    space: 'world',
+    filter: 'all',
+    soft: { extent: 'none', transition: 'smooth', distance: 15, faces: 2, weight: 1 },
+    vertices: new Set(),
+    drag: null
+  };
+}
+
+/** Whether a shaping session is under way. */
+function editingForm() {
+  return state.editForm || null;
+}
+
+/**
+ * Start shaping.
+ *
+ * The cage is shown over the surface it stands for, because that is the only
+ * mode where you can see the shape and grab the thing that makes it at the same
+ * time.
+ */
+function cmdEditForm() {
+  if (state.sketcher.active) finishSketch();
+  const body = activeForm();
+  if (!body) {
+    setStatus('Edit Form works on a form. Make one from the Form tab first.');
+    return;
+  }
+  if (state.editForm) {
+    endEditForm();
+    return;
+  }
+
+  const feature = state.doc.features.find((f) => f.id === body.createdBy);
+  if (feature && feature.display === 'smooth') {
+    feature.display = 'control';
+    rebuildAll();
+  }
+
+  state.editForm = newEditForm(body);
+  // Whatever was already picked comes into the session, so pointing at a face
+  // and reaching for Edit Form does what it looks like it does.
+  seedEditFormSelection();
+  refreshEditForm();
+  showInspector('Edit Form', editFormFields(), () => endEditForm());
+  setStatus('Drag a handle to move, turn or scale. Escape when done.');
+}
+
+function endEditForm() {
+  state.editForm = null;
+  state.vp.setGizmo(null);
+  state.vp.setCagePoints(null);
+  hideInspector();
+  setStatus('Done shaping.');
+}
+
+/** Take whatever faces and edges are picked into the session as points. */
+function seedEditFormSelection() {
+  const ed = state.editForm;
+  if (!ed) return;
+  const body = (state.result?.bodies || []).find((b) => b.id === ed.bodyId);
+  if (!body) return;
+  const cage = state.doc.forms[ed.form];
+  for (const fi of selectedCageFaces(body)) {
+    for (const v of cage.faces[fi]) ed.vertices.add(v);
+  }
+  for (const [a, b] of selectedCageEdges(body)) {
+    ed.vertices.add(a);
+    ed.vertices.add(b);
+  }
+}
+
+/** Redraw the cage marks and put the manipulator where the selection is. */
+function refreshEditForm() {
+  const ed = editingForm();
+  if (!ed) return;
+  const cage = state.doc.forms[ed.form];
+  if (!cage) {
+    endEditForm();
+    return;
+  }
+  // Points that no longer exist go: a cage can lose points to a weld.
+  for (const v of [...ed.vertices]) if (!cage.points[v]) ed.vertices.delete(v);
+
+  state.vp.setCagePoints(cage.points, ed.vertices);
+  if (!ed.vertices.size) {
+    state.vp.setGizmo(null);
+    return;
+  }
+  state.vp.setGizmo(gizmoFrame(cage, ed), ed.mode);
+}
+
+/** Where the manipulator sits, and which way its axes run. */
+function gizmoFrame(cage, ed) {
+  const verts = [...ed.vertices];
+  const camera =
+    ed.space === 'view'
+      ? (() => {
+          const m = state.vp.camera.matrixWorld.elements;
+          return {
+            x: [m[0], m[1], m[2]],
+            y: [m[4], m[5], m[6]],
+            z: [m[8], m[9], m[10]]
+          };
+        })()
+      : null;
+  const f = FM.selectionFrame(cage, verts, ed.space, camera);
+  return { origin: f.origin, x: f.x, y: f.y, z: f.z };
+}
+
+/**
+ * A click while shaping.
+ *
+ * The manipulator gets first refusal, then a cage point, then whatever the
+ * ordinary picking finds. Returns true when it took the click, so the usual
+ * selection does not also happen.
+ */
+function editFormPointerDown(e) {
+  const ed = editingForm();
+  if (!ed) return false;
+
+  const handle = state.vp.pickGizmo(e.clientX, e.clientY);
+  if (handle) {
+    beginGizmoDrag(handle, e);
+    return true;
+  }
+
+  const cage = state.doc.forms[ed.form];
+  const additive = e.shiftKey || e.ctrlKey;
+
+  if (ed.filter === 'vertex' || ed.filter === 'all') {
+    const v = state.vp.pickCagePoint(e.clientX, e.clientY);
+    if (v !== null && cage.points[v]) {
+      if (!additive) ed.vertices.clear();
+      if (ed.vertices.has(v) && additive) ed.vertices.delete(v);
+      else ed.vertices.add(v);
+      refreshEditForm();
+      reportEditFormSelection();
+      return true;
+    }
+  }
+
+  const hit = state.vp.pickEntity(e.clientX, e.clientY, {
+    edges: ed.filter === 'edge' || ed.filter === 'all'
+  });
+  if (!hit || hit.bodyId !== ed.bodyId) return false;
+
+  const rec = (state.records || []).find((r) => r.id === ed.bodyId);
+  let added = null;
+  if (hit.kind === 'edge' && (ed.filter === 'edge' || ed.filter === 'all')) {
+    const edge = rec?.topology?.edges[hit.edgeId];
+    const ends = edge && [edge.points[0], edge.points[edge.points.length - 1]];
+    added = ends ? ends.map((p) => nearestCagePoint(cage, p)).filter((v) => v !== null) : null;
+  } else if (hit.kind === 'face' && (ed.filter === 'face' || ed.filter === 'all')) {
+    const face = rec?.topology?.faces[hit.faceId];
+    const at = face?.src?.face;
+    if (at !== undefined && at >= 0) added = cage.faces[at].slice();
+  } else if (ed.filter === 'body') {
+    added = cage.points.map((_, i) => i);
+  }
+  if (!added?.length) return false;
+
+  if (!additive) ed.vertices.clear();
+  for (const v of added) ed.vertices.add(v);
+  refreshEditForm();
+  reportEditFormSelection();
+  return true;
+}
+
+function reportEditFormSelection() {
+  const ed = editingForm();
+  if (!ed) return;
+  const n = ed.vertices.size;
+  setStatus(
+    n
+      ? `${n} point${n === 1 ? '' : 's'} picked. Drag a handle, or shift click to add.`
+      : 'Nothing picked. Click the cage.'
+  );
+}
+
+/**
+ * Start a drag on one of the manipulator's handles.
+ *
+ * Everything the drag needs is worked out once, here: which points move and by
+ * how much of the move each takes, where the frame is, and where on the handle
+ * the pointer went down. After that a move is arithmetic.
+ */
+function beginGizmoDrag(handle, e) {
+  const ed = editingForm();
+  const cage = state.doc.forms[ed.form];
+  const frame = gizmoFrame(cage, ed);
+  const verts = [...ed.vertices];
+
+  ed.drag = {
+    handle,
+    frame,
+    verts,
+    weights: FM.softWeights(cage, verts, ed.soft),
+    before: cage,
+    start: pointOnHandle(handle, frame, e),
+    normals:
+      ed.space === 'local'
+        ? new Map(verts.map((v) => [v, FM.pointNormal(cage, v)]))
+        : null,
+    moved: false,
+    pointerId: e.pointerId
+  };
+  try {
+    state.vp.canvas.setPointerCapture(e.pointerId);
+  } catch {
+    /* some pointers cannot be captured, and the drag still works in the canvas */
+  }
+}
+
+/** Where the pointer is, measured in whatever the handle cares about. */
+function pointOnHandle(handle, frame, e) {
+  const ray = state.vp.pointerRay(e.clientX, e.clientY);
+  const axis = handle.axis >= 0 ? [frame.x, frame.y, frame.z][handle.axis] : frame.z;
+
+  if (handle.kind === 'move' || handle.kind === 'scale') {
+    return { t: closestOnLine(ray, frame.origin, axis) };
+  }
+  if (handle.kind === 'scaleAll') {
+    const hit = rayPlane(ray, frame.origin, cameraForward());
+    return { t: hit ? distance3(hit, frame.origin) : 0 };
+  }
+  if (handle.kind === 'movePlane') {
+    const hit = rayPlane(ray, frame.origin, axis);
+    return { point: hit };
+  }
+  // A turn: where round the ring the pointer is.
+  const hit = rayPlane(ray, frame.origin, axis);
+  if (!hit) return { angle: 0 };
+  const u = [frame.x, frame.y, frame.z][(handle.axis + 1) % 3];
+  const v = [frame.x, frame.y, frame.z][(handle.axis + 2) % 3];
+  const d = sub3(hit, frame.origin);
+  return { angle: Math.atan2(dot3(d, v), dot3(d, u)) };
+}
+
+/** The move a drag has come to, applied to the cage it started from. */
+function editFormPointerMove(e) {
+  const ed = editingForm();
+  if (!ed?.drag) return false;
+  const d = ed.drag;
+  const now = pointOnHandle(d.handle, d.frame, e);
+  const axis = d.handle.axis >= 0 ? [d.frame.x, d.frame.y, d.frame.z][d.handle.axis] : d.frame.z;
+
+  let transform = null;
+  if (d.handle.kind === 'move') {
+    const delta = (now.t ?? 0) - (d.start.t ?? 0);
+    if (ed.space === 'local' && d.normals) {
+      // Each point along its own normal, which is how a whole face is pushed
+      // out of a rounded body without shearing it.
+      transform = (p, v) => addv(p, mulv(d.normals.get(v) || axis, delta));
+    } else {
+      transform = FM.translation(mulv(axis, delta));
+    }
+  } else if (d.handle.kind === 'movePlane') {
+    if (!now.point || !d.start.point) return true;
+    transform = FM.translation(sub3(now.point, d.start.point));
+  } else if (d.handle.kind === 'rotate') {
+    let turn = (now.angle ?? 0) - (d.start.angle ?? 0);
+    // Round the back of the ring rather than the long way about.
+    if (turn > Math.PI) turn -= Math.PI * 2;
+    if (turn < -Math.PI) turn += Math.PI * 2;
+    transform = FM.rotation(d.frame.origin, axis, turn);
+  } else if (d.handle.kind === 'scale' || d.handle.kind === 'scaleAll') {
+    const from = d.start.t ?? 0;
+    const to = now.t ?? 0;
+    const k = Math.abs(from) > 1e-9 ? Math.max(0.02, to / from) : 1;
+    const factors = [1, 1, 1];
+    if (d.handle.kind === 'scaleAll') factors[0] = factors[1] = factors[2] = k;
+    else factors[d.handle.axis] = k;
+    transform = FM.scaling(
+      d.frame.origin,
+      { x: d.frame.x, y: d.frame.y, z: d.frame.z },
+      factors
+    );
+  }
+  if (!transform) return true;
+
+  state.doc.forms[ed.form] = Object.assign(
+    FM.transformPoints(d.before, d.weights, transform),
+    { name: d.before.name }
+  );
+  d.moved = true;
+  rebuildAll();
+  refreshEditForm();
+  return true;
+}
+
+/** Let go: one undo entry for the whole drag, not one per frame. */
+function editFormPointerUp(e) {
+  const ed = editingForm();
+  if (!ed?.drag) return false;
+  const d = ed.drag;
+  ed.drag = null;
+  try {
+    state.vp.canvas.releasePointerCapture(d.pointerId ?? e?.pointerId);
+  } catch {
+    /* already let go */
+  }
+
+  if (d.moved) {
+    // The document already holds the result, so the undo entry is the cage as
+    // it was before the drag began.
+    const now = state.doc.forms[ed.form];
+    state.doc.forms[ed.form] = d.before;
+    pushUndo('edit form');
+    state.doc.forms[ed.form] = now;
+    state.dirty = true;
+    rebuildAll();
+  }
+  refreshEditForm();
+  return true;
+}
+
+/* -------- pulling a face out, and the selection helpers -------- */
+
+/**
+ * Pull a new face out of the ones picked.
+ *
+ * The lifted faces become the selection, so the drag that follows moves the new
+ * limb rather than the hole it came out of.
+ */
+function cmdFormPull() {
+  const ed = editingForm();
+  const body = activeForm();
+  if (!body) {
+    setStatus('Pull works on a form.');
+    return;
+  }
+  const faces = facesFromPoints(body, ed ? [...ed.vertices] : null);
+  if (!faces.length) {
+    setStatus('Pick the faces to pull out first.');
+    return;
+  }
+  const cage = state.doc.forms[body.form];
+  const made = FM.extrudeFaces(cage, faces, 0);
+  if (!made) {
+    setStatus('Those faces cannot be pulled out.');
+    return;
+  }
+  pushUndo('pull face');
+  made.cage.name = cage.name;
+  state.doc.forms[body.form] = made.cage;
+  state.dirty = true;
+  if (ed) {
+    ed.vertices = new Set(made.lifted);
+  }
+  rebuildAll();
+  refreshEditForm();
+  setStatus(
+    `${faces.length} face${faces.length === 1 ? '' : 's'} pulled out. Drag to move them.`
+  );
+}
+
+/** Which whole cage faces the picked points make up. */
+function facesFromPoints(body, verts) {
+  const cage = state.doc.forms[body.form];
+  if (verts?.length) {
+    const have = new Set(verts);
+    return cage.faces
+      .map((f, i) => i)
+      .filter((i) => cage.faces[i].every((v) => have.has(v)));
+  }
+  return selectedCageFaces(body);
+}
+
+function cmdFormGrow(shrink) {
+  const ed = editingForm();
+  const body = activeForm();
+  if (!ed || !body) {
+    setStatus('Grow and shrink work while shaping a form.');
+    return;
+  }
+  const cage = state.doc.forms[body.form];
+  const adj = FM.adjacency(cage);
+  const faces = facesFromPoints(body, [...ed.vertices]);
+  const next = shrink
+    ? FM.shrinkFaces(cage, faces, adj)
+    : FM.growFaces(cage, faces, adj);
+  if (!next.length) {
+    setStatus(shrink ? 'Nothing would be left.' : 'Nothing to grow into.');
+    return;
+  }
+  ed.vertices = new Set(FM.pointsOfFaces(cage, next));
+  refreshEditForm();
+  setStatus(`${next.length} face${next.length === 1 ? '' : 's'} picked.`);
+}
+
+function cmdFormLoop(ring) {
+  const ed = editingForm();
+  const body = activeForm();
+  if (!ed || !body) {
+    setStatus('Loop and ring work while shaping a form.');
+    return;
+  }
+  const cage = state.doc.forms[body.form];
+  const adj = FM.adjacency(cage);
+  // Any edge of the cage both of whose ends are picked will do to start from.
+  const start = [...adj.edges.values()].find(
+    (e) => ed.vertices.has(e.a) && ed.vertices.has(e.b)
+  );
+  if (!start) {
+    setStatus('Pick an edge first: two points that are joined.');
+    return;
+  }
+  const found = ring
+    ? FM.edgeRingSet(cage, start.a, start.b, adj)
+    : FM.edgeLoop(cage, start.a, start.b, adj);
+  for (const [a, b] of found) {
+    ed.vertices.add(a);
+    ed.vertices.add(b);
+  }
+  refreshEditForm();
+  setStatus(`${found.length} edge${found.length === 1 ? '' : 's'} in the ${ring ? 'ring' : 'loop'}.`);
+}
+
+function cmdFormInvert() {
+  const ed = editingForm();
+  if (!ed) {
+    setStatus('Invert works while shaping a form.');
+    return;
+  }
+  const cage = state.doc.forms[ed.form];
+  const next = new Set();
+  cage.points.forEach((_, v) => {
+    if (!ed.vertices.has(v)) next.add(v);
+  });
+  ed.vertices = next;
+  refreshEditForm();
+  reportEditFormSelection();
+}
+
+function cmdFormSelectAll() {
+  const ed = editingForm();
+  if (!ed) return;
+  const cage = state.doc.forms[ed.form];
+  ed.vertices = new Set(cage.points.map((_, v) => v));
+  refreshEditForm();
+  reportEditFormSelection();
+}
+
+/* -------- the dialog -------- */
+
+function editFormFields() {
+  const set = (key) => (f, value) => {
+    const ed = editingForm();
+    if (!ed) return;
+    if (key.startsWith('soft.')) ed.soft[key.slice(5)] = value;
+    else ed[key] = value;
+    refreshEditForm();
+  };
+  const get = (key) => () => {
+    const ed = editingForm();
+    if (!ed) return '';
+    return key.startsWith('soft.') ? ed.soft[key.slice(5)] : ed[key];
+  };
+
+  return [
+    {
+      key: 'mode',
+      label: 'Transform mode',
+      type: 'select',
+      options: TRANSFORM_MODES,
+      get: get('mode'),
+      set: set('mode')
+    },
+    {
+      key: 'space',
+      label: 'Coordinate space',
+      type: 'select',
+      options: COORD_SPACES,
+      get: get('space'),
+      set: set('space')
+    },
+    {
+      key: 'filter',
+      label: 'Selection filter',
+      type: 'select',
+      options: SELECT_FILTERS,
+      get: get('filter'),
+      set: set('filter')
+    },
+    {
+      key: 'soft.extent',
+      label: 'Soft modification',
+      type: 'select',
+      options: FM.SOFT_EXTENTS,
+      get: get('soft.extent'),
+      set: set('soft.extent')
+    },
+    {
+      key: 'soft.distance',
+      label: 'Reach',
+      type: 'expr',
+      showIf: () => editingForm()?.soft.extent === 'distance',
+      get: get('soft.distance'),
+      set: set('soft.distance')
+    },
+    {
+      key: 'soft.faces',
+      label: 'Faces out',
+      type: 'expr',
+      showIf: () => editingForm()?.soft.extent === 'faces',
+      get: get('soft.faces'),
+      set: set('soft.faces')
+    },
+    {
+      key: 'soft.transition',
+      label: 'Transition',
+      type: 'select',
+      options: FM.TRANSITIONS,
+      showIf: () => editingForm()?.soft.extent !== 'none',
+      get: get('soft.transition'),
+      set: set('soft.transition')
+    },
+    {
+      key: 'soft.weight',
+      label: 'Weight',
+      type: 'expr',
+      showIf: () => editingForm()?.soft.extent !== 'none',
+      get: get('soft.weight'),
+      set: set('soft.weight')
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Drag an arrow to move along it, a square to move in that plane, a ring to turn, a cube to scale. Shift click to add to the selection. Escape when done.'
+    }
+  ];
+}
+
 function describeFeature(feature) {
   const opOptions = [
     ['new', 'New body'],
@@ -10740,60 +11414,84 @@ function showInspector(title, fields, onOk) {
   el.inspectorBody.innerHTML = '';
 
   const values = {};
-  for (const f of fields) {
-    values[f.key] = f.value;
+  for (const f of fields) values[f.key] = f.value;
 
-    // A row that only says something. Interference is nothing but these, so
-    // without it the command reports its findings to an empty panel.
-    if (f.type === 'note') {
-      const note = document.createElement('div');
-      note.className = 'hint';
-      note.textContent = f.text;
-      el.inspectorBody.appendChild(note);
-      continue;
-    }
+  /**
+   * Draw the rows.
+   *
+   * A row can either hold a value of its own, which is what every command that
+   * asks a question once does, or read and write something live through `get`
+   * and `set`, which is what a panel that stays open while you work needs. A
+   * live choice redraws, so a row that only applies to one setting can appear
+   * and disappear with it.
+   */
+  const draw = () => {
+    el.inspectorBody.innerHTML = '';
+    for (const f of fields) {
+      if (f.showIf && !f.showIf()) continue;
+      const current = f.get ? f.get() : values[f.key];
 
-    const wrap = document.createElement('div');
-    wrap.className = 'field';
-    const label = document.createElement('label');
-    label.textContent = f.label;
-    wrap.appendChild(label);
-
-    if (f.type === 'select') {
-      const sel = document.createElement('select');
-      for (const [v, t] of f.options) {
-        const o = document.createElement('option');
-        o.value = v;
-        o.textContent = t;
-        if (v === f.value) o.selected = true;
-        sel.appendChild(o);
+      // A row that only says something. Interference is nothing but these, so
+      // without it the command reports its findings to an empty panel.
+      if (f.type === 'note') {
+        const note = document.createElement('div');
+        note.className = 'hint';
+        note.textContent = f.text;
+        el.inspectorBody.appendChild(note);
+        continue;
       }
-      sel.addEventListener('change', () => {
-        values[f.key] = sel.value;
-      });
-      wrap.appendChild(sel);
-    } else if (f.type === 'check') {
-      const box = document.createElement('input');
-      box.type = 'checkbox';
-      box.checked = !!f.value;
-      box.addEventListener('change', () => {
-        values[f.key] = box.checked;
-      });
-      wrap.appendChild(box);
-    } else {
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.value = f.value;
-      input.addEventListener('input', () => {
-        values[f.key] = input.value;
-      });
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') ok();
-      });
-      wrap.appendChild(input);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'field';
+      const label = document.createElement('label');
+      label.textContent = f.label;
+      wrap.appendChild(label);
+
+      const take = (v, redraw) => {
+        if (f.set) {
+          f.set(f, v);
+          // Only a choice redraws. Redrawing on a keystroke would take the
+          // focus out of the box being typed into.
+          if (redraw) draw();
+        } else {
+          values[f.key] = v;
+        }
+      };
+
+      if (f.type === 'select') {
+        const sel = document.createElement('select');
+        for (const [v, t] of f.options) {
+          const o = document.createElement('option');
+          o.value = v;
+          o.textContent = t;
+          if (String(v) === String(current)) o.selected = true;
+          sel.appendChild(o);
+        }
+        sel.addEventListener('change', () => take(sel.value, true));
+        wrap.appendChild(sel);
+      } else if (f.type === 'check' || f.type === 'bool') {
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = !!current;
+        box.addEventListener('change', () => take(box.checked, true));
+        wrap.appendChild(box);
+      } else {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = current ?? '';
+        input.addEventListener('input', () => {
+          const n = Number(input.value);
+          take(f.get && Number.isFinite(n) ? n : input.value, false);
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') ok();
+        });
+        wrap.appendChild(input);
+      }
+      el.inspectorBody.appendChild(wrap);
     }
-    el.inspectorBody.appendChild(wrap);
-  }
+  };
+  draw();
 
   const ok = () => {
     el.inspector.classList.add('hidden');
@@ -10803,6 +11501,12 @@ function showInspector(title, fields, onOk) {
   $('#inspectorOk').onclick = ok;
   const firstInput = el.inspectorBody.querySelector('input, select');
   if (firstInput) firstInput.focus();
+}
+
+/** Close whatever panel is open, without running its accept. */
+function hideInspector() {
+  el.inspector.classList.add('hidden');
+  $('#inspectorOk').onclick = null;
 }
 
 /* ------------------------------------------------------------------ */
