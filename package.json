@@ -1,0 +1,64 @@
+{
+  "name": "anvil",
+  "version": "2.0.0",
+  "description": "Local parametric CAD for 3D printing",
+  "main": "src/main/main.js",
+  "author": "Kevin Wagner",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "manifold-3d": "^3.5.1",
+    "three": "^0.185.0"
+  },
+  "build": {
+    "appId": "com.kevinwagner.anvil",
+    "productName": "Anvil",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "node_modules/three/build/three.module.js",
+      "node_modules/three/build/three.core.js",
+      "node_modules/three/package.json",
+      "node_modules/manifold-3d/manifold.js",
+      "node_modules/manifold-3d/manifold.wasm",
+      "node_modules/manifold-3d/package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Anvil-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Anvil"
+    },
+    "fileAssociations": [
+      {
+        "ext": "anvil",
+        "name": "Anvil Model",
+        "description": "Anvil parametric model",
+        "role": "Editor"
+      }
+    ]
+  },
+  "allowScripts": {
+    "electron@34.5.8": true
+  }
+}

@@ -1,0 +1,5 @@
+# Installers and the packaged app. 90 MB each, rebuilt by `npm run dist`.
+dist/
+
+# Dependencies, restored by `npm install`.
+node_modules/

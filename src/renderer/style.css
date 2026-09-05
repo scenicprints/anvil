@@ -1,0 +1,1023 @@
+/* Anvil.
+
+   The shell is drawn the way Braun drew an instrument in Rams' years there: a
+   warm off-white ground, hairline rules instead of boxes, no shadow, no gloss,
+   nothing rounded, and one accent colour that is spent only on the thing you
+   are doing right now. Everything else is grey, so the model is the only thing
+   in the window with a voice.
+
+   The viewport is a light drafting ground rather than a dark one. That is the
+   honest reading of the period, and it is also why sketch geometry can go back
+   to the ordinary CAD convention: settled geometry is near black, and anything
+   still free to move is blue.
+
+   Sizing is on a four pixel rhythm and stays compact, because a modeller lives
+   or dies on how much of the window is viewport rather than chrome.
+
+   The dark shell this replaced is kept at theme/style.dark.css. */
+
+:root {
+  /* Ground. Braun's cream-grey, and the greys stepped off it. */
+  --paper: #eceae4;
+  --paper-2: #e4e1da;
+  --paper-3: #dbd7ce;
+  --paper-4: #cfcbc1;
+  --ground: #c6c3bc;
+
+  /* Rules. Hairlines, never boxes. */
+  --rule: #c8c4ba;
+  --rule-2: #ada89c;
+
+  /* Ink. */
+  --ink: #23221d;
+  --ink-2: #5d5a52;
+  --ink-3: #8d8980;
+
+  /* The one accent: Braun vermilion. Reserved for the active tool, the
+     selection, and the single most important action on screen. */
+  --accent: #d84b1e;
+  --accent-2: #b83d16;
+  --on-accent: #fdfcfa;
+
+  /* Signals, kept muted so they read as information and not decoration. */
+  --signal: #3d7a44;
+  --warn: #b07a10;
+  --err: #a92f22;
+
+  --font: "Helvetica Neue", Helvetica, Arial, "Segoe UI", sans-serif;
+  --mono: "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+  /* Backwards names, so nothing that still asks for them breaks. */
+  --bg: var(--paper);
+  --bg-2: var(--paper);
+  --bg-3: var(--paper-2);
+  --bg-4: var(--paper-3);
+  --line: var(--rule);
+  --line-2: var(--rule-2);
+  --text: var(--ink);
+  --text-dim: var(--ink-2);
+  --ok: var(--signal);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Selected text takes the accent rather than the browser's blue, which is the
+   one colour in the window nobody chose. */
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover {
+  background: var(--paper-3);
+  border-color: var(--rule-2);
+}
+button:active {
+  background: var(--paper-4);
+}
+button.accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+button.accent:hover {
+  background: var(--accent-2);
+}
+button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+input[type="text"],
+input[type="number"] {
+  background: #f7f6f3;
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  padding: 4px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  width: 100%;
+}
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+select {
+  background: #f7f6f3;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+  width: 100%;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---------------- top bar ---------------- */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 10px;
+  height: 34px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  letter-spacing: 1.6px;
+  text-transform: lowercase;
+  color: var(--ink);
+}
+.filegroup {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+  margin: 0 4px;
+}
+.spacer {
+  flex: 1;
+}
+#docname {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ---------------- ribbon ---------------- */
+
+#ribbon {
+  flex: none;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+}
+.tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 5px 14px;
+  color: var(--text-dim);
+}
+.tab:hover {
+  background: none;
+  color: var(--text);
+}
+.tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.panelbar {
+  position: relative;
+}
+.ribbon-panel {
+  display: none;
+  gap: 0;
+  padding: 5px 8px 6px;
+  min-height: 62px;
+}
+.ribbon-panel.active {
+  align-items: stretch;
+}
+.ribbon-panel.active {
+  display: flex;
+}
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 0 9px 14px;
+  border-right: 1px solid var(--line);
+  position: relative;
+  /* When this falls behind the number of buttons in a group, that group takes
+     a third row and the viewport loses fifty pixels of height. Past a point
+     widening it stops helping, because the groups to the right get pushed off
+     the window instead; that is when a group needs a dropdown, not more width. */
+  max-width: 648px;
+}
+.group:last-child {
+  border-right: none;
+}
+.glabel {
+  position: absolute;
+  bottom: 0;
+  left: 9px;
+  font-size: 9px;
+  color: var(--ink-3);
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+}
+button.big {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1px;
+  /* A fixed width cropped nothing and overlapped the neighbour instead, so
+     "Feature Pattern" sat on top of "Path Pattern". Let a long label wrap onto
+     a second line, and give every button the height of a wrapped one so the
+     rows still line up. */
+  /* Wide enough for a one word name to stay on one line, capped so a two word
+     one folds rather than stretching the group across the ribbon. */
+  width: auto;
+  min-width: 60px;
+  max-width: 86px;
+  min-height: 50px;
+  padding: 3px 3px;
+  font-size: 10.5px;
+  line-height: 1.15;
+  text-align: center;
+  background: none;
+  border-color: transparent;
+}
+/* The label is its own element so a two word name wraps inside the button
+   instead of running out over the one beside it. */
+button.big .lbl {
+  display: block;
+  width: 100%;
+  /* Buttons are nowrap by default, which is right for the toolbar and wrong
+     here: a two word name has to fold rather than run over its neighbour. */
+  white-space: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+/* .big clears the background, so an accent ribbon button needs it back or the
+   label ends up white on cream and the button disappears. */
+button.big.accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+button.big:hover {
+  background: var(--bg-3);
+  border-color: var(--line);
+}
+button.big.on {
+  background: var(--accent);
+  border-color: var(--accent-2);
+}
+.ico {
+  font-size: 16px;
+  line-height: 18px;
+}
+.cgrid {
+  display: grid;
+  grid-template-columns: repeat(6, 24px);
+  gap: 2px;
+}
+.cgrid.wide {
+  grid-template-columns: repeat(4, 54px);
+}
+.cgrid button {
+  padding: 3px 0;
+  font-size: 12px;
+  text-align: center;
+}
+.chk {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  width: 110px;
+  cursor: pointer;
+}
+.chk input {
+  accent-color: var(--accent);
+}
+
+/* ---------------- workspace ---------------- */
+
+#workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+#browser {
+  width: 220px;
+  flex: none;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  padding: 6px 9px;
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.panel-head .x {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0 3px;
+  color: var(--text-dim);
+}
+#tree {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 5px 0;
+}
+.node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 12px;
+  min-width: 0;
+}
+/* Long names shorten rather than pushing a scrollbar across the panel. */
+.node > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.node:hover {
+  background: var(--bg-3);
+}
+.node.sel {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.node.sel .caret,
+.node.sel .eye {
+  color: var(--on-accent);
+}
+.node .caret {
+  width: 11px;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+.node .eye {
+  margin-left: auto;
+  opacity: 0.5;
+  font-size: 11px;
+  padding: 0 2px;
+}
+.node .eye:hover {
+  opacity: 1;
+}
+.node.child {
+  padding-left: 24px;
+}
+.node.group-head {
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+}
+.node .err {
+  color: var(--err);
+  margin-left: 4px;
+}
+
+#viewwrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  background: var(--ground);
+}
+#view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+#overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#overlay > * {
+  pointer-events: auto;
+}
+/* The rubber band. Dragged rightwards it takes what is wholly inside and draws
+   solid; dragged leftwards it takes anything it touches and draws dashed, which
+   is how every CAD package tells the two apart. */
+.sk-band {
+  position: absolute;
+  border: 1px solid var(--accent-2);
+  background: rgba(216, 75, 30, 0.09);
+  pointer-events: none;
+}
+.sk-band.crossing {
+  border-style: dashed;
+  border-color: var(--signal);
+  background: rgba(61, 122, 68, 0.09);
+}
+
+/* Size boxes that follow the cursor while a shape is half drawn. Typing in one
+   locks it, which the border colour shows. */
+.sk-entry {
+  position: absolute;
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+  z-index: 5;
+}
+.sk-entry-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #fbfaf7;
+  border: 1px solid var(--rule-2);
+  border-radius: 0;
+  padding: 1px 4px;
+}
+.sk-entry-field span {
+  font-size: 10px;
+  color: var(--ink-2);
+  letter-spacing: 0.2px;
+}
+.sk-entry-field input {
+  width: 58px;
+  background: none;
+  border: none;
+  outline: none;
+  padding: 1px 0;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.sk-entry-field.locked {
+  border-color: var(--accent);
+  background: #fdf3e6;
+}
+.sk-entry-field.locked input {
+  color: var(--accent-2);
+}
+
+.fieldrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 1px 0;
+}
+.fieldrow input,
+.fieldrow select {
+  width: 72px;
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
+.sk-dim {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: #fbfaf7;
+  border: 1px solid var(--rule-2);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  padding: 1px 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* A dimension whose value comes from a parameter carries its mark in the
+   accent, so a link to the parameters is visible at a glance. */
+.sk-dim.linked {
+  border-color: var(--accent);
+  color: var(--accent-2);
+}
+.sk-dim:hover {
+  background: var(--paper-2);
+}
+.sk-glyph {
+  position: absolute;
+  transform: translate(-50%, -160%);
+  color: var(--signal);
+  letter-spacing: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 3px;
+  background: rgba(252, 251, 248, 0.86);
+  border-radius: 0;
+  cursor: pointer;
+}
+.sk-glyph:hover {
+  color: #fff;
+}
+
+/* Sits under the view cube, which occupies a 96px square inset 12px from the
+   top right corner. */
+#isoBtn {
+  position: absolute;
+  top: 116px;
+  right: 12px;
+  width: 96px;
+  padding: 3px 0;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--paper-2);
+  border: 1px solid var(--rule-2);
+}
+#isoBtn:hover {
+  color: var(--ink);
+  background: var(--paper-3);
+}
+
+#viewhint {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: rgba(252, 251, 248, 0.86);
+  padding: 3px 8px;
+  border-radius: 0;
+  pointer-events: none;
+}
+#snaphint {
+  position: absolute;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: rgba(252, 251, 248, 0.9);
+  padding: 1px 5px;
+  border-radius: 0;
+  pointer-events: none;
+  display: none;
+}
+
+#inspector {
+  width: 250px;
+  flex: none;
+  background: var(--bg-2);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+#inspector.hidden {
+  display: none;
+}
+#inspectorBody {
+  flex: 1;
+  overflow: auto;
+  padding: 9px;
+}
+#inspectorActions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 8px 9px;
+  border-top: 1px solid var(--line);
+}
+#inspectorActions button {
+  flex: 1;
+}
+
+.field {
+  margin-bottom: 9px;
+}
+.field label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+.field .row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.field .val {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  min-width: 52px;
+  text-align: right;
+}
+/* A row that is filled in by pointing at the model rather than typing. */
+.picksummary {
+  flex: 1;
+  font-size: 11px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.field .row button {
+  padding: 2px 7px;
+  font-size: 11px;
+  flex: none;
+}
+
+.field.inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin: 6px 0 10px;
+}
+.err-text {
+  color: var(--err);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+table.params {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+table.params th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--line);
+}
+table.params td {
+  padding: 2px 3px;
+  border-bottom: 1px solid var(--rule);
+}
+table.params input {
+  padding: 2px 4px;
+}
+table.params .v {
+  font-family: var(--mono);
+  color: var(--ink-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---------------- timeline ---------------- */
+
+#timelinebar {
+  flex: none;
+  height: 40px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+}
+.tl-btn {
+  padding: 3px 7px;
+  font-size: 11px;
+  background: none;
+  border-color: transparent;
+}
+#timeline {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 100%;
+  padding: 0 4px;
+}
+.tl-item {
+  flex: none;
+  width: 34px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  position: relative;
+}
+.tl-item:hover {
+  border-color: var(--line-2);
+  background: var(--bg-4);
+}
+.tl-item.sel {
+  border-color: var(--accent);
+  background: var(--paper-3);
+}
+.tl-item.rolled {
+  opacity: 0.35;
+}
+.tl-item.suppressed {
+  opacity: 0.4;
+  border-style: dashed;
+}
+.tl-item.err {
+  border-color: var(--err);
+}
+.tl-item .tl-n {
+  position: absolute;
+  bottom: 0;
+  right: 2px;
+  font-size: 8px;
+  color: var(--ink-3);
+}
+.tl-marker {
+  flex: none;
+  width: 2px;
+  height: 30px;
+  background: var(--accent);
+}
+
+/* ---------------- status ---------------- */
+
+#statusbar {
+  flex: none;
+  height: 22px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+#solveState.ok {
+  color: var(--ok);
+}
+#solveState.warn {
+  color: var(--warn);
+}
+#solveState.err {
+  color: var(--err);
+}
+
+/* ---------------- modal ---------------- */
+
+#modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(120, 116, 108, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+#modal.hidden {
+  display: none;
+}
+.modal-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  min-width: 280px;
+  box-shadow: none;
+}
+.modal-title {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.modal-body {
+  padding: 12px;
+}
+.modal-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+}
+
+/* ---------------- boot ---------------- */
+
+#boot {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  transition: opacity 0.25s;
+}
+#boot.gone {
+  opacity: 0;
+  pointer-events: none;
+}
+.boot-inner {
+  text-align: center;
+}
+.boot-title {
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: 10px;
+  text-transform: lowercase;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+.boot-sub {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ---------------- marking menu ---------------- */
+
+#markmenu {
+  position: fixed;
+  z-index: 60;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  padding: 3px;
+  min-width: 132px;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+}
+#markmenu button {
+  background: none;
+  border: none;
+  border-radius: 0;
+  text-align: left;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+#markmenu button:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.mm-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 3px 4px;
+}
+
+/* ---------------- selection prompt ---------------- */
+
+#pickbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--paper);
+  border: 1px solid var(--rule-2);
+  border-top: 2px solid var(--accent);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+#pickbar.hidden {
+  display: none;
+}
+#pickbar button {
+  padding: 2px 10px;
+  font-size: 11.5px;
+}
+
+.sk-dim.driven {
+  background: var(--paper-2);
+  border-color: var(--rule);
+  color: var(--ink-3);
+  font-style: normal;
+}
+
+/* ------------------------------------------------------------------ */
+/* The pick callout                                                    */
+/* ------------------------------------------------------------------ */
+
+/* A dialog waiting to be pointed at follows the cursor with a small card
+   saying what it wants and how much it has. A bar at the top of the viewport
+   is too far from where the eye is to be read while picking. */
+#pickcallout {
+  position: absolute;
+  z-index: 40;
+  min-width: 152px;
+  max-width: 232px;
+  background: var(--paper);
+  border: 1px solid var(--rule-2);
+  border-left: 2px solid var(--accent);
+  padding: 5px 9px 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+#pickcallout.hidden {
+  display: none;
+}
+#pickcallout .pc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 3px;
+}
+#pcTitle {
+  color: var(--accent-2);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+#pcCount {
+  color: var(--ink-3);
+  font-size: 10px;
+  white-space: nowrap;
+}
+#pcMsg {
+  color: var(--ink);
+}
+#pickcallout .pc-foot {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-3);
+  font-size: 10px;
+}
+
+/* Options that belong to a drawing tool rather than to a command, kept beside
+   the tools they change so there is no dialog to open first. */
+.toolopts {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: flex-start;
+  padding: 2px 0 0 6px;
+  margin-left: 3px;
+  border-left: 1px solid var(--rule);
+}
+.toolopts .fieldrow {
+  gap: 5px;
+}
+.toolopts input {
+  width: 46px;
+}
