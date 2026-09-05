@@ -475,6 +475,13 @@ button.big.on {
 
 /* Size boxes that follow the cursor while a shape is half drawn. Typing in one
    locks it, which the border colour shows. */
+/* The pull value follows the cursor inside the viewport rather than the sketch
+   overlay, which only exists while a sketch is open. Same box either way: it is
+   the same question, asked about a distance in three dimensions. */
+.pull-entry {
+  position: absolute;
+  z-index: 6;
+}
 .sk-entry {
   position: absolute;
   display: flex;

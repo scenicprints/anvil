@@ -1042,13 +1042,17 @@ export class Viewport {
     this.gizmo.matrix.copy(m);
     this.gizmo.visible = true;
 
-    const want = (kind) =>
+    const want = (h) =>
       mode === 'multi' ||
-      (mode === 'translation' && (kind === 'move' || kind === 'movePlane')) ||
-      (mode === 'rotation' && kind === 'rotate') ||
-      (mode === 'scale' && (kind === 'scale' || kind === 'scaleAll'));
+      (mode === 'translation' && (h.kind === 'move' || h.kind === 'movePlane')) ||
+      (mode === 'rotation' && h.kind === 'rotate') ||
+      (mode === 'scale' && (h.kind === 'scale' || h.kind === 'scaleAll')) ||
+      // One arrow, along the frame's own z. This is the handle that stands on a
+      // face waiting to be pulled, and a face has exactly one direction to go
+      // in, so offering three would be offering two wrong ones.
+      (mode === 'pull' && h.kind === 'move' && h.axis === 2);
     for (const child of this.gizmo.children) {
-      child.visible = want(child.userData.handle.kind);
+      child.visible = want(child.userData.handle);
     }
     this._sizeGizmo();
     this.invalidate();

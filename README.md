@@ -957,7 +957,9 @@ a rigid group and a motion link. `demo-inspect.js` shells a box, weighs it, chec
 through its wall, colours its draft and cuts it open, `demo-project.js` draws a
 tangent arc, projects a face both linked and as a
 copy, and sections a body, checking that the linked ones move when the model
-does, `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
+does, `demo-pull.js` clicks a face, drags the arrow that appears, checks the body grew
+while the drag was happening, types an exact size over what was dragged to, and
+does the same to a sketch profile. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
 click, rather than the bare `click()` every other demo uses, because that is a
 path no mouse can take and it hid a menu that shut itself before the press could
 land. And `demo-picking.js` checks the things a volume cannot see:
@@ -1007,6 +1009,20 @@ analyses at all.
 
 **Modelling gaps that remain:** Fusion's compute options for patterns that hit
 different geometry. Silhouette Split works only where the parting line is flat.
+
+**Pull it, rather than asking for a command.** Click a planar face and an arrow
+stands on it; drag the arrow and the body follows as it happens, with the
+distance in a box beside the cursor. Let go and that box stays, focused, so the
+exact number can be typed over the one you dragged to. Enter accepts, Escape
+throws the whole thing away. A sketch profile does the same and extrudes
+instead: one gesture, two features, because a face and a profile want different
+things done to them but the same thing said.
+
+What is being dragged is the real feature, not a preview of one. The arrow
+writes into the distance the dialog holds and the model rebuilds each frame, so
+what is on screen while pulling is what will be there when you let go. That is
+worth the rebuild it costs, and since v2.5.0 it mostly costs nothing: the
+timeline in front of the feature is cached.
 
 **Reaching for a tool starts the sketch.** Clicking Rectangle on the Sketch tab
 with nothing open asks which plane to put it on and then opens the sketch with

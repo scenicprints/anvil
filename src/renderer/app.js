@@ -158,10 +158,12 @@ async function boot() {
   state.vp.onPointerDown = (e) => handleViewportDown(e);
   state.vp.onPointerMove = (e) => {
     if (state.editForm?.drag && editFormPointerMove(e)) return true;
+    if (state.pullDrag && pullPointerMove(e)) return true;
     return handleViewportMove(e);
   };
   state.vp.onPointerUp = (e) => {
     if (state.editForm?.drag && editFormPointerUp(e)) return true;
+    if (state.pullDrag && pullPointerUp(e)) return true;
     return state.sketcher.onPointerUp(e);
   };
   state.vp.onContextMenu = (e) => showMarkingMenu(e);
@@ -307,6 +309,10 @@ function rebuildAll() {
   renderTimeline();
   renderAnalysisOverlay();
   syncDialogError();
+  // The face the handle stands on has just been rebuilt, so the handle has to
+  // move with it. Not during a drag: the frame it is being dragged along has
+  // to hold still, or the thing being pulled runs away from the pointer.
+  if (!state.pullDrag) refreshPullHandle();
 
   const ms = Math.round(performance.now() - t0);
   const errCount = res.errors.length + Object.keys(res.paramErrors).length;
@@ -447,6 +453,9 @@ function handleViewportDown(e) {
   // manipulator is not read as the start of an orbit.
   if (state.editForm && editFormPointerDown(e)) return true;
 
+  // The pull arrow standing on the selection, for the same reason.
+  if (state.pullHandle && pullPointerDown(e)) return true;
+
   // A dialog that is waiting to be pointed at gets the click first.
   if (state.editing?.pickInto) {
     const armed = state.editing.pickInto;
@@ -565,6 +574,7 @@ function acceptPick(hit, e) {
   state.vp.setSelection(state.selection.bodies);
   refreshHighlight();
   renderTree();
+  refreshPullHandle();
   updateHints();
 }
 
@@ -582,6 +592,7 @@ function clearGeometrySelection(redraw = true) {
     state.vp.setSelection(state.selection.bodies);
     refreshHighlight();
     renderTree();
+    refreshPullHandle();
     updateHints();
   }
 }
@@ -7257,6 +7268,260 @@ function startPressPull() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Pulling, straight off the selection                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The arrow that stands on whatever is selected, waiting to be pulled.
+ *
+ * Clicking a face and dragging it is the obvious way to say "make this
+ * thicker", and asking for a command and then a second pick of the thing
+ * already pointed at is two steps of ceremony in front of one intention. So a
+ * single planar face, or a single sketch profile, grows a handle: drag it and
+ * the body follows as it happens.
+ *
+ * A face pulls itself; a profile extrudes. They are different features and the
+ * same gesture, which is the point.
+ */
+function pullTarget() {
+  if (state.sketcher.active || state.editing || state.picking || state.editForm) return null;
+
+  if (state.selection.faces.size === 1 && !state.selection.edges.size) {
+    const found = singleSelectedFace();
+    if (!found) return null;
+    const b = basisFor(found.face.normal);
+    return {
+      kind: 'face',
+      frame: { origin: found.face.centre, x: b.x, y: b.y, z: found.face.normal },
+      record: found.record,
+      face: found.face
+    };
+  }
+
+  if (state.selection.profiles.length === 1 && !state.selection.faces.size) {
+    const pick = state.selection.profiles[0];
+    const plane = state.result?.sketchPlanes?.[pick.sketch];
+    const region = state.result?.sketchRegions?.[pick.sketch]?.find(
+      (r) => r.id === pick.regionId
+    );
+    if (!plane || !region) return null;
+    const at = regionCentreWorld(region, plane);
+    if (!at) return null;
+    return {
+      kind: 'profile',
+      frame: { origin: at, x: plane.x, y: plane.y, z: plane.n },
+      pick
+    };
+  }
+  return null;
+}
+
+/** The middle of a sketch region, in the world, so the arrow stands on it. */
+function regionCentreWorld(region, plane) {
+  const ring = region.outer || region.points || null;
+  if (!ring || !ring.length) return null;
+  let x = 0;
+  let y = 0;
+  for (const p of ring) {
+    x += (Array.isArray(p) ? p[0] : p.x) / ring.length;
+    y += (Array.isArray(p) ? p[1] : p.y) / ring.length;
+  }
+  return sketchToWorld(plane, x, y, 0).toArray();
+}
+
+/** Put the handle where it belongs, or take it away. */
+function refreshPullHandle() {
+  const target = state.pullDrag ? state.pullDrag.target : pullTarget();
+  state.pullHandle = target;
+  state.vp.setGizmo(target ? target.frame : null, 'pull');
+}
+
+/** A press on the arrow starts a pull. Returns true when it took the click. */
+function pullPointerDown(e) {
+  if (!state.pullHandle || e.button !== 0) return false;
+  const hit = state.vp.pickGizmo(e.clientX, e.clientY);
+  if (!hit || hit.kind !== 'move') return false;
+
+  const target = state.pullHandle;
+  const frame = target.frame;
+  const start = closestOnLine(state.vp.pointerRay(e.clientX, e.clientY), frame.origin, frame.z);
+
+  const feature =
+    target.kind === 'face'
+      ? {
+          id: uid('f'),
+          type: 'offsetFace',
+          bodies: [target.record.id],
+          faces: [faceReference(target.face)],
+          distance: '0'
+        }
+      : {
+          id: uid('f'),
+          type: 'extrude',
+          sketch: target.pick.sketch,
+          seeds: [target.pick.seed],
+          distance: '0',
+          direction: 'side1',
+          op: state.result?.bodies.length ? 'join' : 'new',
+          targets: 'all',
+          taper: '0',
+          extent: 'distance'
+        };
+
+  // The feature goes in straight away and is driven by the drag, so what you
+  // see while pulling is the real rebuild rather than a preview that might
+  // disagree with it.
+  openFeatureEditor(
+    feature,
+    target.kind === 'face' ? 'Press Pull' : 'Extrude',
+    target.kind === 'face' ? pressPullFields() : extrudeFields(),
+    false,
+    { keepView: true, keepFocus: true }
+  );
+
+  state.pullDrag = { target, frame, start, feature, moved: false, typed: false };
+  showPullValue(e);
+  try {
+    state.vp.canvas.setPointerCapture(e.pointerId);
+    state.pullDrag.pointerId = e.pointerId;
+  } catch {
+    /* capture is a convenience, not a requirement */
+  }
+  return true;
+}
+
+function pullPointerMove(e) {
+  const d = state.pullDrag;
+  if (!d) return false;
+  if (!d.typed) {
+    const now = closestOnLine(state.vp.pointerRay(e.clientX, e.clientY), d.frame.origin, d.frame.z);
+    setPullDistance(now - d.start);
+    d.moved = true;
+  }
+  movePullValue(e);
+  return true;
+}
+
+/**
+ * Let go, and leave the number in hand.
+ *
+ * The box stays, focused and selected, so the exact size can simply be typed
+ * over the one that was dragged to. That is the answer to having dragged
+ * roughly the right amount and knowing the number you actually wanted.
+ */
+function pullPointerUp(e) {
+  const d = state.pullDrag;
+  if (!d) return false;
+  try {
+    state.vp.canvas.releasePointerCapture(d.pointerId ?? e?.pointerId);
+  } catch {
+    /* already let go */
+  }
+  state.pullDrag = null;
+  refreshPullHandle();
+
+  const input = state.pullValueEl?.querySelector('input');
+  if (input) {
+    input.focus();
+    input.select();
+  }
+  return true;
+}
+
+/** Set the distance the drag has reached, live, in the dialog and the model. */
+function setPullDistance(mm) {
+  const d = state.pullDrag;
+  if (!d) return;
+  const rounded = Math.abs(mm) < 1e-9 ? 0 : Number(mm.toFixed(4));
+  d.feature.distance = String(rounded);
+  // A face offset carries its sign; an extrude reads the direction separately,
+  // so a pull the other way flips that rather than going negative.
+  if (d.feature.type === 'extrude') {
+    d.feature.distance = String(Math.abs(rounded));
+    d.feature.direction = rounded < 0 ? 'side2' : 'side1';
+  }
+  // The same number the dialog's own field shows. A feature stores what the
+  // expression evaluates to, with no unit conversion in between, so converting
+  // here would put two different numbers on screen for one distance.
+  const input = state.pullValueEl?.querySelector('input');
+  if (input && document.activeElement !== input) input.value = String(round(Math.abs(rounded), 3));
+  if (state.editing) renderFields();
+  rebuildAll();
+}
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * The value box that follows the cursor while pulling.
+ *
+ * Built to look and behave like the one the sketcher shows while drawing,
+ * because it is the same question asked in three dimensions and answering it
+ * two different ways would be two things to learn.
+ */
+function showPullValue(e) {
+  hidePullValue();
+  const box = document.createElement('div');
+  box.className = 'sk-entry pull-entry';
+
+  const wrap = document.createElement('label');
+  wrap.className = 'sk-entry-field';
+  const cap = document.createElement('span');
+  cap.textContent = 'Distance';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.spellcheck = false;
+  input.value = '0';
+  input.addEventListener('input', () => {
+    const text = input.value.trim();
+    if (state.pullDrag) state.pullDrag.typed = text !== '';
+    wrap.classList.toggle('locked', text !== '');
+    const feature = state.editing?.feature;
+    if (!feature) return;
+    // Whatever the parameters understand, so a size can be given as `wall * 2`.
+    // The text itself is kept rather than the number it came to, so it still
+    // reads back the way it was typed and still follows the parameter.
+    const scope = resolveParameters(state.doc.parameters).scope;
+    if (!Number.isFinite(safeEval(text, scope, NaN))) return;
+    feature.distance = text;
+    renderFields();
+    scheduleRebuild();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      hidePullValue();
+      commitEdit();
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      hidePullValue();
+      cancelEdit();
+    }
+  });
+
+  wrap.appendChild(cap);
+  wrap.appendChild(input);
+  box.appendChild(wrap);
+  document.getElementById('viewwrap').appendChild(box);
+  state.pullValueEl = box;
+  movePullValue(e);
+}
+
+function movePullValue(e) {
+  const box = state.pullValueEl;
+  if (!box || !e) return;
+  const r = document.getElementById('viewwrap').getBoundingClientRect();
+  box.style.left = `${e.clientX - r.left + 18}px`;
+  box.style.top = `${e.clientY - r.top + 18}px`;
+}
+
+function hidePullValue() {
+  state.pullValueEl?.remove();
+  state.pullValueEl = null;
+}
+
+/* ------------------------------------------------------------------ */
 /* Picking prompts                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -7536,7 +7801,7 @@ function turnToSeeDepth(feature) {
  * Append the feature straight away and rebuild on every edit, so the viewport
  * shows the actual result while the dialog is open. Cancel removes it again.
  */
-function openFeatureEditor(feature, title, fields, isExisting = false) {
+function openFeatureEditor(feature, title, fields, isExisting = false, opts = {}) {
   if (state.editing) cancelEdit();
   if (state.picking) endPicking(false);
 
@@ -7564,8 +7829,11 @@ function openFeatureEditor(feature, title, fields, isExisting = false) {
   el.inspector.classList.remove('hidden');
   renderFields();
   rebuildAll();
-  if (!isExisting) turnToSeeDepth(feature);
+  // Not while a drag is in hand: turning the camera under a pointer that is
+  // pulling something moves the thing being aimed at.
+  if (!isExisting && !opts.keepView) turnToSeeDepth(feature);
 
+  if (opts.keepFocus) return;
   const firstInput = el.inspectorBody.querySelector('input, select');
   if (firstInput) {
     firstInput.focus();

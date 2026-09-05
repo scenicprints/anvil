@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.5.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
+Current version: **2.6.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
 
 ---
 
@@ -941,6 +941,37 @@ out the usual way, so pinning one face does not throw the rest away.
   checkpoint, which is the only place it is true.
 - **`faceReference` puts the name under `src`**, not at the top level. A test
   that asserted the wrong shape passed nothing useful until it was read.
+
+---
+
+## Direct manipulation, shipped in v2.6.0
+
+He said it plainly: "Why can't I just click the face I want to extrude and then
+drag it? Why does the crosshair not have the length I am dragging it, or how
+much I am typing? I shouldn't have to click extra stuff to do something
+obvious." All three were fair.
+
+- A single planar face or a single sketch profile grows a pull arrow. Dragging
+  it drives the real feature, not a preview, so what is on screen while pulling
+  is what lands.
+- The distance follows the cursor in the same box the sketcher already used for
+  typed sizes while drawing. It was only ever wired up in two dimensions.
+- Let go and the box keeps focus, so the exact number goes straight over the
+  dragged one.
+
+### What was learned
+
+- **The sketcher had already solved this**, and only for sketching. Typed
+  dimension boxes that track the cursor have been in `sketchview.js` since the
+  sketch work; nothing in three dimensions had them. Look for the answer in the
+  part of the application that already faced the question.
+- **A demo that calls `element.click()` is not a demo of clicking.** It sends a
+  click and no pointer events, which is a path no mouse can take. Every menu in
+  the application was dead and twenty demos driving the real interface all
+  agreed it was fine.
+- **`openFeatureEditor` turns the camera** to show the depth of a new feature.
+  Right when a dialog opens, wrong when a drag is in hand, because it moves the
+  thing being aimed at out from under the pointer.
 
 ---
 
