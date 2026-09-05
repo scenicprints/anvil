@@ -43,6 +43,7 @@ import {
 } from './edgefeature.js';
 import * as SH from './sheet.js';
 import * as SM from './sheetmetal.js';
+import * as MT from './meshtools.js';
 
 /* ------------------------------------------------------------------ */
 /* Document                                                            */
@@ -70,6 +71,11 @@ export function newDocument() {
     baseBodies: [],
     rollback: null,
     bodyNames: {},
+    // Triangles read off the disk, and images used as textures. They live here
+    // rather than in a feature because nothing in the timeline can reproduce
+    // them: the file they came from may not be there next time.
+    meshData: {},
+    imageData: {},
     // One sheet metal rule per document. Every part made here is made to it,
     // and changing it changes every bend at once, which is what it is for.
     sheetMetalRule: { ...SM.DEFAULT_RULE }
@@ -892,6 +898,62 @@ export function rebuild(doc, options = {}) {
 
         case 'flatPattern':
           doFlatPattern(feature, scope, scopeObj, errors);
+          break;
+
+        case 'insertMesh':
+          doInsertMesh(feature, scope, scopeObj, errors);
+          break;
+
+        case 'tessellate':
+          doTessellate(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshRepair':
+          doMeshRepair(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshReduce':
+          doMeshReduce(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshRemesh':
+          doMeshRemesh(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshSmooth':
+          doMeshSmooth(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshPlaneCut':
+          doMeshPlaneCut(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshSeparate':
+          doMeshSeparate(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshMerge':
+          doMeshMerge(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshErase':
+          doMeshErase(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshReverse':
+          doMeshReverse(feature, scope, scopeObj, errors);
+          break;
+
+        case 'convertMesh':
+          doConvertMesh(feature, scope, scopeObj, errors);
+          break;
+
+        case 'textureExtrude':
+          doTextureExtrude(feature, scope, scopeObj, errors);
+          break;
+
+        case 'faceGroups':
+          doFaceGroups(feature, scope, scopeObj, errors);
           break;
 
         default:
@@ -5896,6 +5958,362 @@ export function rebuild(doc, options = {}) {
     }
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Meshes                                                            */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Put a mesh into the model as a body.
+   *
+   * A mesh body is a sheet that has been told it is a mesh. Being a sheet is
+   * what makes topology, display, picking and export work on it already; being
+   * told is what keeps it out of the kernel until somebody asks for that, which
+   * matters when it is a two million triangle scan.
+   */
+  function addMeshBody(feature, mesh, label, existing) {
+    if (!mesh?.triVerts?.length) return null;
+    if (existing) {
+      replaceBody(bodies, existing, { sheet: mesh });
+      return existing;
+    }
+    const key = `${feature.id}:${bodies.length}`;
+    const body = {
+      id: key,
+      name: doc.bodyNames?.[key] || label || `Mesh ${bodies.length + 1}`,
+      sheet: mesh,
+      mesh: true,
+      createdBy: feature.id,
+      component: feature.component || null
+    };
+    bodies.push(body);
+    return body;
+  }
+
+  /** Every mesh body a feature was pointed at. */
+  function pickMeshes(feature) {
+    const wanted = feature.bodies && feature.bodies !== 'all' ? feature.bodies : null;
+    return bodies.filter((b) => b.mesh && (!wanted || wanted.includes(b.id)));
+  }
+
+  /** A stored mesh, back out of the document as typed arrays. */
+  function storedMesh(key) {
+    const held = doc.meshData?.[key];
+    if (!held) return null;
+    return {
+      numProp: 3,
+      vertProperties: new Float32Array(held.verts),
+      triVerts: new Uint32Array(held.tris)
+    };
+  }
+
+  /**
+   * A mesh read off the disk, placed in the model.
+   *
+   * The triangles live in the document rather than in the feature, because
+   * nothing in the timeline can reproduce them: they came from a file that may
+   * not be there next time. That is the same reason a sketch is stored rather
+   * than replayed.
+   */
+  function doInsertMesh(feature, scope, ks, errs) {
+    const mesh = storedMesh(feature.data);
+    if (!mesh) throw new Error('That inserted mesh is not in this document any more');
+
+    let placed = mesh;
+    const s = feature.scale ? safeEval(feature.scale, scope, 1) : 1;
+    const at = feature.at || [0, 0, 0];
+    if (Math.abs(s - 1) > 1e-9 || at.some((v) => Math.abs(v) > 1e-9)) {
+      const P = MT.meshPoints(mesh).map((p) => [
+        p[0] * s + at[0],
+        p[1] * s + at[1],
+        p[2] * s + at[2]
+      ]);
+      placed = SH.makeSheet(P, MT.meshTris(mesh));
+    }
+    addMeshBody(feature, placed, feature.label || 'Mesh');
+  }
+
+  /** A solid or a surface, taken as triangles so the mesh tools reach it. */
+  function doTessellate(feature, scope, ks, errs) {
+    const targets = pickBodies(feature, bodies, { sheets: 'either' });
+    if (!targets.length) throw new Error('Tessellate needs a body');
+    let made = 0;
+    for (const b of targets) {
+      if (b.mesh) continue;
+      const mesh = meshOf(b);
+      if (!mesh?.triVerts?.length) continue;
+      // A copy, because the body it came from stays where it is: tessellating
+      // is taking a mesh from something, not turning it into one.
+      const copy = SH.makeSheet(MT.meshPoints(mesh), MT.meshTris(mesh));
+      if (addMeshBody(feature, copy, `${b.name} mesh`)) made++;
+    }
+    if (!made) errs.push({ feature: feature.id, message: 'Tessellate produced nothing' });
+  }
+
+  /** Weld, drop what is degenerate, agree on which way is out, close the holes. */
+  function doMeshRepair(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Repair works on a mesh body');
+    for (const b of targets) {
+      const fixed = MT.repairMesh(b.sheet, {
+        tolerance: feature.tolerance ? safeEval(feature.tolerance, scope, 1e-4) : 1e-4,
+        fillHoles: feature.fillHoles !== false,
+        orient: feature.orient !== false
+      });
+      replaceBody(bodies, b, { sheet: fixed });
+    }
+  }
+
+  /** Fewer triangles, in the places that cost the least shape. */
+  function doMeshReduce(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Reduce works on a mesh body');
+    for (const b of targets) {
+      const opts =
+        feature.by === 'count'
+          ? { triangles: safeEval(feature.triangles, scope, 1000) }
+          : { ratio: Math.min(1, Math.max(0.01, safeEval(feature.ratio, scope, 50) / 100)) };
+      replaceBody(bodies, b, { sheet: MT.reduceMesh(b.sheet, opts) });
+    }
+  }
+
+  /** Triangles of one size, everywhere. */
+  function doMeshRemesh(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Remesh works on a mesh body');
+    for (const b of targets) {
+      const edge = feature.edgeLength ? safeEval(feature.edgeLength, scope, 0) : 0;
+      replaceBody(bodies, b, {
+        sheet: MT.remesh(b.sheet, {
+          edgeLength: edge > 0 ? edge : undefined,
+          divisions: safeEval(feature.density, scope, 40),
+          iterations: Math.round(safeEval(feature.iterations, scope, 4)),
+          project: feature.project !== false
+        })
+      });
+    }
+  }
+
+  /** Take the roughness out, without taking the size out with it. */
+  function doMeshSmooth(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Smooth works on a mesh body');
+    for (const b of targets) {
+      replaceBody(bodies, b, {
+        sheet: MT.smoothMesh(b.sheet, {
+          iterations: Math.round(safeEval(feature.iterations, scope, 5)),
+          strength: Math.min(1, Math.max(0, safeEval(feature.strength, scope, 0.5))),
+          shrink: !!feature.allowShrink,
+          holdBoundary: feature.holdBoundary !== false
+        })
+      });
+    }
+  }
+
+  /** Cut a mesh with a plane: keep one side, keep both, or only mark the cut. */
+  function doMeshPlaneCut(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Plane Cut works on a mesh body');
+    const plane = resolvePlane(feature.plane || 'XY', scope, builtConstruction);
+    if (!plane) throw new Error('Plane Cut needs a plane to cut with');
+
+    for (const b of targets) {
+      const pieces = MT.planeCut(b.sheet, plane, {
+        mode: feature.mode || 'trim',
+        keep: feature.flip ? 'far' : 'near',
+        fill: feature.fill !== false
+      });
+      if (!pieces.length) {
+        errs.push({
+          feature: feature.id,
+          message: 'That plane does not cross the mesh, so there is nothing to cut'
+        });
+        continue;
+      }
+      replaceBody(bodies, b, { sheet: pieces[0] });
+      for (let i = 1; i < pieces.length; i++) {
+        addMeshBody(feature, pieces[i], `${b.name} ${i + 1}`);
+      }
+    }
+  }
+
+  /** The pieces of a mesh that do not touch each other, each as its own body. */
+  function doMeshSeparate(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Separate works on a mesh body');
+    for (const b of targets) {
+      const pieces = MT.separateMesh(b.sheet);
+      if (pieces.length < 2) {
+        errs.push({
+          feature: feature.id,
+          message: `${b.name} is all one piece, so there is nothing to separate`
+        });
+        continue;
+      }
+      replaceBody(bodies, b, { sheet: pieces[0] });
+      for (let i = 1; i < pieces.length; i++) {
+        addMeshBody(feature, pieces[i], `${b.name} ${i + 1}`);
+      }
+    }
+  }
+
+  /** Several mesh bodies as one. */
+  function doMeshMerge(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (targets.length < 2) throw new Error('Merge needs two or more mesh bodies');
+    const merged = MT.mergeMeshes(targets.map((b) => b.sheet));
+    const first = targets[0];
+    for (let i = 1; i < targets.length; i++) {
+      bodies.splice(bodies.indexOf(targets[i]), 1);
+    }
+    replaceBody(bodies, first, { sheet: merged });
+  }
+
+  /**
+   * Take faces out, and either leave the hole or close it.
+   *
+   * Erase and Fill is the second of those, and it is the one that earns its
+   * keep: a scan with a lump of noise in it is fixed by deleting the lump and
+   * letting the surface close over where it was.
+   */
+  function doMeshErase(feature, scope, ks, errs) {
+    const refs = feature.faces || [];
+    if (!refs.length) throw new Error('Pick the faces to remove');
+
+    const byBody = new Map();
+    for (const ref of refs) {
+      const found = findFace(ref);
+      if (!found?.body?.mesh) continue;
+      if (!byBody.has(found.body.id)) byBody.set(found.body.id, { found, ids: [] });
+      byBody.get(found.body.id).ids.push(found.face.id);
+    }
+    if (!byBody.size) throw new Error('None of those faces are on a mesh body');
+
+    for (const { found, ids } of byBody.values()) {
+      const body = bodies.find((b) => b.id === found.body.id);
+      if (!body) continue;
+      const rest = SH.sheetWithoutFaces(meshOf(body), found.topo, ids);
+      if (!rest) {
+        errs.push({ feature: feature.id, message: 'That would remove the whole mesh' });
+        continue;
+      }
+      replaceBody(bodies, body, {
+        sheet: feature.fill === false ? rest : MT.repairMesh(rest, { fillHoles: true, orient: false })
+      });
+    }
+  }
+
+  /** Turn a mesh inside out. */
+  function doMeshReverse(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Reverse Normal works on a mesh body');
+    for (const b of targets) replaceBody(bodies, b, { sheet: SH.reverseSheet(b.sheet) });
+  }
+
+  /**
+   * A mesh as a solid, if it is closed enough to be one.
+   *
+   * The check is not a formality. manifold will take a mesh with holes in it
+   * and hand back something that looks right and is not watertight, and by the
+   * time that shows up it is in a printed part. So the mesh is repaired first
+   * if asked, measured, and only then handed over.
+   */
+  function doConvertMesh(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Convert Mesh works on a mesh body');
+
+    for (const b of targets) {
+      let mesh = b.sheet;
+      if (feature.repair !== false) mesh = MT.repairMesh(mesh, { fillHoles: true });
+
+      const health = MT.meshHealth(mesh);
+      if (!health.closed) {
+        errs.push({
+          feature: feature.id,
+          message: `${b.name} is not closed: ${health.openEdges} open edge${
+            health.openEdges === 1 ? '' : 's'
+          }${health.nonManifold ? ` and ${health.nonManifold} edges with three or more faces` : ''}. Repair it first.`
+        });
+        continue;
+      }
+
+      let solid = null;
+      try {
+        solid = K.ofMesh(mesh.vertProperties, mesh.triVerts, ks);
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Convert Mesh: ${err.message}` });
+        continue;
+      }
+      if (!solid || K.isEmpty(solid) || K.status(solid) !== 'NoError') {
+        errs.push({
+          feature: feature.id,
+          message: `${b.name} closes but runs into itself, so it is not a solid.`
+        });
+        continue;
+      }
+      const idx = bodies.indexOf(b);
+      bodies[idx] = {
+        id: b.id,
+        name: b.name,
+        solid,
+        createdBy: feature.id,
+        component: b.component || null
+      };
+    }
+  }
+
+  /**
+   * Push a mesh's surface in and out by the brightness of an image.
+   *
+   * A texture that is really there, in the geometry, so it survives being
+   * sliced and printed. The image is laid over the mesh along a plane and each
+   * vertex moves along its own normal.
+   */
+  function doTextureExtrude(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Texture Extrude works on a mesh body');
+    const held = doc.imageData?.[feature.image];
+    if (!held) throw new Error('That image is not in this document any more');
+
+    const plane = resolvePlane(feature.plane || 'XY', scope, builtConstruction);
+    if (!plane) throw new Error('Texture Extrude needs a plane to lay the image on');
+
+    const { width: iw, height: ih, gray } = held;
+    const sample = (u, v) => {
+      const x = Math.min(iw - 1, Math.max(0, Math.round(u * (iw - 1))));
+      // Image rows run down the picture and v runs up the plane.
+      const y = Math.min(ih - 1, Math.max(0, Math.round((1 - v) * (ih - 1))));
+      return gray[y * iw + x] / 255;
+    };
+
+    for (const b of targets) {
+      replaceBody(bodies, b, {
+        sheet: MT.displaceByImage(b.sheet, sample, {
+          plane,
+          height: safeEval(feature.height, scope, 1),
+          width: safeEval(feature.size, scope, 50),
+          invert: !!feature.invert
+        })
+      });
+    }
+  }
+
+  /**
+   * Regroup a mesh's triangles into faces at a chosen angle.
+   *
+   * A face group is what makes a scan selectable: without one every triangle is
+   * its own face and nothing can be pointed at. Anvil works these out on every
+   * rebuild anyway, so this is a matter of saying at what angle two triangles
+   * stop being the same surface, and remembering the answer.
+   */
+  function doFaceGroups(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Face groups are worked out on a mesh body');
+    const angle = safeEval(feature.angle, scope, 30);
+    for (const b of targets) {
+      replaceBody(bodies, b, { groupAngle: angle });
+    }
+  }
+
   function pickBodies(feature, bodies, opts = {}) {
     // Solid features must never be handed a sheet. Surface features say so.
     const kind = opts.sheets === true
@@ -5976,6 +6394,20 @@ function normalizeVec(v) {
 
 export const FEATURE_LABELS = {
   sketch: 'Sketch',
+  insertMesh: 'Insert Mesh',
+  tessellate: 'Tessellate',
+  meshRepair: 'Repair',
+  meshReduce: 'Reduce',
+  meshRemesh: 'Remesh',
+  meshSmooth: 'Smooth',
+  meshPlaneCut: 'Plane Cut',
+  meshSeparate: 'Separate',
+  meshMerge: 'Merge Bodies',
+  meshErase: 'Erase And Fill',
+  meshReverse: 'Reverse Normal',
+  convertMesh: 'Convert Mesh',
+  textureExtrude: 'Texture Extrude',
+  faceGroups: 'Face Groups',
   baseFlange: 'Base Flange',
   flange: 'Flange',
   contourFlange: 'Contour Flange',

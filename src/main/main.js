@@ -330,6 +330,33 @@ ipcMain.handle('import:vector', async (_e, kind) => {
   }
 });
 
+/**
+ * A mesh or an image off the disk, as bytes.
+ *
+ * Bytes rather than text, because an STL is usually binary and a 3MF is always
+ * a zip. What to make of them is the renderer's business; this only opens the
+ * file the person pointed at.
+ */
+ipcMain.handle('import:binary', async (_e, kind) => {
+  const filters =
+    kind === 'image'
+      ? [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp'] }]
+      : [{ name: 'Mesh', extensions: ['stl', 'obj', '3mf'] }];
+  const res = await dialog.showOpenDialog(win, {
+    title: kind === 'image' ? 'Choose an image' : 'Insert Mesh',
+    filters,
+    properties: ['openFile']
+  });
+  if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+  const file = res.filePaths[0];
+  try {
+    const buf = await fs.readFile(file);
+    return { ok: true, path: file, bytes: new Uint8Array(buf) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('doc:openPath', async (_e, file) => {
   try {
     const text = await fs.readFile(file, 'utf8');

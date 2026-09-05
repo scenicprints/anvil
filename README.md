@@ -586,6 +586,46 @@ between them are recovered from the geometry, and a body that is not the rule's
 thickness is refused rather than quietly converted into something a brake cannot
 make.
 
+**Meshes.** The kernel here is already a mesh kernel, so a mesh is not the
+foreign object it is in a boundary representation package. The distinction that
+actually matters is not mesh against solid, it is **watertight against not**: a
+closed mesh can be cut, joined and printed, and an open one cannot. So an
+inserted mesh is held apart from the solids until you ask for it to cross over,
+which keeps a two million triangle scan out of the kernel until that is what you
+want, and Convert Mesh is where it crosses.
+
+**Insert Mesh** reads STL, binary or ASCII, OBJ, and 3MF. The 3MF is unzipped
+with the browser's own inflate rather than a bundled one, since a 3MF is a zip of
+XML and `DecompressionStream` is already here. **Tessellate** goes the other way,
+taking the triangles off a solid or a surface without disturbing it.
+
+**Repair** is the one that earns its keep: weld coincident vertices, drop the
+triangles with no area and the duplicates a bad exporter leaves, take the
+surplus off any edge with three or more triangles on it, close the holes, and
+agree on which way is out. In that order, because each step depends on the one
+before. **Reduce** is Garland and Heckbert's quadric error metric, which spends
+the triangles on the curvature and leaves the flats alone: a quarter of the
+triangles on a sphere costs under three per cent of its volume. **Remesh** makes
+them one size, by splitting what is long, collapsing what is short, flipping
+toward six neighbours a vertex, sliding each vertex across its own surface, and
+then putting it back onto the surface it started on, which is what stops the
+smoothing rounding the shape off.
+
+**Smooth** uses Taubin's alternating step rather than plain Laplacian, so it
+takes the roughness out without taking the size out with it; shrinking is a
+setting rather than a side effect. **Plane Cut** trims, splits into two bodies,
+or splits the faces only, and caps what it opened. **Erase And Fill** removes
+faces and closes over where they were, which is how a lump of scan noise goes.
+**Separate** and **Merge** take a body apart and put it back. **Texture Extrude**
+pushes the surface in and out by the brightness of an image, so the texture is
+really there in the geometry and survives being sliced.
+
+**Generate Face Groups** decides at what angle two triangles stop being the same
+face. Without it a scan is a million faces of one triangle each and nothing on
+it can be pointed at. **Create Mesh Section Sketch** gives the curve where a
+plane crosses a mesh, which is what you trace over when the only thing you have
+is a scan.
+
 ---
 
 ## The window
@@ -691,6 +731,7 @@ src/renderer/
   meshbuild.js         Loft, sweep, helix and variable blend construction
   sheet.js             Surfaces: open meshes, and everything done to them
   sheetmetal.js        Panels, bends, the flat pattern and its DXF
+  meshtools.js         Repair, reduce, remesh, smooth, cut and section
   construction.js      Planes, axes and points that exist to be referenced
   assembly.js          Components and joint kinematics
   features.js          Document model, planes, and the parametric rebuild
@@ -743,6 +784,13 @@ A surface cuts a solid by being stretched past it and given the thickness of the
 whole model, which turns it into a lump the size of a half space with that
 surface as its face, after which an ordinary boolean does the rest. That is what
 Boundary Fill, Replace Face and Split Face by a surface all stand on.
+
+**A mesh never reaches the kernel unmeasured.** manifold will take a mesh with
+holes in it and produce something that looks plausible and is not a solid, so
+Convert Mesh checks first and says what is wrong when it refuses: how many edges
+are open, and how many have three or more triangles on them. A hole can be
+filled; an edge with three triangles on it is a fold, and no amount of filling
+makes it a solid.
 
 **A bend is one number.** The bend allowance, the neutral axis arc length, is
 the whole of what the flat pattern turns on: it is how much flat stock a bend
@@ -817,9 +865,17 @@ Stack, Display Component Colors and Find Similar Components are not modelling
 analyses at all.
 
 **Modelling gaps that remain:** chord-length and rule fillets (constant and
-variable radius work), the Mesh tab, the Form workspace, and Fusion's compute
-options for patterns that hit different geometry. Silhouette Split works only
-where the parting line is flat.
+variable radius work), the Form workspace, and Fusion's compute options for
+patterns that hit different geometry. Silhouette Split works only where the
+parting line is flat.
+
+**Where the mesh tools stop.** Face groups are worked out from the angle between
+triangles rather than kept as a stored grouping you can edit by hand, so
+Create Face Group and Combine Face Groups have nothing to act on. Mesh Align is
+the Solid tab's Align, which already works on any body. Texture Extrude lays the
+image along a plane rather than around the body, so it reaches the faces that
+plane can see. Move, Scale, Combine, Shell and Delete are the ones already on
+the Solid tab, and they work on a mesh body as they do on anything else.
 
 **Where the sheet metal tools stop.** A rule is a document setting rather than a
 library of named rules. Convert To Sheet Metal recovers the flat faces and the

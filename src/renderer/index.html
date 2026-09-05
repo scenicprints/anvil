@@ -52,6 +52,7 @@
           <button class="tab" data-tab="sketch">Sketch</button>
           <button class="tab" data-tab="surface">Surface</button>
           <button class="tab" data-tab="sheet">Sheet Metal</button>
+          <button class="tab" data-tab="mesh">Mesh</button>
           <button class="tab" data-tab="view">View</button>
         </div>
 
@@ -315,6 +316,53 @@
                 <span class="ico">&#9636;</span><span class="lbl">Flat Pattern</span></button>
               <button data-cmd="exportFlatDXF" class="big" title="The flat as a DXF, cut and bend lines on their own layers">
                 <span class="ico">&#8615;</span><span class="lbl">Export DXF</span></button>
+            </div>
+          </div>
+
+          <!-- MESH -->
+          <div class="ribbon-panel" data-panel="mesh">
+            <div class="group">
+              <span class="glabel">Create</span>
+              <button data-cmd="insertMesh" class="big" title="An STL, OBJ or 3MF off the disk">
+                <span class="ico">&#8615;</span><span class="lbl">Insert Mesh</span></button>
+              <button data-cmd="tessellate" class="big" title="Take the triangles off a solid or a surface">
+                <span class="ico">&#9651;</span><span class="lbl">Tessellate</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Prepare</span>
+              <button data-cmd="faceGroups" class="big" title="Group triangles into faces you can point at">
+                <span class="ico">&#9638;</span><span class="lbl">Face Groups</span></button>
+              <button data-cmd="meshRepair" class="big" title="Weld, tidy, orient and close">
+                <span class="ico">&#10010;</span><span class="lbl">Repair</span></button>
+              <button data-cmd="meshMerge" class="big" title="Several mesh bodies as one">
+                <span class="ico">&#9707;</span><span class="lbl">Merge</span></button>
+              <button data-cmd="meshSeparate" class="big" title="The pieces that do not touch, each its own body">
+                <span class="ico">&#9707;</span><span class="lbl">Separate</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Modify</span>
+              <button data-cmd="meshReduce" class="big" title="Fewer triangles, where they cost least">
+                <span class="ico">&#9663;</span><span class="lbl">Reduce</span></button>
+              <button data-cmd="meshRemesh" class="big" title="Triangles of one size, everywhere">
+                <span class="ico">&#9636;</span><span class="lbl">Remesh</span></button>
+              <button data-cmd="meshSmooth" class="big" title="Take the roughness out">
+                <span class="ico">&#8767;</span><span class="lbl">Smooth</span></button>
+              <button data-cmd="meshPlaneCut" class="big" title="Trim or split with a plane">
+                <span class="ico">&#9986;</span><span class="lbl">Plane Cut</span></button>
+              <button data-cmd="meshErase" class="big" title="Take faces out and close the hole">
+                <span class="ico">&#9673;</span><span class="lbl">Erase And Fill</span></button>
+              <button data-cmd="meshReverse" class="big" title="Turn it inside out">
+                <span class="ico">&#8646;</span><span class="lbl">Reverse</span></button>
+              <button data-cmd="textureExtrude" class="big" title="Push the surface about by the brightness of an image">
+                <span class="ico">&#9639;</span><span class="lbl">Texture</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Convert</span>
+              <button data-cmd="convertMesh" class="big" title="A mesh as a solid, if it is closed">
+                <span class="ico">&#9635;</span><span class="lbl">Convert Mesh</span></button>
             </div>
           </div>
 

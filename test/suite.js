@@ -62,11 +62,86 @@ import {
   resolvePlane,
   sketchToWorld
 } from '../src/renderer/features.js';
-import { toBinarySTL, buildGeometry, buildEdges } from '../src/renderer/meshutil.js';
+import {
+  toBinarySTL,
+  toOBJ,
+  parseSTL,
+  parseOBJ,
+  parse3MFModel,
+  parse3MF,
+  meshReaderFor,
+  buildGeometry,
+  buildEdges
+} from '../src/renderer/meshutil.js';
 import * as SH from '../src/renderer/sheet.js';
 import * as SM from '../src/renderer/sheetmetal.js';
+import * as MT from '../src/renderer/meshtools.js';
 import { screenUpFor, rollTheta, ISO_VIEW } from '../src/renderer/viewport.js';
 import { resolveDimensionExprs } from '../src/renderer/features.js';
+
+/**
+ * A zip holding one stored file.
+ *
+ * Stored rather than deflated, so the test needs no compressor of its own. What
+ * it exercises is the archive walk, which is the part of reading a 3MF that can
+ * be got wrong quietly.
+ */
+function storedZip(name, data) {
+  const enc = new TextEncoder();
+  const nameBytes = enc.encode(name);
+  const crc = crc32(data);
+  const parts = [];
+
+  const local = new Uint8Array(30 + nameBytes.length);
+  const lv = new DataView(local.buffer);
+  lv.setUint32(0, 0x04034b50, true);
+  lv.setUint16(4, 20, true);
+  lv.setUint16(8, 0, true); // stored
+  lv.setUint32(14, crc, true);
+  lv.setUint32(18, data.length, true);
+  lv.setUint32(22, data.length, true);
+  lv.setUint16(26, nameBytes.length, true);
+  local.set(nameBytes, 30);
+  parts.push(local, data);
+
+  const central = new Uint8Array(46 + nameBytes.length);
+  const cv = new DataView(central.buffer);
+  cv.setUint32(0, 0x02014b50, true);
+  cv.setUint16(6, 20, true);
+  cv.setUint16(10, 0, true);
+  cv.setUint32(16, crc, true);
+  cv.setUint32(20, data.length, true);
+  cv.setUint32(24, data.length, true);
+  cv.setUint16(28, nameBytes.length, true);
+  cv.setUint32(42, 0, true);
+  central.set(nameBytes, 46);
+
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, 1, true);
+  ev.setUint16(10, 1, true);
+  ev.setUint32(12, central.length, true);
+  ev.setUint32(16, local.length + data.length, true);
+
+  const total = local.length + data.length + central.length + end.length;
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of [local, data, central, end]) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+function crc32(bytes) {
+  let c = ~0;
+  for (let i = 0; i < bytes.length; i++) {
+    c ^= bytes[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
 
 const results = [];
 let failures = 0;
@@ -74,6 +149,23 @@ let failures = 0;
 function test(name, fn) {
   try {
     fn();
+    results.push({ name, ok: true });
+  } catch (err) {
+    failures++;
+    results.push({ name, ok: false, error: err.message || String(err) });
+  }
+}
+
+/**
+ * The same, for a check that has to wait for something.
+ *
+ * It has to be awaited at the call site. Handing an async function to `test`
+ * would pass every time, because the promise it returns is not the failure and
+ * the try block is long over by the time one happens.
+ */
+async function asyncTest(name, fn) {
+  try {
+    await fn();
     results.push({ name, ok: true });
   } catch (err) {
     failures++;
@@ -6186,6 +6278,456 @@ async function run() {
     assert(flat.outline, 'and carries the outline the DXF is written from');
     // Moved clear of the part, which is the whole reason it takes a position.
     near(flat.solid.boundingBox().min[1], 80, 0.01, 'laid out where it was asked for');
+  });
+
+  /* -------- batch 9: the mesh tab -------- */
+
+  /** A sphere's mesh, which is the honest test for anything touching curvature. */
+  function sphereMesh(scope, r = 20, segs = 64) {
+    return K.meshData(K.sphere(r, segs, scope));
+  }
+
+  test('mesh: health tells a closed mesh from one with a hole in it', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    const whole = MT.meshHealth(box);
+    assert(whole.closed, 'a box is closed');
+    assert(whole.openEdges === 0, 'with no open edges');
+    assert(whole.nonManifold === 0, 'and nothing non manifold');
+
+    // The same box with its lid taken off.
+    const P = SH.sheetPoints(box);
+    const tris = SH.sheetTris(box).filter((t) => {
+      const z = (P[t[0]][2] + P[t[1]][2] + P[t[2]][2]) / 3;
+      return z < 19.9;
+    });
+    const holed = MT.meshHealth(SH.makeSheet(P, tris));
+    assert(!holed.closed, 'and one with a face missing is not');
+    assert(holed.holes === 1, `one hole, got ${holed.holes}`);
+    assert(holed.openEdges === 4, `four open edges, got ${holed.openEdges}`);
+    scope.dispose();
+  });
+
+  test('mesh: repair closes a hole and gives back exactly what was there', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    const P = SH.sheetPoints(box);
+    const tris = SH.sheetTris(box).filter((t) => {
+      const z = (P[t[0]][2] + P[t[1]][2] + P[t[2]][2]) / 3;
+      return z < 19.9;
+    });
+
+    const fixed = MT.repairMesh(SH.makeSheet(P, tris), { fillHoles: true });
+    assert(MT.meshHealth(fixed).closed, 'closed again');
+    const solid = K.ofMesh(fixed.vertProperties, fixed.triVerts, scope);
+    assert(K.status(solid) === 'NoError', `a real solid, got ${K.status(solid)}`);
+    // The lid was flat, so closing the hole puts back exactly what was removed.
+    near(solid.volume(), 64000, 1, 'and the box is the size it was');
+    scope.dispose();
+  });
+
+  test('mesh: repair drops degenerate and duplicated triangles', () => {
+    // A square, plus the same two triangles again, plus one with no area.
+    const pts = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [5, 0, 0]];
+    const dirty = SH.makeSheet(pts, [
+      [0, 1, 2],
+      [0, 2, 3],
+      [0, 1, 2],
+      [0, 1, 4]
+    ]);
+    assert(MT.meshHealth(dirty).degenerate === 1, 'the flat one is spotted');
+    const clean = MT.repairMesh(dirty, { fillHoles: false, orient: false });
+    assert(SH.sheetTris(clean).length === 2, `two left, got ${SH.sheetTris(clean).length}`);
+    near(SH.sheetArea(clean), 100, 1e-6, 'and the square is still a square');
+  });
+
+  test('mesh: reduce keeps the shape while dropping the triangles', () => {
+    const scope = new K.Scope();
+    const sphere = K.sphere(20, 64, scope);
+    const mesh = K.meshData(sphere);
+    const before = mesh.triVerts.length / 3;
+
+    const small = MT.reduceMesh(mesh, { ratio: 0.25 });
+    const after = small.triVerts.length / 3;
+    assert(after < before * 0.35, `down to about a quarter, got ${after} from ${before}`);
+    assert(after > 8, 'and not to nothing');
+
+    const solid = K.ofMesh(small.vertProperties, small.triVerts, scope);
+    assert(K.status(solid) === 'NoError', 'still a solid');
+    // A quarter of the triangles on a sphere costs a couple of per cent, no more.
+    const kept = solid.volume() / sphere.volume();
+    assert(kept > 0.94, `it kept its size, ${(kept * 100).toFixed(1)} per cent`);
+    scope.dispose();
+  });
+
+  test('mesh: reduce to a triangle count hits the count', () => {
+    const scope = new K.Scope();
+    const mesh = sphereMesh(scope);
+    const small = MT.reduceMesh(mesh, { triangles: 200 });
+    const n = small.triVerts.length / 3;
+    assert(n <= 260 && n >= 140, `about two hundred, got ${n}`);
+    scope.dispose();
+  });
+
+  test('mesh: reduce holds the outline of an open mesh', () => {
+    // A flat square, finely divided. Every triangle inside is disposable and
+    // every one on the rim is not, so a reduce that loses the outline is
+    // obvious in the area.
+    const rows = [];
+    for (let r = 0; r <= 12; r++) {
+      const row = [];
+      for (let c = 0; c <= 12; c++) row.push([(20 * c) / 12, (20 * r) / 12, 0]);
+      rows.push(row);
+    }
+    const grid = SH.gridSheet(rows, {});
+    const small = MT.reduceMesh(grid, { ratio: 0.2 });
+    assert(small.triVerts.length < grid.triVerts.length, 'it did reduce');
+    near(SH.sheetArea(small), 400, 1, 'and the square is still 20 by 20');
+  });
+
+  test('mesh: remesh makes the triangles one size and keeps the shape', () => {
+    const scope = new K.Scope();
+    const mesh = sphereMesh(scope);
+    const even = MT.remesh(mesh, { edgeLength: 4, iterations: 3 });
+
+    const P = SH.sheetPoints(even);
+    const lens = [];
+    for (const [i, j, k] of SH.sheetTris(even)) {
+      for (const [a, b] of [[i, j], [j, k], [k, i]]) {
+        lens.push(Math.hypot(P[a][0] - P[b][0], P[a][1] - P[b][1], P[a][2] - P[b][2]));
+      }
+    }
+    const min = Math.min(...lens);
+    const max = Math.max(...lens);
+    assert(min > 4 * 0.4, `nothing tiny left, shortest ${min.toFixed(2)}`);
+    assert(max < 4 * 1.8, `nothing long left, longest ${max.toFixed(2)}`);
+
+    // And it is still a sphere of 20, because every vertex went back onto it.
+    const radii = P.map((p) => Math.hypot(p[0], p[1], p[2]));
+    near(Math.min(...radii), 20, 0.4, 'the surface held');
+    near(Math.max(...radii), 20, 0.4, 'both ways');
+    scope.dispose();
+  });
+
+  test('mesh: smoothing does not shrink unless it is allowed to', () => {
+    const scope = new K.Scope();
+    const sphere = K.sphere(20, 48, scope);
+    const mesh = K.meshData(sphere);
+
+    const held = MT.smoothMesh(mesh, { iterations: 8, strength: 0.5, shrink: false });
+    const a = K.ofMesh(held.vertProperties, held.triVerts, scope);
+    const keptRatio = a.volume() / sphere.volume();
+    assert(keptRatio > 0.98, `it kept its size, ${(keptRatio * 100).toFixed(1)} per cent`);
+
+    // Plain Laplacian, which is what the other setting is, does shrink.
+    const shrunk = MT.smoothMesh(mesh, { iterations: 8, strength: 0.5, shrink: true });
+    const b = K.ofMesh(shrunk.vertProperties, shrunk.triVerts, scope);
+    assert(b.volume() < a.volume(), 'and letting it shrink does');
+    scope.dispose();
+  });
+
+  test('mesh: a plane cut splits a box into two halves that add up', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    const plane = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+
+    const halves = MT.planeCut(box, plane, { mode: 'split', fill: true });
+    assert(halves.length === 2, `two pieces, got ${halves.length}`);
+    let total = 0;
+    for (const h of halves) {
+      assert(MT.meshHealth(h).closed, 'each capped and closed');
+      const s = K.ofMesh(h.vertProperties, h.triVerts, scope);
+      assert(K.status(s) === 'NoError', 'and a real solid');
+      near(s.volume(), 32000, 1, 'exactly half the box');
+      total += s.volume();
+    }
+    near(total, 64000, 1, 'and together the whole of it');
+    scope.dispose();
+  });
+
+  test('mesh: trimming keeps the side asked for, and caps it', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    const plane = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+
+    const near0 = MT.planeCut(box, plane, { mode: 'trim', keep: 'near', fill: true })[0];
+    const P0 = SH.sheetPoints(near0);
+    assert(P0.every((p) => p[2] <= 1e-6), 'the near side is below the plane');
+    assert(MT.meshHealth(near0).closed, 'and it was capped');
+
+    const far0 = MT.planeCut(box, plane, { mode: 'trim', keep: 'far', fill: true })[0];
+    const P1 = SH.sheetPoints(far0);
+    assert(P1.every((p) => p[2] >= -1e-6), 'and the other side is above it');
+
+    // Without a cap it is a shell, and says so.
+    const open = MT.planeCut(box, plane, { mode: 'trim', keep: 'near', fill: false })[0];
+    assert(!MT.meshHealth(open).closed, 'uncapped it is open');
+    scope.dispose();
+  });
+
+  test('mesh: a section is a closed loop at the right size', () => {
+    const scope = new K.Scope();
+    const cyl = K.meshData(K.cylinder(60, 15, 15, 64, true, scope));
+    const runs = MT.sectionCurves(cyl, {
+      origin: [0, 0, 0],
+      x: [1, 0, 0],
+      y: [0, 1, 0],
+      n: [0, 0, 1]
+    });
+    assert(runs.length === 1, `one loop, got ${runs.length}`);
+    const run = runs[0];
+    for (const p of run) near(Math.hypot(p[0], p[1]), 15, 0.05, 'on the cylinder wall');
+    const gap = Math.hypot(run[0][0] - run[run.length - 1][0], run[0][1] - run[run.length - 1][1]);
+    near(gap, 0, 1e-4, 'and it closes on itself');
+
+    // A plane that misses the body gives nothing rather than a stray segment.
+    assert(
+      MT.sectionCurves(cyl, {
+        origin: [0, 0, 100],
+        x: [1, 0, 0],
+        y: [0, 1, 0],
+        n: [0, 0, 1]
+      }).length === 0,
+      'and a plane that misses gives nothing'
+    );
+    scope.dispose();
+  });
+
+  test('mesh: separate finds the pieces that do not touch', () => {
+    const scope = new K.Scope();
+    const a = K.meshData(K.translate(K.box([10, 10, 10], true, scope), [-30, 0, 0], scope));
+    const b = K.meshData(K.translate(K.box([10, 10, 10], true, scope), [30, 0, 0], scope));
+    const both = MT.mergeMeshes([a, b]);
+    const pieces = MT.separateMesh(both);
+    assert(pieces.length === 2, `two pieces, got ${pieces.length}`);
+    for (const p of pieces) {
+      assert(MT.meshHealth(p).closed, 'each closed in its own right');
+      near(SH.sheetArea(p), 600, 1e-6, 'and each a 10 mm cube');
+    }
+    // One box on its own is one piece, not two.
+    assert(MT.separateMesh(a).length === 1, 'and one body stays one');
+    scope.dispose();
+  });
+
+  test('mesh: the nearest point of a triangle is found in every region', () => {
+    const a = [0, 0, 0];
+    const b = [10, 0, 0];
+    const c = [0, 10, 0];
+    // Straight above the middle.
+    const inside = MT.closestOnTriangle([2, 2, 5], a, b, c);
+    near(inside[0], 2, 1e-9, 'inside stays put in x');
+    near(inside[2], 0, 1e-9, 'and drops onto the plane');
+    // Past a corner.
+    const corner = MT.closestOnTriangle([-5, -5, 0], a, b, c);
+    near(Math.hypot(corner[0], corner[1], corner[2]), 0, 1e-9, 'past a corner is the corner');
+    // Past an edge.
+    const edge = MT.closestOnTriangle([5, -5, 0], a, b, c);
+    near(edge[0], 5, 1e-9, 'past an edge is on the edge');
+    near(edge[1], 0, 1e-9, 'at the edge itself');
+  });
+
+  test('mesh: an STL written by the app reads back as the same body', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    const back = parseSTL(toBinarySTL([box]));
+    assert(back.triVerts.length === box.triVerts.length, 'the same triangles');
+
+    // STL has no vertex sharing, so it needs welding before it is a solid.
+    const fixed = MT.repairMesh(back, {});
+    const solid = K.ofMesh(fixed.vertProperties, fixed.triVerts, scope);
+    assert(K.status(solid) === 'NoError', `a real solid, got ${K.status(solid)}`);
+    near(solid.volume(), 64000, 0.01, 'and the size it was written at');
+    scope.dispose();
+  });
+
+  test('mesh: an ASCII STL reads too, and is told from a binary one', () => {
+    const text = [
+      'solid box',
+      'facet normal 0 0 1',
+      '  outer loop',
+      '    vertex 0 0 0',
+      '    vertex 10 0 0',
+      '    vertex 0 10 0',
+      '  endloop',
+      'endfacet',
+      'endsolid box'
+    ].join('\n');
+    const mesh = parseSTL(new TextEncoder().encode(text));
+    assert(mesh.triVerts.length === 3, 'one triangle');
+    near(SH.sheetArea(mesh), 50, 1e-6, 'of the right size');
+  });
+
+  test('mesh: an OBJ round trips, including its negative indices', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    const back = parseOBJ(toOBJ([box]));
+    assert(back.triVerts.length === box.triVerts.length, 'the same triangles');
+    const solid = K.ofMesh(back.vertProperties, back.triVerts, scope);
+    near(solid.volume(), 64000, 0.01, 'and the same body');
+
+    // A quad face is fanned, and an index counted back from the end still works.
+    const quad = parseOBJ(
+      ['v 0 0 0', 'v 10 0 0', 'v 10 10 0', 'v 0 10 0', 'f -4 -3 -2 -1'].join('\n')
+    );
+    assert(quad.triVerts.length === 6, 'a quad comes in as two triangles');
+    near(SH.sheetArea(quad), 100, 1e-6, 'covering the whole of it');
+    scope.dispose();
+  });
+
+  await asyncTest('mesh: a 3MF model reads, and a real zipped one does too', async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter"><resources><object id="1" type="model"><mesh>
+<vertices>
+<vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/>
+<vertex x="0" y="10" z="0"/><vertex x="0" y="0" z="10"/>
+</vertices>
+<triangles>
+<triangle v1="0" v2="2" v3="1"/><triangle v1="0" v2="1" v3="3"/>
+<triangle v1="0" v2="3" v3="2"/><triangle v1="1" v2="2" v3="3"/>
+</triangles>
+</mesh></object></resources></model>`;
+    const mesh = parse3MFModel(xml);
+    assert(mesh.triVerts.length === 12, 'four triangles');
+
+    const scope = new K.Scope();
+    const solid = K.ofMesh(mesh.vertProperties, mesh.triVerts, scope);
+    assert(K.status(solid) === 'NoError', 'a closed tetrahedron');
+    near(solid.volume(), 1000 / 6, 0.01, 'of the volume a tetrahedron has');
+    scope.dispose();
+
+    // And through the zip, which is the part that has to work on a real file.
+    const zip = storedZip('3D/3dmodel.model', new TextEncoder().encode(xml));
+    const fromZip = await parse3MF(zip);
+    assert(fromZip.triVerts.length === 12, 'the same out of the archive');
+  });
+
+  test('mesh: a file name says which reader it needs', () => {
+    assert(meshReaderFor('scan.STL') === 'stl', 'stl whatever the case');
+    assert(meshReaderFor('part.obj') === 'obj', 'obj');
+    assert(meshReaderFor('thing.3mf') === '3mf', '3mf');
+    assert(meshReaderFor('notes.txt') === null, 'and nothing for anything else');
+  });
+
+  test('mesh: face groups follow the angle they are given', () => {
+    const scope = new K.Scope();
+    // A cylinder: at a tight angle its wall is many faces, at a loose one it is
+    // one. That is the whole of what the setting does.
+    const mesh = K.meshData(K.cylinder(40, 20, 20, 64, true, scope));
+    const tight = buildTopology(mesh, { smoothDeg: 2 });
+    const loose = buildTopology(mesh, { smoothDeg: 40 });
+    assert(
+      tight.faces.length > loose.faces.length,
+      `a tighter angle finds more faces: ${tight.faces.length} against ${loose.faces.length}`
+    );
+    assert(loose.faces.length === 3, `loose reads it as a wall and two ends, got ${loose.faces.length}`);
+    scope.dispose();
+  });
+
+  test('mesh: texture extrude moves the surface by the picture', () => {
+    // A flat grid, and an image that is white everywhere: every vertex should
+    // move by the full depth, along the normal.
+    const rows = [];
+    for (let r = 0; r <= 8; r++) {
+      const row = [];
+      for (let c = 0; c <= 8; c++) row.push([-10 + (20 * c) / 8, -10 + (20 * r) / 8, 0]);
+      rows.push(row);
+    }
+    const grid = SH.gridSheet(rows, {});
+    const plane = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+
+    const white = MT.displaceByImage(grid, () => 1, { plane, height: 3, width: 20 });
+    const zs = SH.sheetPoints(white).map((p) => p[2]);
+    near(Math.min(...zs), 3, 1e-5, 'all of it moved');
+    near(Math.max(...zs), 3, 1e-5, 'by the depth asked for');
+
+    // Black leaves it alone, which is the other half of the same statement.
+    const black = MT.displaceByImage(grid, () => 0, { plane, height: 3, width: 20 });
+    assert(
+      SH.sheetPoints(black).every((p) => Math.abs(p[2]) < 1e-9),
+      'and black stays put'
+    );
+  });
+
+  test('mesh: through the timeline, insert, repair and convert', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    // Stored the way an inserted mesh is: unwelded, the way an STL arrives.
+    const loose = parseSTL(toBinarySTL([box]));
+    scope.dispose();
+
+    const doc = newDocument();
+    const key = 'm1';
+    doc.meshData[key] = {
+      verts: Array.from(loose.vertProperties),
+      tris: Array.from(loose.triVerts)
+    };
+    doc.features = [
+      { id: uid('f'), type: 'insertMesh', data: key, label: 'Box', scale: '1', at: [0, 0, 0] }
+    ];
+    let out = rebuild(doc);
+    assert(out.bodies.length === 1, 'the mesh came in');
+    assert(out.bodies[0].mesh, 'and it knows it is a mesh');
+    assert(!out.bodies[0].solid, 'and has not reached the kernel');
+
+    // An STL shares no vertices, and it converts anyway: the kernel merges by
+    // position when it takes a mesh, so unwelded is not the same as open.
+    doc.features.push({ id: uid('f'), type: 'convertMesh', bodies: 'all', repair: false });
+    out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies[0].solid, 'it is a solid');
+    near(out.bodies[0].solid.volume(), 64000, 1, 'of the size it came in at');
+  });
+
+  test('mesh: convert refuses a mesh with a hole, and says how big', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([40, 40, 40], true, scope));
+    const P = SH.sheetPoints(box);
+    const tris = SH.sheetTris(box).filter((t) => {
+      const z = (P[t[0]][2] + P[t[1]][2] + P[t[2]][2]) / 3;
+      return z < 19.9;
+    });
+    const holed = SH.makeSheet(P, tris);
+    scope.dispose();
+
+    const doc = newDocument();
+    doc.meshData.m1 = {
+      verts: Array.from(holed.vertProperties),
+      tris: Array.from(holed.triVerts)
+    };
+    doc.features = [
+      { id: uid('f'), type: 'insertMesh', data: 'm1', label: 'Open', scale: '1', at: [0, 0, 0] },
+      { id: uid('f'), type: 'convertMesh', bodies: 'all', repair: false }
+    ];
+    let out = rebuild(doc);
+    assert(out.errors.length === 1, `it refuses it, got ${out.errors.length} problems`);
+    assert(/open edge/.test(out.errors[0].message), out.errors[0].message);
+    assert(!out.bodies[0].solid, 'and leaves it a mesh');
+
+    // Repairing first is what makes it work, which is the point of the setting.
+    doc.features[1].repair = true;
+    out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies[0].solid, 'now it is a solid');
+    near(out.bodies[0].solid.volume(), 64000, 1, 'and the hole is closed');
+  });
+
+  test('mesh: insert honours the scale it was given', () => {
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([10, 10, 10], true, scope));
+    scope.dispose();
+
+    const doc = newDocument();
+    doc.meshData.m1 = {
+      verts: Array.from(box.vertProperties),
+      tris: Array.from(box.triVerts)
+    };
+    doc.features = [
+      { id: uid('f'), type: 'insertMesh', data: 'm1', label: 'Box', scale: '25.4', at: [0, 0, 0] }
+    ];
+    const out = rebuild(doc);
+    const P = SH.sheetPoints(out.bodies[0].sheet);
+    const xs = P.map((p) => p[0]);
+    near(Math.max(...xs) - Math.min(...xs), 254, 0.01, 'ten inches across');
   });
 
   /* -------- report -------- */

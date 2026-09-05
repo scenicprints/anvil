@@ -55,7 +55,7 @@ export function basisFor(normal) {
  * @param {{numProp:number, vertProperties:Float32Array, triVerts:Uint32Array}} mesh
  * @returns {{faces:Array, edges:Array, triFace:Int32Array, positions:Float64Array}}
  */
-export function buildTopology(mesh) {
+export function buildTopology(mesh, opts = {}) {
   const stride = mesh.numProp;
   const src = mesh.vertProperties;
   const tris = mesh.triVerts;
@@ -125,7 +125,12 @@ export function buildTopology(mesh) {
     addHalf(v2, v0, t, 2);
   }
 
-  const cosSmooth = Math.cos((SMOOTH_DEG * Math.PI) / 180);
+  // How far two triangles can disagree and still be the same surface. A scan
+  // needs this loosened or every triangle is its own face and nothing can be
+  // pointed at; a machined part needs it tight or a fillet swallows the flat
+  // beside it.
+  const smoothDeg = opts.smoothDeg ?? SMOOTH_DEG;
+  const cosSmooth = Math.cos((smoothDeg * Math.PI) / 180);
 
   /** Neighbouring triangles across a shared welded edge. */
   const neighboursOf = (t) => {

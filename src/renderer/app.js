@@ -12,7 +12,14 @@ import { initKernel } from './kernel.js';
 import * as K from './kernel.js';
 import { Viewport, ISO_VIEW } from './viewport.js';
 import { SketchEditor } from './sketchview.js';
-import { toBinarySTL, toOBJ } from './meshutil.js';
+import {
+  toBinarySTL,
+  toOBJ,
+  parseSTL,
+  parseOBJ,
+  parse3MF,
+  meshReaderFor
+} from './meshutil.js';
 import {
   newDocument,
   newSketch,
@@ -28,6 +35,7 @@ import {
 } from './features.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
 import * as SM from './sheetmetal.js';
+import { meshHealth, sectionCurves } from './meshtools.js';
 import {
   newComponent,
   JOINT_TYPES,
@@ -214,7 +222,10 @@ function rebuildAll() {
       // pointer selects and what fillet and sketch-on-face refer to.
       let topology = null;
       try {
-        topology = buildTopology(mesh);
+        // A mesh body can say at what angle two triangles stop being the same
+        // surface. Without that a scan is a million faces of one triangle each
+        // and nothing on it can be pointed at.
+        topology = buildTopology(mesh, b.groupAngle ? { smoothDeg: b.groupAngle } : {});
       } catch (err) {
         res.errors.push({ feature: b.createdBy, message: `Topology: ${err.message}` });
       }
@@ -226,6 +237,9 @@ function rebuildAll() {
         // A surface body has no inside, so mass, section and interference all
         // have to leave it alone, and it is drawn from both sides.
         sheet: isSheet(b),
+        // Not `mesh`: that name already holds this record's triangles, and
+        // setting it to a flag replaces the geometry with a boolean.
+        isMesh: !!b.mesh,
         visible: !state.hiddenBodies.has(b.id)
       });
     } catch (err) {
@@ -1443,6 +1457,51 @@ async function runCommand(cmd) {
     case 'exportFlatDXF':
       cmdExportFlatDXF();
       break;
+    case 'insertMesh':
+      cmdInsertMesh();
+      break;
+    case 'tessellate':
+      cmdTessellate();
+      break;
+    case 'meshRepair':
+      cmdMeshRepair();
+      break;
+    case 'meshReduce':
+      cmdMeshReduce();
+      break;
+    case 'meshRemesh':
+      cmdMeshRemesh();
+      break;
+    case 'meshSmooth':
+      cmdMeshSmooth();
+      break;
+    case 'meshPlaneCut':
+      cmdMeshPlaneCut();
+      break;
+    case 'meshSeparate':
+      cmdMeshSeparate();
+      break;
+    case 'meshMerge':
+      cmdMeshMerge();
+      break;
+    case 'meshErase':
+      cmdMeshErase();
+      break;
+    case 'meshReverse':
+      cmdMeshReverse();
+      break;
+    case 'convertMesh':
+      cmdConvertMesh();
+      break;
+    case 'faceGroups':
+      cmdFaceGroups();
+      break;
+    case 'textureExtrude':
+      cmdTextureExtrude();
+      break;
+    case 'meshSection':
+      cmdMeshSection();
+      break;
     case 'loft':
       startLoft();
       break;
@@ -1738,6 +1797,8 @@ function migrate(data) {
   doc.joints = doc.joints || [];
   doc.baseBodies = doc.baseBodies || [];
   doc.sheetMetalRule = { ...SM.DEFAULT_RULE, ...(doc.sheetMetalRule || {}) };
+  doc.meshData = doc.meshData || {};
+  doc.imageData = doc.imageData || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
   if (doc.rollback === undefined) doc.rollback = null;
   return doc;
@@ -2213,11 +2274,13 @@ function renderTree() {
     }
   }
 
-  // Solids and surfaces are listed apart, because almost nothing you can do to
-  // one can be done to the other.
+  // Solids, surfaces and meshes are listed apart, because almost nothing you
+  // can do to one can be done to the others. A mesh is a surface underneath,
+  // but it is not one to work on: it has its own tab and its own tools.
   const allBodies = state.result?.bodies || [];
   const solidList = allBodies.filter((b) => b.solid);
-  const sheetList = allBodies.filter((b) => !b.solid);
+  const sheetList = allBodies.filter((b) => !b.solid && !b.mesh);
+  const meshList = allBodies.filter((b) => !b.solid && b.mesh);
   const bodyNode = (b) =>
     addNode(b.name, {
       child: true,
@@ -2237,13 +2300,17 @@ function renderTree() {
       }
     });
 
-  if (solidList.length || !sheetList.length) {
+  if (solidList.length || (!sheetList.length && !meshList.length)) {
     addNode('Bodies', { head: true });
     for (const b of solidList) bodyNode(b);
   }
   if (sheetList.length) {
     addNode('Surfaces', { head: true });
     for (const b of sheetList) bodyNode(b);
+  }
+  if (meshList.length) {
+    addNode('Meshes', { head: true });
+    for (const b of meshList) bodyNode(b);
   }
 
   if (state.result?.errors.length) {
@@ -4509,7 +4576,8 @@ const RIBBON_MENUS = {
     ['include3D', 'Include 3D Geometry'],
     ['intersectionCurve', 'Intersection Curve'],
     ['projectToSurface', 'Project To Surface'],
-    ['isoCurve', 'Isoparametric Curve']
+    ['isoCurve', 'Isoparametric Curve'],
+    ['meshSection', 'Mesh Section']
   ],
   insert: [
     ['insertSvg', 'Insert SVG'],
@@ -7727,6 +7795,18 @@ function pickIntoEdit(hit) {
     if (!hit.point) return true;
     f.keep = [hit.point.x, hit.point.y, hit.point.z];
     ed.pickInto = null;
+  } else if (ed.pickInto === 'eraseFaces') {
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const rec = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = rec?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    f.faces = f.faces || [];
+    const key = `${hit.bodyId}:${face.id}`;
+    // Clicking a face a second time takes it back out of the list, which on a
+    // scan matters: picking the wrong lump is the normal case.
+    const at = f.faces.findIndex((x) => `${x.bodyId}:${x.face?.id}` === key);
+    if (at >= 0) f.faces.splice(at, 1);
+    else f.faces.push({ bodyId: hit.bodyId, face: faceReference(face) });
   } else if (ed.pickInto === 'offsetFaces' || ed.pickInto === 'replaceFaces') {
     if (hit.kind !== 'face' || hit.faceId === null) return true;
     const rec = (state.records || []).find((r) => r.id === hit.bodyId);
@@ -9019,6 +9099,517 @@ function ripFields() {
   ];
 }
 
+/* ---------------------------------------------------------------- */
+/* Meshes                                                            */
+/* ---------------------------------------------------------------- */
+
+/** Every mesh body in the model. */
+function meshBodies() {
+  return (state.result?.bodies || []).filter((b) => b.mesh);
+}
+
+/** Whichever mesh bodies are selected, or all of them. */
+function pickedMeshIds() {
+  const all = meshBodies();
+  const chosen = all.filter((b) => state.selection.bodies.has(b.id));
+  return (chosen.length ? chosen : all).map((b) => b.id);
+}
+
+/** The mesh body field every Mesh tab dialog starts with. */
+function meshBodyField(label = 'Mesh bodies') {
+  return {
+    key: '__bodies',
+    label,
+    type: 'pick',
+    pick: 'moveBodies',
+    summary: (f) => (f.bodies === 'all' ? 'every mesh' : countOf(f.bodies, 'mesh')),
+    clear: (f) => {
+      f.bodies = 'all';
+    }
+  };
+}
+
+/** Open a Mesh tab dialog, having checked there is a mesh to work on. */
+function startMeshFeature(type, title, fields, extra = {}) {
+  if (state.sketcher.active) finishSketch();
+  if (!meshBodies().length) {
+    setStatus('That works on a mesh body. Insert a mesh, or tessellate a solid.');
+    return;
+  }
+  const feature = { id: uid('f'), type, bodies: pickedMeshIds(), ...extra };
+  openFeatureEditor(feature, title, fields);
+}
+
+/**
+ * A mesh off the disk.
+ *
+ * STL, OBJ or 3MF. The triangles go into the document rather than into the
+ * feature, because nothing in the timeline can reproduce them: the file they
+ * came from may not be there next time this is opened.
+ */
+async function cmdInsertMesh() {
+  if (state.sketcher.active) finishSketch();
+  const res = await window.anvil.importBinary('mesh');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+
+  const name = res.path.split(/[\\/]/).pop();
+  const kind = meshReaderFor(name);
+  let mesh;
+  try {
+    const bytes = res.bytes instanceof Uint8Array ? res.bytes : new Uint8Array(res.bytes);
+    if (kind === 'obj') mesh = parseOBJ(new TextDecoder().decode(bytes));
+    else if (kind === '3mf') mesh = await parse3MF(bytes);
+    else mesh = parseSTL(bytes);
+  } catch (err) {
+    setStatus(`Could not read that ${kind ? kind.toUpperCase() : 'file'}: ${err.message}`);
+    return;
+  }
+  if (!mesh.triVerts.length) {
+    setStatus('There are no triangles in that file.');
+    return;
+  }
+
+  pushUndo('insert mesh');
+  const key = uid('m');
+  state.doc.meshData[key] = {
+    verts: Array.from(mesh.vertProperties),
+    tris: Array.from(mesh.triVerts)
+  };
+  const feature = {
+    id: uid('f'),
+    type: 'insertMesh',
+    data: key,
+    label: name.replace(/\.[^.]+$/, ''),
+    scale: '1',
+    at: [0, 0, 0]
+  };
+  openFeatureEditor(feature, 'Insert Mesh', insertMeshFields());
+  setStatus(
+    `${name}: ${(mesh.triVerts.length / 3).toLocaleString()} triangles.`
+  );
+}
+
+/** A solid or a surface, taken as triangles so the mesh tools reach it. */
+function cmdTessellate() {
+  if (state.sketcher.active) finishSketch();
+  const source = (state.result?.bodies || []).filter((b) => !b.mesh);
+  if (!source.length) {
+    setStatus('Tessellate takes a solid or a surface and gives you its triangles.');
+    return;
+  }
+  const chosen = source.filter((b) => state.selection.bodies.has(b.id));
+  const feature = {
+    id: uid('f'),
+    type: 'tessellate',
+    bodies: (chosen.length ? chosen : source).map((b) => b.id)
+  };
+  openFeatureEditor(feature, 'Tessellate', [
+    {
+      key: '__bodies',
+      label: 'Bodies',
+      type: 'pick',
+      pick: 'moveBodies',
+      summary: (f) => (f.bodies === 'all' ? 'every body' : countOf(f.bodies, 'body')),
+      clear: (f) => {
+        f.bodies = 'all';
+      }
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The body it came from stays where it is. Tessellating takes a mesh from something rather than turning it into one.'
+    }
+  ]);
+}
+
+function cmdMeshRepair() {
+  startMeshFeature('meshRepair', 'Repair', meshRepairFields(), {
+    tolerance: '0.0001',
+    fillHoles: true,
+    orient: true
+  });
+  reportHealth();
+}
+
+/** Say what is actually wrong, since that is what decides which knobs matter. */
+function reportHealth() {
+  const first = meshBodies()[0];
+  if (!first) return;
+  const h = meshHealth(first.sheet);
+  setStatus(
+    h.closed
+      ? `${first.name}: ${h.triangles.toLocaleString()} triangles, closed and ready to convert.`
+      : `${first.name}: ${h.triangles.toLocaleString()} triangles, ${h.openEdges} open edge${
+          h.openEdges === 1 ? '' : 's'
+        } in ${h.holes} hole${h.holes === 1 ? '' : 's'}${
+          h.nonManifold ? `, ${h.nonManifold} edges with three or more faces` : ''
+        }${h.degenerate ? `, ${h.degenerate} degenerate triangles` : ''}.`
+  );
+}
+
+function cmdMeshReduce() {
+  startMeshFeature('meshReduce', 'Reduce', meshReduceFields(), {
+    by: 'ratio',
+    ratio: '50',
+    triangles: '2000'
+  });
+}
+
+function cmdMeshRemesh() {
+  startMeshFeature('meshRemesh', 'Remesh', meshRemeshFields(), {
+    edgeLength: '',
+    density: '40',
+    iterations: '4',
+    project: true
+  });
+}
+
+function cmdMeshSmooth() {
+  startMeshFeature('meshSmooth', 'Smooth', meshSmoothFields(), {
+    iterations: '5',
+    strength: '0.5',
+    allowShrink: false,
+    holdBoundary: true
+  });
+}
+
+function cmdMeshPlaneCut() {
+  startMeshFeature('meshPlaneCut', 'Plane Cut', meshPlaneCutFields(), {
+    plane: 'XY',
+    mode: 'trim',
+    flip: false,
+    fill: true
+  });
+  setEditPick('splitFace');
+  setStatus('Click the plane or a flat face to cut against.');
+}
+
+function cmdMeshSeparate() {
+  startMeshFeature('meshSeparate', 'Separate', [meshBodyField()]);
+}
+
+function cmdMeshMerge() {
+  if (meshBodies().length < 2) {
+    setStatus('Merge needs two or more mesh bodies.');
+    return;
+  }
+  startMeshFeature('meshMerge', 'Merge Bodies', [meshBodyField()]);
+}
+
+function cmdMeshReverse() {
+  startMeshFeature('meshReverse', 'Reverse Normal', [meshBodyField()]);
+}
+
+function cmdMeshErase() {
+  if (state.sketcher.active) finishSketch();
+  if (!meshBodies().length) {
+    setStatus('Erase And Fill works on a mesh body.');
+    return;
+  }
+  const faces = [];
+  for (const [bodyId, refs] of selectedFaceRefs()) {
+    for (const ref of refs) faces.push({ bodyId, face: ref });
+  }
+  const feature = { id: uid('f'), type: 'meshErase', faces, fill: true };
+  openFeatureEditor(feature, 'Erase And Fill', meshEraseFields());
+  if (!faces.length) {
+    setEditPick('eraseFaces');
+    setStatus('Click the faces to remove.');
+  }
+}
+
+function cmdConvertMesh() {
+  startMeshFeature('convertMesh', 'Convert Mesh', [
+    meshBodyField(),
+    { key: 'repair', label: 'Repair first', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'A mesh has to be closed to be a solid. One that is not is refused and told why, rather than handed over and quietly wrong.'
+    }
+  ], { repair: true });
+}
+
+function cmdFaceGroups() {
+  startMeshFeature('faceGroups', 'Generate Face Groups', [
+    meshBodyField(),
+    { key: 'angle', label: 'Angle', type: 'expr' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'How far two triangles can disagree and still be the same face. Loosen it on a scan, tighten it on something machined.'
+    }
+  ], { angle: '30' });
+}
+
+/**
+ * Push a mesh's surface in and out by the brightness of an image.
+ *
+ * A texture that is really there, in the geometry, so it survives being sliced
+ * and printed rather than being a picture of one.
+ */
+async function cmdTextureExtrude() {
+  if (state.sketcher.active) finishSketch();
+  if (!meshBodies().length) {
+    setStatus('Texture Extrude works on a mesh body.');
+    return;
+  }
+  const res = await window.anvil.importBinary('image');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+
+  let held;
+  try {
+    held = await grayscaleOf(res.bytes);
+  } catch (err) {
+    setStatus(`Could not read that image: ${err.message}`);
+    return;
+  }
+
+  pushUndo('texture extrude');
+  const key = uid('img');
+  state.doc.imageData[key] = held;
+  const feature = {
+    id: uid('f'),
+    type: 'textureExtrude',
+    bodies: pickedMeshIds(),
+    image: key,
+    plane: 'XY',
+    height: '1',
+    size: '50',
+    invert: false
+  };
+  openFeatureEditor(feature, 'Texture Extrude', textureExtrudeFields());
+  setStatus(`${held.width} by ${held.height} image, laid on the plane.`);
+}
+
+/**
+ * An image as one brightness per pixel.
+ *
+ * Kept small on purpose: a displacement map is sampled per vertex, and a mesh
+ * with more vertices than the picture has pixels is a different problem from
+ * one where the picture is too big to hold in a document.
+ */
+async function grayscaleOf(bytes) {
+  const blob = new Blob([bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)]);
+  const bitmap = await createImageBitmap(blob);
+  const max = 512;
+  const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const data = ctx.getImageData(0, 0, w, h).data;
+
+  const gray = new Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    // Rec. 709 luma, which is what the eye reads as brightness.
+    gray[i] = Math.round(
+      0.2126 * data[i * 4] + 0.7152 * data[i * 4 + 1] + 0.0722 * data[i * 4 + 2]
+    );
+  }
+  bitmap.close?.();
+  return { width: w, height: h, gray };
+}
+
+/**
+ * The curve where a plane crosses a mesh, brought into the sketch.
+ *
+ * What it is for is reverse engineering: something to trace over when the only
+ * thing you have is a scan.
+ */
+function cmdMeshSection() {
+  if (!state.sketcher.active) {
+    setStatus('Create Mesh Section Sketch works inside a sketch.');
+    return;
+  }
+  const chosen = [...state.selection.bodies];
+  const targets = meshBodies().filter((b) => !chosen.length || chosen.includes(b.id));
+  if (!targets.length) {
+    setStatus('Select a mesh body to take the section from.');
+    return;
+  }
+
+  const plane = state.sketcher.plane;
+  const runs = [];
+  for (const b of targets) runs.push(...sectionCurves(b.sheet, plane));
+  if (!runs.length) {
+    setStatus('That plane does not cross the mesh.');
+    return;
+  }
+
+  pushUndo('mesh section sketch');
+  const made = state.sketcher.insertWorldCurves(runs, { asLines: true });
+  state.dirty = true;
+  rebuildAll();
+  setStatus(`${runs.length} section curve${runs.length === 1 ? '' : 's'}, ${made} segments.`);
+}
+
+/* -------- the fields those dialogs show -------- */
+
+function insertMeshFields() {
+  return [
+    { key: 'scale', label: 'Scale', type: 'expr' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The file is in millimetres unless it says otherwise, which most do not. Scale by 25.4 for something drawn in inches.'
+    }
+  ];
+}
+
+function meshRepairFields() {
+  return [
+    meshBodyField(),
+    { key: 'tolerance', label: 'Weld tolerance', type: 'expr' },
+    { key: 'fillHoles', label: 'Fill holes', type: 'bool' },
+    { key: 'orient', label: 'Agree on which way is out', type: 'bool' }
+  ];
+}
+
+function meshReduceFields() {
+  return [
+    meshBodyField(),
+    {
+      key: 'by',
+      label: 'Reduce by',
+      type: 'select',
+      options: [
+        ['ratio', 'A proportion'],
+        ['count', 'A triangle count']
+      ]
+    },
+    {
+      key: 'ratio',
+      label: 'Keep, per cent',
+      type: 'expr',
+      showIf: (f) => (f.by || 'ratio') === 'ratio'
+    },
+    {
+      key: 'triangles',
+      label: 'Triangles',
+      type: 'expr',
+      showIf: (f) => f.by === 'count'
+    }
+  ];
+}
+
+function meshRemeshFields() {
+  return [
+    meshBodyField(),
+    { key: 'edgeLength', label: 'Edge length', type: 'expr' },
+    { key: 'density', label: 'Or divisions across', type: 'expr' },
+    { key: 'iterations', label: 'Passes', type: 'expr' },
+    { key: 'project', label: 'Hold the shape', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Blank edge length means work it out from the size of the body. Holding the shape puts every vertex back on the surface it started on, which is what stops a remesh rounding off the corners.'
+    }
+  ];
+}
+
+function meshSmoothFields() {
+  return [
+    meshBodyField(),
+    { key: 'iterations', label: 'Passes', type: 'expr' },
+    { key: 'strength', label: 'Strength', type: 'expr' },
+    { key: 'allowShrink', label: 'Let it shrink', type: 'bool' },
+    { key: 'holdBoundary', label: 'Hold open edges', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Smoothing shrinks unless it is stopped from doing so, which is why letting it is a choice rather than the default.'
+    }
+  ];
+}
+
+function meshPlaneCutFields() {
+  return [
+    meshBodyField(),
+    {
+      key: '__plane',
+      label: 'Plane',
+      type: 'pick',
+      pick: 'splitFace',
+      summary: (f) => (typeof f.plane === 'string' ? f.plane : 'a face'),
+      clear: (f) => {
+        f.plane = 'XY';
+        f.faceRef = null;
+      }
+    },
+    {
+      key: 'mode',
+      label: 'Cut type',
+      type: 'select',
+      options: [
+        ['trim', 'Trim, keep one side'],
+        ['split', 'Split into two bodies'],
+        ['faces', 'Split the faces only']
+      ]
+    },
+    { key: 'flip', label: 'Keep the other side', type: 'bool', showIf: (f) => f.mode === 'trim' },
+    { key: 'fill', label: 'Cap the cut', type: 'bool', showIf: (f) => f.mode !== 'faces' }
+  ];
+}
+
+function meshEraseFields() {
+  return [
+    {
+      key: '__faces',
+      label: 'Faces to remove',
+      type: 'pick',
+      pick: 'eraseFaces',
+      summary: (f) => countOf(f.faces, 'face'),
+      clear: (f) => {
+        f.faces = [];
+      }
+    },
+    { key: 'fill', label: 'Close the hole', type: 'bool' }
+  ];
+}
+
+function textureExtrudeFields() {
+  return [
+    meshBodyField(),
+    {
+      key: '__plane',
+      label: 'Lay it on',
+      type: 'pick',
+      pick: 'splitFace',
+      summary: (f) => (typeof f.plane === 'string' ? f.plane : 'a face'),
+      clear: (f) => {
+        f.plane = 'XY';
+        f.faceRef = null;
+      }
+    },
+    { key: 'size', label: 'Image size', type: 'expr' },
+    { key: 'height', label: 'Depth', type: 'expr' },
+    { key: 'invert', label: 'Invert', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'White pushes out and black stays put, unless it is inverted. Remesh first if the triangles are coarser than the picture.'
+    }
+  ];
+}
+
 function describeFeature(feature) {
   const opOptions = [
     ['new', 'New body'],
@@ -9027,6 +9618,22 @@ function describeFeature(feature) {
     ['intersect', 'Intersect']
   ];
   switch (feature.type) {
+    case 'insertMesh':
+      return { title: 'Insert Mesh', fields: insertMeshFields() };
+    case 'meshRepair':
+      return { title: 'Repair', fields: meshRepairFields() };
+    case 'meshReduce':
+      return { title: 'Reduce', fields: meshReduceFields() };
+    case 'meshRemesh':
+      return { title: 'Remesh', fields: meshRemeshFields() };
+    case 'meshSmooth':
+      return { title: 'Smooth', fields: meshSmoothFields() };
+    case 'meshPlaneCut':
+      return { title: 'Plane Cut', fields: meshPlaneCutFields() };
+    case 'meshErase':
+      return { title: 'Erase And Fill', fields: meshEraseFields() };
+    case 'textureExtrude':
+      return { title: 'Texture Extrude', fields: textureExtrudeFields() };
     case 'baseFlange':
       return { title: 'Base Flange', fields: baseFlangeFields() };
     case 'flange':

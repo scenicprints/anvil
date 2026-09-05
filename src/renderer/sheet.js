@@ -407,6 +407,109 @@ export function earcut(outer, holes = []) {
 const samePoint2 = (a, b) =>
   Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
 
+/**
+ * Fill a boundary, keeping every point of it and never making a sliver.
+ *
+ * A boundary picked up off a mesh usually runs straight through some of its own
+ * points: cut a box in half and the rim has a point wherever the cut crossed a
+ * face's diagonal, sitting exactly between two corners. Ear clipping cannot use
+ * such a point without making a triangle of no area, and a triangle of no area
+ * stops the result being a solid however well it closed.
+ *
+ * So the straight-through points are set aside, what is left is clipped, and
+ * then each one is put back by splitting the single fill triangle whose edge it
+ * lies on. The fill ends up with exactly the boundary it was given, and every
+ * triangle in it has area.
+ */
+export function fillLoops(outer, holes = []) {
+  const loops = [outer, ...holes];
+  const offsets = [];
+  let at = 0;
+  for (const l of loops) {
+    offsets.push(at);
+    at += l.length;
+  }
+
+  const straightThrough = (l, i) => {
+    const n = l.length;
+    const a = l[(i - 1 + n) % n];
+    const b = l[i];
+    const c = l[(i + 1) % n];
+    const area2 = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    const span = Math.hypot(c[0] - a[0], c[1] - a[1]);
+    if (span < 1e-12) return false;
+    // And it has to be between them, not past one of them.
+    const t = ((b[0] - a[0]) * (c[0] - a[0]) + (b[1] - a[1]) * (c[1] - a[1])) / (span * span);
+    return Math.abs(area2) / span < 1e-7 && t > 1e-9 && t < 1 - 1e-9;
+  };
+
+  const kept = loops.map((l) => l.map((_, i) => i).filter((i) => !straightThrough(l, i)));
+  // A loop that is entirely straight has nothing to fill, and one reduced below
+  // a triangle cannot be clipped, so those keep every point they had.
+  kept.forEach((k, li) => {
+    if (k.length < 3) kept[li] = loops[li].map((_, i) => i);
+  });
+
+  const global = (li, i) => offsets[li] + i;
+  const reduced = kept.map((k, li) => k.map((i) => loops[li][i]));
+  let tris = earcut(reduced[0], reduced.slice(1)).map((t) =>
+    t.map((v) => {
+      // Back from the reduced numbering to the caller's own.
+      let li = 0;
+      let idx = v;
+      let base = 0;
+      for (let i = 0; i < kept.length; i++) {
+        if (v < base + kept[i].length) {
+          li = i;
+          idx = v - base;
+          break;
+        }
+        base += kept[i].length;
+      }
+      return global(li, kept[li][idx]);
+    })
+  );
+
+  // Put the straight-through points back, one run at a time.
+  for (let li = 0; li < loops.length; li++) {
+    const l = loops[li];
+    const keepSet = new Set(kept[li]);
+    if (keepSet.size === l.length) continue;
+    for (let k = 0; k < kept[li].length; k++) {
+      const a = kept[li][k];
+      const b = kept[li][(k + 1) % kept[li].length];
+      // The points of this loop between a and b, in loop order.
+      const run = [];
+      for (let i = (a + 1) % l.length; i !== b; i = (i + 1) % l.length) {
+        run.push(i);
+        if (run.length > l.length) break;
+      }
+      if (!run.length || run.some((i) => keepSet.has(i))) continue;
+
+      const ga = global(li, a);
+      const gb = global(li, b);
+      const hit = tris.findIndex(
+        (t) => t.includes(ga) && t.includes(gb)
+      );
+      if (hit < 0) continue;
+      const tri = tris[hit];
+      const c = tri.find((v) => v !== ga && v !== gb);
+      if (c === undefined) continue;
+
+      // Which way round the triangle runs decides which way the fan does.
+      const forward = tri[(tri.indexOf(ga) + 1) % 3] === gb;
+      const chain = [ga, ...run.map((i) => global(li, i)), gb];
+      const fan = [];
+      for (let i = 0; i + 1 < chain.length; i++) {
+        fan.push(forward ? [c, chain[i], chain[i + 1]] : [c, chain[i + 1], chain[i]]);
+      }
+      tris.splice(hit, 1, ...fan);
+    }
+  }
+
+  return tris;
+}
+
 /** The plane that fits a run of points best, by Newell's method. */
 export function bestFitPlane(points) {
   const c = [0, 0, 0];
@@ -474,7 +577,7 @@ export function patchLoops(loops) {
       return [dot(d, pl.x), dot(d, pl.y)];
     };
     const holes = loops.slice(1).map((l) => l.map(to2));
-    const tris = earcut(outer.map(to2), holes);
+    const tris = fillLoops(outer.map(to2), holes);
     const points = [...outer, ...loops.slice(1).flat()];
     return tris.length ? makeSheet(points, tris) : null;
   }

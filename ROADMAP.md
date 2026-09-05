@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.1.0**. 265 tests. Batches 1 to 8 shipped.
+Current version: **2.2.0**. 288 tests. Batches 1 to 9 shipped.
 
 ---
 
@@ -190,6 +190,11 @@ recurring:
   earlier batch did not, and cost a session.
 - Any id a later feature refers to has to come from the feature that made it. A
   counter is reset by the rebuild and renames everything under the references.
+- Before adding a field to an object, check what that name already means on it.
+  A record's `mesh` was its triangles; a `mesh` flag replaced them with `true`.
+- Wrap a driven demo's body in a try/catch that reports `err.stack`. Without it
+  a failure is one line with no idea where, and finding it costs a run each
+  time. Check it parses first: a demo is an async function body, not a module.
 
 ---
 
@@ -737,15 +742,53 @@ blank measures the legs plus the bend allowance to a hundredth.
 
 ---
 
-## Batch 9. The Mesh tab
+## Batch 9, shipped in v2.2.0
 
-**Depends on:** nothing.
+The Mesh tab. `src/renderer/meshtools.js`, mesh readers in `meshutil.js`, and a
+Mesh tab with Create, Prepare, Modify and Convert.
 
-Insert a mesh, Reduce, Remesh, Plane Cut, Repair, Convert Mesh to solid. manifold
-can do most of this natively and it is a good fit. Useful for taking an STL
-someone sent and cutting a part to fit it.
+### What ships
 
-Version 2.2.0.
+Insert Mesh (STL binary and ASCII, OBJ, 3MF), Tessellate, Generate Face Groups,
+Repair, Merge, Separate, Reduce, Remesh, Smooth, Plane Cut, Erase And Fill,
+Reverse Normal, Texture Extrude, Convert Mesh, and Create Mesh Section Sketch on
+the Sketch tab.
+
+The real algorithms, not approximations of them: quadric error metric
+decimation, Botsch and Kobbelt incremental remeshing with reprojection onto the
+original surface, Taubin smoothing, and Ericson's closest-point-on-triangle
+behind a uniform grid so the reprojection is not quadratic.
+
+### The measurements that matter
+
+- Reduce to a quarter of the triangles on a sphere costs 2.8 per cent of its
+  volume; to six per cent of them it still measures 19.3 to 19.8 against 20.
+- Remesh to an edge of 4 gives edges 2.4 to 5.2 and holds a sphere of 20 to
+  within 0.06.
+- A plane cut of a 40 box gives two capped halves of exactly 32000 each.
+- Repair closes a box missing a face back to exactly 64000.
+
+### What was learned building it
+
+- **A record's `mesh` field already held its triangles.** Adding a boolean
+  `mesh` flag to the same object replaced the geometry with `true` and the
+  viewport threw on the next rebuild. Renamed to `isMesh`. Check what a name
+  already means on an object before adding to it.
+- **Collapsing an edge can leave an edge from a vertex to itself**, and
+  collapsing one of those marks the surviving vertex dead. Decimation stalled at
+  exactly the same triangle count whatever it was asked for.
+- **Ear clipping cannot use a point that its own boundary runs straight
+  through**, and a cut boundary is full of them: cut a box in half and the rim
+  has a point wherever the cut crossed a face's diagonal. `fillLoops` in
+  `sheet.js` now sets those aside, clips what is left, and puts each back by
+  splitting the one fill triangle whose edge it lies on. Surfaces get this too.
+- **Hole filling can create the fold it was meant to fix**, so the pass that
+  takes the surplus off a non-manifold edge has to run after it as well as
+  before.
+- **A demo script is an async function body**, so `node --check` will not parse
+  one. `new (Object.getPrototypeOf(async function(){}).constructor)(src)` will,
+  and it catches the syntax errors that otherwise come back as "Script failed to
+  execute" with no line number.
 
 ---
 
