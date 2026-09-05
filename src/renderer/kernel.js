@@ -256,6 +256,23 @@ export function tagOf(originalID) {
   return originalTags.get(originalID)?.tag ?? null;
 }
 
+/**
+ * The provenance known so far, and how to put it back.
+ *
+ * A rebuild that reuses geometry from the last one has to reuse what was known
+ * about where that geometry came from as well. The ids manifold hands out climb
+ * for the life of the run and are never reissued, so putting an old set back
+ * can never collide with a new one.
+ */
+export function originalTagsSnapshot() {
+  return new Map(originalTags);
+}
+
+export function restoreOriginalTags(saved) {
+  if (!saved) return;
+  for (const [id, entry] of saved) originalTags.set(id, entry);
+}
+
 export function meshData(solid) {
   const mesh = solid.getMesh();
   const out = {

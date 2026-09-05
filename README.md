@@ -202,7 +202,7 @@ dialog's or the document's, so a profile picked into a dialog looks picked.
 | Hole | Type, extent, drill point, counterbore, countersink, tapped |
 | Thread | A real modelled ISO 60 degree thread, internal or external |
 | Primitives | Box, cylinder, cone, sphere, **torus**, **pipe** |
-| Fillet | Several edge sets, each at its own constant or **variable radius** |
+| Fillet | Several edge sets, each constant, **variable**, by **chord length** or held to a line |
 | Chamfer | Equal, two distances, or distance and angle, in sets |
 | Shell | Inside, outside or both, with selected faces left open |
 | Draft | Faces tapered about a neutral plane, one side or two |
@@ -290,7 +290,13 @@ not.
 The rest of the Modify group asks the way Fusion asks. **Fillet** and
 **Chamfer** hold several edge sets, each with its own size, so a part can be
 blended at three radii in one feature; a chamfer set is equal, two distances, or
-a distance and the angle it leans at. **Shell** puts the wall inside, outside or
+a distance and the angle it leans at. A fillet set is asked for in one of four
+ways. **Constant** and **variable radius** are the plain ones. **Chord length**
+asks how wide the blend reads across and lets the radius fall out of the angle
+each edge happens to sit at, so two edges at different angles come out the same
+width rather than the same radius. **Hold line** asks for an edge the blend has
+to run out on and takes the radius from the distance to it, which is how a
+fillet is made to die exactly at a step rather than near it. **Shell** puts the wall inside, outside or
 straddling the original surface. **Draft** tapers one side of the neutral plane
 or both, which is the shape a moulded part has about its parting line.
 
@@ -559,10 +565,15 @@ rotated about the bend axis. Lay the child in the same plane instead, pushed out
 by the bend allowance, and you have the flat. Nothing else changes between them,
 which is why Unfold and Flat Pattern are the same arithmetic.
 
-One **rule** per document: thickness, bend radius, K factor, the rip and miter
-gap, and the shape and size of bend and corner relief. Every field is an
-expression like any other, so a thickness can be driven by a parameter and every
-part made to it follows.
+A document keeps a **library of rules**: thickness, bend radius, K factor, the
+rip and miter gap, and the shape and size of bend and corner relief. Every field
+is an expression like any other, so a thickness can be driven by a parameter and
+every part made to it follows. One rule is active and most features are made to
+it, so changing that changes every bend at once, which is what it is for; a
+feature can name a rule of its own instead, so a bracket in aluminium and the
+mount it bolts to in steel are one document rather than two. A part remembers
+the rule it was built to, so a later feature cuts at the thickness that part
+actually has.
 
 **Base Flange** starts a part from a closed profile. **Flange** grows one off an
 edge; its bend position says what lines up with the edge you picked, and the
@@ -580,8 +591,27 @@ of its own with its own place in the browser, because that is what a drawing and
 a **DXF** are made from. The DXF is written as R12 with the cut geometry and the
 bend lines on separate layers, since one is a path and the other is a mark for
 the brake. **Rip** tears a shape that closes on itself so it can lie flat,
-**Corner Relief** cuts the notch where two bends meet, and **Convert To Sheet
-Metal** reads an ordinary solid as folded sheet: the flat faces and the bends
+**Corner Relief** cuts the notch where bends meet. Two bends meet where their
+lines cross, which is a corner of the panel and easy to see flat. Three do not:
+the third belongs to a flange that has already been folded away, so what ties it
+to the corner is the tree rather than the geometry, a tab running across the end
+of one flange at the distance along it where the corner falls. That is the
+corner of a closed tray, the one with three thicknesses of material converging
+on it, and it gets a notch cut big enough to clear all three.
+
+**Miter** closes the corner between two flanges. Two flanges off adjoining edges
+do not overlap: each stands outside its own edge, so what they leave between
+them is a notch the width of the material. The miter runs both into it and then
+cuts them on the plane that bisects the pair. The cut is square through the
+thickness rather than bevelled, because the blank is cut flat on a laser and
+that is the only shape it can have, which means the gap has to be measured from
+the material furthest through the thickness and not from the face the contour
+sits on. Get that wrong and the two flanges clear at one face and bite into each
+other at the other. Because the panels themselves are cut rather than the solid,
+the miter shows on the flat pattern too, which is where it has to show: a blank
+that folds up with its corners fighting is a blank that was cut wrong.
+
+**Convert To Sheet Metal** reads an ordinary solid as folded sheet: the flat faces and the bends
 between them are recovered from the geometry, and a body that is not the rule's
 thickness is refused rather than quietly converted into something a brake cannot
 make.
@@ -622,7 +652,13 @@ really there in the geometry and survives being sliced.
 
 **Generate Face Groups** decides at what angle two triangles stop being the same
 face. Without it a scan is a million faces of one triangle each and nothing on
-it can be pointed at. **Create Mesh Section Sketch** gives the curve where a
+it can be pointed at. The angle is a good first guess and a poor last word,
+though: on a scan there is no angle that keeps a moulded corner whole and still
+separates the two flats beside it. So a group can be set by hand as well.
+**Create Face Group** keeps each face picked exactly as it stands whatever angle
+is asked for later, **Combine Face Groups** makes one face of them all, and
+**Delete Face Groups** hands them back to the angle. Generating again is the way
+back to letting the angle decide everything. **Create Mesh Section Sketch** gives the curve where a
 plane crosses a mesh, which is what you trace over when the only thing you have
 is a scan.
 
@@ -891,7 +927,7 @@ model file can never execute anything.
 npm test
 ```
 
-219 tests in a hidden window, checking measured quantities: volumes against
+338 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -925,6 +961,35 @@ does, and `demo-picking.js` checks the things a volume cannot see:
 that clicking a profile twice lets it go, that a picked profile looks picked,
 and that the callout says what the dialog wants.
 
+### Rebuilding
+
+The timeline is replayed from nothing on every rebuild. That is what makes it
+honest: there is one path to any state and no way for the model to drift from
+the features that describe it. It is also why editing the last feature of a long
+part would otherwise cost the same as editing the first.
+
+The cache keeps the honesty and skips only work that would have produced exactly
+what it already has. Every feature gets a key covering itself and everything
+outside it that it reads, which is mostly the sketch it names: an extrude
+carries a sketch id and nothing else, so moving a line in that sketch changes
+what the extrude builds without changing a character of the extrude. The keys
+are compared in order and the run starts again at the first one that differs,
+which is the same answer a full replay gives, arrived at without repeating the
+part in front of it.
+
+Two things make that work rather than merely sound plausible. A manifold is
+immutable once built, so a cached solid is safe to hand to the next rebuild:
+every feature after it produces a new object and leaves that one exactly as it
+is. And the provenance ids that make a face reference survive a dimension change
+have to come back with the geometry, or every face of the untouched part goes
+anonymous the moment a later feature is edited. What it costs is one rebuild's
+worth of intermediates staying alive. What it buys is not building them again.
+
+The cache is not per document. What it knows is keyed on what the features say
+rather than on which object holds them, so opening another document simply fails
+to match and frees what it was holding. That is also what makes undo quick,
+since undo hands back a document parsed afresh.
+
 ---
 
 ## What is not here
@@ -937,8 +1002,7 @@ Of Fusion's Sketch tab, nothing is missing. Of its Inspect panel, Fastener
 Stack, Display Component Colors and Find Similar Components are not modelling
 analyses at all.
 
-**Modelling gaps that remain:** chord-length and rule fillets (constant and
-variable radius work), and Fusion's compute options for patterns that hit
+**Modelling gaps that remain:** Fusion's compute options for patterns that hit
 different geometry. Silhouette Split works only where the parting line is flat.
 
 **Where the form tools stop.** A circular symmetry is remembered but a drag is
@@ -947,21 +1011,24 @@ and Select Next are not there; Grow, Shrink, Loop, Ring, Invert and Select All
 are. Edit Form cannot pull a face out by holding a key while dragging, the way
 Fusion does; Pull is its own button, which does the same thing in two steps.
 
-**Where the mesh tools stop.** Face groups are worked out from the angle between
-triangles rather than kept as a stored grouping you can edit by hand, so
-Create Face Group and Combine Face Groups have nothing to act on. Mesh Align is
+**Where the mesh tools stop.** Mesh Align is
 the Solid tab's Align, which already works on any body. Texture Extrude lays the
 image along a plane rather than around the body, so it reaches the faces that
 plane can see. Move, Scale, Combine, Shell and Delete are the ones already on
 the Solid tab, and they work on a mesh body as they do on anything else.
 
-**Where the sheet metal tools stop.** A rule is a document setting rather than a
-library of named rules. Convert To Sheet Metal recovers the flat faces and the
-bends of an existing solid, but a converted body has no panel tree until it is
-given one, so it cannot be laid out flat straight away. A miter between two
-flanges is not cut automatically; the gap is in the rule and Rip is how you take
-it. Corner relief is cut where two bend lines cross, which is the two-bend case;
-Fusion also has a three-bend one.
+**Where the sheet metal tools stop.** Convert To Sheet Metal recovers the flat
+faces and the bends of an existing solid, but a converted body has no panel tree
+until it is given one, so it cannot be laid out flat straight away. Miter is a
+feature you run rather than something a flange does on its own, so a corner is
+closed when you say so.
+
+**Where the rebuild cache stops.** A change to a parameter, to a base body, to
+the sheet metal rules, to the component list or to a body's name invalidates the
+whole run, because there is no telling which feature was reading it. That is the
+conservative answer and it is the correct one; the finer-grained version would
+have to know which feature reads which parameter, and a wrong guess there is a
+model that quietly disagrees with its own timeline.
 
 **Where the surface tools stop.** Trim cuts a surface with another surface, and
 a surface cuts a solid by being stretched past it and given the thickness of the

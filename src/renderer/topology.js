@@ -144,6 +144,15 @@ export function buildTopology(mesh, opts = {}) {
   // Solids do not, because there the angle is the whole point.
   const splitBySource = !!mesh.splitBySource;
 
+  // Face groups set by hand. A triangle with a label belongs to that group and
+  // to nothing else, whatever the angle says, which is what makes a face group
+  // something you can decide rather than only regenerate. Everything left at
+  // -1 is worked out the usual way, so pinning one face does not throw the
+  // rest of the body's faces away.
+  const labels =
+    opts.labels && opts.labels.length === triCount ? opts.labels : null;
+  const labelOf = (t) => (labels ? labels[t] : -1);
+
   /** Neighbouring triangles across a shared welded edge. */
   const neighboursOf = (t) => {
     const found = [];
@@ -198,7 +207,13 @@ export function buildTopology(mesh, opts = {}) {
           members.push(other);
           continue;
         }
-        if (splitBySource) {
+        const la = labelOf(t);
+        const lb = labelOf(other);
+        if (la >= 0 || lb >= 0) {
+          // A hand set group has a hard boundary in both directions: its own
+          // triangles stay together and nothing else joins them.
+          if (la !== lb) continue;
+        } else if (splitBySource) {
           // A cage says which face each triangle belongs to, and that is the
           // whole answer: the angle between two halves of one curved quad is
           // neither here nor there, and going by it splits a face in two.
@@ -392,10 +407,12 @@ export function buildTopology(mesh, opts = {}) {
     const solid = members.filter((t) => !degenerate[t]);
     if (!solid.length) continue;
 
-    // A cage has already said what its faces are, so there is nothing to work
-    // out. Splitting a group into its flat patches would break every curved
-    // quad back into the two triangles it is drawn with.
-    if (splitBySource) {
+    // A cage has already said what its faces are, and so has a hand set group,
+    // so there is nothing to work out. Splitting a group into its flat patches
+    // would break every curved quad back into the two triangles it is drawn
+    // with, and would undo by angle the very grouping that was set to overrule
+    // the angle.
+    if (splitBySource || labelOf(solid[0]) >= 0) {
       const flat = coplanarPatches(members);
       addFace(solid, flat.length === 1, flat.length === 1 ? flat[0].normal : null);
       continue;

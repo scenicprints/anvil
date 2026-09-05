@@ -61,7 +61,10 @@ import {
   uid,
   resolvePlane,
   sketchToWorld,
-  normalizeSheetRules
+  normalizeSheetRules,
+  RebuildCache,
+  topologyOptions,
+  meshOf
 } from '../src/renderer/features.js';
 import {
   toBinarySTL,
@@ -6425,6 +6428,295 @@ async function run() {
     });
     return part;
   }
+
+  /* -------- rebuild cache -------- */
+
+  /** A part with enough in front of the last feature to be worth skipping. */
+  function stackDoc(topRadius = '3') {
+    const doc = newDocument();
+    doc.parameters = [{ name: 'wall', expr: '4' }];
+    doc.features = [
+      prim('box', { width: '40', depth: '30', height: '20' }),
+      { ...prim('cylinder', { diameter: '10', height: '40' }), op: 'cut', targets: 'all' },
+      { id: uid('f'), type: 'fillet', bodies: 'all', radius: topRadius }
+    ];
+    return doc;
+  }
+
+  test('cache: a second rebuild of the same document does no work', () => {
+    const cache = new RebuildCache();
+    const doc = stackDoc();
+
+    const first = rebuild(doc, { cache });
+    assert(first.errors.length === 0, JSON.stringify(first.errors));
+    const built = cache.replayed;
+    assert(built === 3, `three features built, got ${built}`);
+
+    const again = rebuild(doc, { cache });
+    assert(cache.replayed === built, `nothing rebuilt, got ${cache.replayed - built} more`);
+    near(
+      again.bodies[0].solid.volume(),
+      first.bodies[0].solid.volume(),
+      1e-6,
+      'and it is the same part'
+    );
+    again.dispose();
+    first.dispose();
+    cache.dispose();
+  });
+
+  test('cache: editing the last feature replays only that one', () => {
+    const cache = new RebuildCache();
+    const doc = stackDoc('3');
+    const before = rebuild(doc, { cache });
+    const built = cache.replayed;
+    before.dispose();
+
+    // Through the sets, because the first build brought the fillet up to date
+    // and that is where its radius lives now.
+    doc.features[2].sets[0].radius = '5';
+    const after = rebuild(doc, { cache });
+    assert(cache.replayed - built === 1, `one feature replayed, got ${cache.replayed - built}`);
+
+    // And the answer is the one a run from nothing gives.
+    const plainDoc = stackDoc('5');
+    const plain = rebuild(plainDoc);
+    near(
+      after.bodies[0].solid.volume(),
+      plain.bodies[0].solid.volume(),
+      1e-6,
+      'the cached answer matches the full replay'
+    );
+    after.dispose();
+    plain.dispose();
+    cache.dispose();
+  });
+
+  test('cache: editing the first feature replays all of them', () => {
+    const cache = new RebuildCache();
+    const doc = stackDoc();
+    const before = rebuild(doc, { cache });
+    const built = cache.replayed;
+    before.dispose();
+
+    doc.features[0].params.width = '60';
+    const after = rebuild(doc, { cache });
+    assert(cache.replayed - built === 3, `all three, got ${cache.replayed - built}`);
+
+    const plain = stackDoc();
+    plain.features[0].params.width = '60';
+    const full = rebuild(plain);
+    near(after.bodies[0].solid.volume(), full.bodies[0].solid.volume(), 1e-6, 'same part');
+    after.dispose();
+    full.dispose();
+    cache.dispose();
+  });
+
+  test('cache: a parameter is outside the features, so it invalidates all of them', () => {
+    // The fillet reads `wall` and nothing about the fillet itself changes when
+    // `wall` does. A cache that only watched the feature would miss it.
+    const cache = new RebuildCache();
+    const doc = stackDoc('wall');
+    const before = rebuild(doc, { cache });
+    const built = cache.replayed;
+    const wasVolume = before.bodies[0].solid.volume();
+    before.dispose();
+
+    doc.parameters[0].expr = '2';
+    const after = rebuild(doc, { cache });
+    assert(cache.replayed - built === 3, `all three, got ${cache.replayed - built}`);
+    assert(
+      Math.abs(after.bodies[0].solid.volume() - wasVolume) > 1,
+      'and the part actually changed'
+    );
+    after.dispose();
+    cache.dispose();
+  });
+
+  test('cache: a sketch edit invalidates the feature built on it', () => {
+    const mk = (width) => {
+      const doc = newDocument();
+      const sk = newSketch('XY', 'Plate');
+      sk.points = [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: 30 }, { x: 0, y: 30 }];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      sk.id = 'sk1';
+      doc.sketches.sk1 = sk;
+      doc.features = [
+        { id: 'fsk', type: 'sketch', sketch: 'sk1' },
+        { id: 'fex', type: 'extrude', sketch: 'sk1', seeds: null, distance: '10', op: 'new', targets: 'all' }
+      ];
+      return doc;
+    };
+
+    const cache = new RebuildCache();
+    const doc = mk(40);
+    const first = rebuild(doc, { cache });
+    near(first.bodies[0].solid.volume(), 40 * 30 * 10, 1, 'the plate it was drawn as');
+    const built = cache.replayed;
+    first.dispose();
+
+    // Nothing in the extrude changed, and nothing in the sketch feature either.
+    // Only the sketch it names, which is where a cache that watched the
+    // features alone would hand back the old plate.
+    doc.sketches.sk1.points[1].x = 60;
+    doc.sketches.sk1.points[2].x = 60;
+    const after = rebuild(doc, { cache });
+    assert(cache.replayed - built === 2, `both replayed, got ${cache.replayed - built}`);
+    near(after.bodies[0].solid.volume(), 60 * 30 * 10, 1, 'and it is the wider plate');
+    after.dispose();
+    cache.dispose();
+  });
+
+  test('cache: a face reference into the part before the edit still resolves', () => {
+    // The cached geometry carries provenance ids from the run that built it.
+    // Without putting those back, every face of the untouched part becomes
+    // anonymous the moment a later feature is edited.
+    const cache = new RebuildCache();
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '30', height: '20' })];
+    const first = rebuild(doc, { cache });
+    const topo = buildTopology(K.meshData(first.bodies[0].solid));
+    const top = topo.faces.reduce((a, b) => (b.centre[2] > a.centre[2] ? b : a));
+    const ref = faceReference(top);
+    assert(ref.src?.tag, 'the face knows which feature made it');
+    first.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: [], radius: '2' }]
+    });
+    const after = rebuild(doc, { cache });
+    assert(cache.hits >= 1, 'the box was reused');
+    const back = buildTopology(K.meshData(after.bodies[0].solid));
+    const [found] = resolveFaceRefs(back, [ref]);
+    assert(found, 'and the face reference into it still lands');
+    after.dispose();
+    cache.dispose();
+  });
+
+  test('cache: rolling back and forward again keeps the answer', () => {
+    const cache = new RebuildCache();
+    const doc = stackDoc();
+    const full = rebuild(doc, { cache });
+    const whole = full.bodies[0].solid.volume();
+    full.dispose();
+
+    const rolled = rebuild(doc, { cache, upTo: 1 });
+    assert(rolled.bodies.length === 1, 'the part as it stood two features in');
+    const partial = rolled.bodies[0].solid.volume();
+    assert(partial > whole, 'with the fillet not yet cut');
+    rolled.dispose();
+
+    const back = rebuild(doc, { cache });
+    near(back.bodies[0].solid.volume(), whole, 1e-6, 'and the whole part comes back');
+    back.dispose();
+    cache.dispose();
+  });
+
+  test('face groups: two faces set by hand become one', () => {
+    // A box has six faces at any sensible angle. Combining two of them leaves
+    // five, and the one that is left holds the triangles of both.
+    const box = rebuild(boxDoc(40, 30, 20)).bodies[0];
+    const mesh = K.meshData(box.solid);
+    const plain = buildTopology(mesh);
+    assert(plain.faces.length === 6, `six to start, got ${plain.faces.length}`);
+
+    const top = plain.faces.reduce((a, b) => (b.centre[2] > a.centre[2] ? b : a));
+    const side = plain.faces.find((f) => Math.abs(f.normal[0] - 1) < 1e-6);
+    assert(top && side && top !== side, 'a top and a side to join');
+
+    const labels = new Int32Array(mesh.triVerts.length / 3).fill(-1);
+    for (const t of top.tris) labels[t] = 0;
+    for (const t of side.tris) labels[t] = 0;
+
+    const joined = buildTopology(mesh, { labels });
+    assert(joined.faces.length === 5, `five after, got ${joined.faces.length}`);
+
+    const both = joined.faces.find((f) => f.tris.includes(top.tris[0]));
+    assert(both, 'the joined face is there');
+    for (const t of side.tris) {
+      assert(both.tris.includes(t), 'and it took the side in with it');
+    }
+  });
+
+  test('face groups: a hand set group holds against the angle', () => {
+    // The top of a box is flat, so any angle keeps it whole. Pinning half of
+    // its triangles splits it in two, which nothing the angle can say would
+    // ever do, and that is the point: the answer is pointed at, not derived.
+    const box = rebuild(boxDoc(40, 30, 20)).bodies[0];
+    const mesh = K.meshData(box.solid);
+    const plain = buildTopology(mesh);
+    const top = plain.faces.reduce((a, b) => (b.centre[2] > a.centre[2] ? b : a));
+    assert(top.tris.length >= 2, `the top is more than one triangle`);
+
+    const labels = new Int32Array(mesh.triVerts.length / 3).fill(-1);
+    labels[top.tris[0]] = 7;
+
+    const split = buildTopology(mesh, { labels });
+    assert(split.faces.length === 7, `the top came apart, got ${split.faces.length}`);
+
+    const own = split.faces.find((f) => f.tris.length === 1 && f.tris[0] === top.tris[0]);
+    assert(own, 'the pinned triangle is a face of its own');
+
+    // And everything else is untouched: the five other sides are still whole.
+    const whole = split.faces.filter((f) => f.tris.length === top.tris.length);
+    assert(whole.length === 5, `five sides left alone, got ${whole.length}`);
+  });
+
+  test('face groups: through the timeline, combine and then release', () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '30', height: '20' })];
+    const solidOnly = rebuild(doc);
+    const mesh = K.meshData(solidOnly.bodies[0].solid);
+    const topo = buildTopology(mesh);
+    const top = topo.faces.reduce((a, b) => (b.centre[2] > a.centre[2] ? b : a));
+    const side = topo.faces.find((f) => Math.abs(f.normal[0] - 1) < 1e-6);
+
+    // A mesh body, because face groups are a mesh idea.
+    doc.features.push({ id: uid('f'), type: 'tessellate', bodies: 'all' });
+    const meshed = rebuild(doc);
+    const body = meshed.bodies.find((b) => b.mesh);
+    assert(body, 'there is a mesh body to group');
+
+    const refs = [
+      { bodyId: body.id, face: faceReference(top) },
+      { bodyId: body.id, face: faceReference(side) }
+    ];
+    const editId = uid('f');
+    doc.features.push({
+      id: editId,
+      type: 'faceGroupEdit',
+      op: 'combine',
+      bodies: [body.id],
+      faces: refs
+    });
+    const joined = rebuild(doc);
+    assert(joined.errors.length === 0, joined.errors.map((e) => e.message).join('; '));
+    const grouped = joined.bodies.find((b) => b.mesh);
+    assert(grouped.groupLabels, 'the body carries the group it was given');
+    assert(
+      buildTopology(meshOf(grouped), topologyOptions(grouped)).faces.length === 5,
+      'and it reads as five faces'
+    );
+
+    // Generating again is the way back.
+    doc.features.push({ id: uid('f'), type: 'faceGroups', bodies: [body.id], angle: '30' });
+    const back = rebuild(doc);
+    const plain = back.bodies.find((b) => b.mesh);
+    assert(!plain.groupLabels, 'regenerating throws the hand set groups away');
+    assert(
+      buildTopology(meshOf(plain), topologyOptions(plain)).faces.length === 6,
+      'and the box is six faces again'
+    );
+  });
 
   test('sheet metal: a miter closes the corner between two flanges', () => {
     // Two flanges off adjoining edges leave a notch: each stands outside its

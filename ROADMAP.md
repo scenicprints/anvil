@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.4.0**. 317 tests. **Every batch on this list has shipped.**
+Current version: **2.5.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
 
 ---
 
@@ -804,7 +804,7 @@ behind a uniform grid so the reprojection is not quadratic.
 ## Batch 10. Form, the sculpt workspace
 
 He asked for it, and said it could take two sessions. **The first shipped in
-v2.3.0.** The second is below and has not been started.
+v2.3.0 and the second in v2.4.0.**
 
 ### Session one, shipped in v2.3.0
 
@@ -889,23 +889,58 @@ quadball while checking its twin moves by the same amount.
 
 ---
 
-## Where to go next
+## After the batches, shipped in v2.5.0
 
-Every batch on the list has shipped. What is left is written up in README.md
-under **What is not here**, and it is all of the form "this stops here, for this
-reason" rather than "this is missing". The gaps worth the next session, in the
-order they would be felt:
+The five gaps the batches left, done in one pass.
 
-1. **Chord-length and rule fillets.** Constant and variable radius work; these
-   two do not exist. The smallest real gap in the Solid tab.
-2. **Sheet metal miters and named rules.** A miter between two flanges is not
-   cut automatically, and there is one rule per document rather than a library.
-3. **Three-bend corner relief**, where sheet metal currently handles two.
-4. **Face groups you can edit by hand**, rather than only regenerate by angle,
-   which would give the Mesh tab its Create Face Group and Combine Face Groups.
-5. **Performance.** A rebuild still replays the whole timeline with no caching
-   of unchanged prefixes. Worth doing when a rebuild first crosses a second on
-   a real part, and not before.
+**Chord length and hold line fillets.** A chord asks how wide the blend reads
+across and lets the radius fall out of the angle each edge sits at, which is
+R = chord / 2 sin(half the dihedral). A hold line asks for the edge the blend
+has to run out on and takes the radius from the distance to it. Both want a
+radius per edge rather than one for the set, so `buildEdgeTools` takes a
+`sizeFor` and the ball that fills a vertex takes the smallest of the edges
+meeting there.
+
+**A sheet metal rule library.** A document keeps named rules and one of them is
+active. A feature can name a rule of its own, so a bracket in aluminium and its
+steel mount are one document. A part records the rule it was built to, so a
+later feature cuts at the thickness that part actually has, which was a latent
+bug the moment a second rule could exist.
+
+**Miter.** Two flanges off adjoining edges do not overlap. Each stands outside
+its own edge, so what they leave between them is a notch the width of the
+material: the miter runs both into it and then cuts them on the bisector. The
+cut is square through the thickness, because the blank is cut flat.
+
+**Three bend corner relief.** Three bends never pass through one point. The
+third belongs to a flange that has been folded away, so what ties it to the
+corner is the tree rather than the geometry.
+
+**Rebuild caching.** Every feature gets a key covering itself and everything
+outside it that it reads. The run starts again at the first key that differs.
+
+**Face groups by hand.** A triangle carrying a label belongs to that group and
+to nothing else, whatever the angle says. Everything left unlabelled is worked
+out the usual way, so pinning one face does not throw the rest away.
+
+### What was learned
+
+- **A miter is a fill, not a trim.** The whole thing was written as a trim
+  first, on the assumption that two flanges at a corner overlap. They do not.
+  Probing the actual panel frames rather than reasoning about them is what
+  turned that up, and the same probe gave the closed form the test now checks.
+- **A square cut through the thickness has to be measured from the far face.**
+  With the gap measured on the contour's own plane the two flanges cleared at
+  one face and bit into each other at the other, which is invisible in a volume
+  and obvious the moment the numbers are written out by hand.
+- **Three bends meeting is a fact about the tree, not about the geometry.** The
+  first version looked for three lines through a point and found none, ever.
+- **A feature is brought up to date as it is built.** A fillet written before it
+  had sets grows them the first time it runs, so a cache key taken before the
+  run never matches the one taken after. The key is worked out at the
+  checkpoint, which is the only place it is true.
+- **`faceReference` puts the name under `src`**, not at the top level. A test
+  that asserted the wrong shape passed nothing useful until it was read.
 
 ---
 
@@ -931,9 +966,11 @@ If he asks for any of these, say what it would actually cost before starting.
 
 ## Cross-cutting work, to fold into whichever batch touches it
 
-- **Performance.** A thread is tens of thousands of triangles and a rebuild
-  replays the whole timeline. There is no caching of unchanged prefixes yet.
-  Worth doing when a rebuild first crosses a second on a real part.
+- **Performance.** Unchanged prefixes are cached as of v2.5.0: see
+  `RebuildCache` in `features.js` and the Rebuilding section of the README. A
+  thread is still tens of thousands of triangles, so the feature that builds one
+  is still slow the first time. What is not cached is anything inside a single
+  feature.
 - **The ribbon is nearly full.** Dropdown groups exist now (`RIBBON_MENUS` in
   `app.js`, a button with `data-menu`), and Primitive and Pattern use them.
   The Sketch tab uses them too, for the rectangle, circle, arc, polygon, slot

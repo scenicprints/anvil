@@ -176,6 +176,34 @@ dev.runCommand('redo');
 await wait(300);
 report.afterRedo = Number(dev.bodies[0]?.solid.volume().toFixed(1));
 
+/* ---- 5. the rebuild cache, through the real thing ---- */
+
+{
+  const cache = dev.state.cache;
+  const built = cache.replayed;
+  const seen = cache.hits;
+
+  // Nothing changed, so nothing should be built again.
+  dev.rebuildAll();
+  await wait(300);
+  report.cacheIdleRebuilds = cache.replayed - built;
+
+  // A change to the last feature should build that one and reuse the rest.
+  const last = dev.state.doc.features[dev.state.doc.features.length - 1];
+  const was = Number(dev.bodies[0]?.solid.volume().toFixed(1));
+  if (last.sets?.[0]) last.sets[0].radius = '5';
+  else last.radius = '5';
+  dev.rebuildAll();
+  await wait(400);
+  report.cacheAfterEdit = {
+    rebuilt: cache.replayed - built - report.cacheIdleRebuilds,
+    reused: cache.hits - seen > 0,
+    features: dev.state.doc.features.length,
+    changed: Number(dev.bodies[0]?.solid.volume().toFixed(1)) !== was,
+    errors: dev.state.result.errors.map((e) => e.message)
+  };
+}
+
 dev.state.vp.fit(1.4);
 dev.state.vp.setView([0.5, -0.8, 0.42]);
 dev.setStatus('Workflow demo complete.');

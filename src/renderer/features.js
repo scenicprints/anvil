@@ -327,6 +327,21 @@ export function normalizeSheetRules(doc) {
   return doc;
 }
 
+/**
+ * How a body's faces are to be worked out.
+ *
+ * Shared rather than written out at each call site, because the topology the
+ * pointer picks from and the topology a feature resolves a reference against
+ * have to be the same one. Where they are not, a face reference lands on a face
+ * that was never on screen.
+ */
+export function topologyOptions(body) {
+  const out = {};
+  if (body?.groupAngle) out.smoothDeg = body.groupAngle;
+  if (body?.groupLabels) out.labels = body.groupLabels;
+  return out;
+}
+
 /** Bring a hole up to the shape the dialog now works in. */
 export function normalizeHole(f) {
   if (!f.holeType) f.holeType = f.counterbore ? 'counterbore' : f.countersink ? 'countersink' : 'simple';
@@ -567,6 +582,140 @@ function regionsForSeeds(regions, seeds) {
  * Returns { bodies, errors, scope, sketchRegions, paramErrors }.
  * Every body carries a live kernel handle; call result.dispose() when replaced.
  */
+/* ---------------------------------------------------------------- */
+/* Rebuild cache                                                     */
+/* ---------------------------------------------------------------- */
+
+/**
+ * What the last rebuild left behind, so the next one can start part way in.
+ *
+ * The timeline is replayed from nothing on every rebuild, which is what makes
+ * it honest: there is one path to any state and no way for the model to drift
+ * from the features that describe it. It is also why editing the last feature
+ * of a long part costs the same as editing the first.
+ *
+ * The cache keeps that honesty and only skips work that would have produced
+ * exactly what it already has. Every feature gets a key covering itself and
+ * everything outside it that it reads, and the keys are compared in order. The
+ * run starts again at the first one that differs, which is the same answer the
+ * full replay would give, arrived at without repeating the part before it.
+ *
+ * The geometry a checkpoint holds is owned by the cache rather than by the
+ * rebuild that made it, because it has to outlive that rebuild's scope. That is
+ * the whole reason this is a class rather than a plain object: something has to
+ * be answerable for freeing it.
+ */
+export class RebuildCache {
+  constructor() {
+    this.globalKey = null;
+    this.steps = [];
+    this.owned = new Set();
+    this.hits = 0;
+    this.replayed = 0;
+  }
+
+  /** Does this solid belong to the cache rather than to a rebuild? */
+  owns(solid) {
+    return this.owned.has(solid);
+  }
+
+  /** Take ownership of a kernel object, off whatever scope was holding it. */
+  keep(solid, scope) {
+    if (!solid || typeof solid.delete !== 'function') return solid;
+    if (scope) scope.release(solid);
+    this.owned.add(solid);
+    return solid;
+  }
+
+  /** Throw away everything from a given feature on. */
+  trimFrom(index) {
+    if (index >= this.steps.length) return;
+    this.steps.length = Math.max(0, index);
+    this.sweep();
+  }
+
+  /** Free anything no surviving checkpoint still refers to. */
+  sweep() {
+    const live = new Set();
+    for (const step of this.steps) {
+      for (const b of step.bodies) if (b.solid) live.add(b.solid);
+      for (const entry of step.toolOf.values()) if (entry.tool) live.add(entry.tool);
+    }
+    for (const solid of [...this.owned]) {
+      if (live.has(solid)) continue;
+      this.owned.delete(solid);
+      try {
+        solid.delete();
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  dispose() {
+    this.steps.length = 0;
+    this.sweep();
+    this.globalKey = null;
+  }
+}
+
+/**
+ * Everything outside the features that every one of them can see.
+ *
+ * A change here invalidates the whole run, because there is no telling which
+ * feature was reading it. Parameters are the usual one: a dimension driven by
+ * `wall` moves when `wall` does, and nothing in the feature itself says so.
+ */
+function globalRebuildKey(doc, scope) {
+  const params = {};
+  for (const key of Object.keys(scope || {})) {
+    const v = scope[key];
+    if (typeof v === 'number') params[key] = v;
+  }
+  return JSON.stringify({
+    params,
+    base: (doc.baseBodies || []).map((b) => [b.id, b.verts?.length, b.tris?.length]),
+    names: doc.bodyNames,
+    components: doc.components,
+    rules: doc.sheetMetalRules,
+    rule: doc.sheetMetalRule
+  });
+}
+
+/**
+ * A feature, and the parts of the document it reads that are not inside it.
+ *
+ * A sketch is the big one: an extrude carries the sketch's id and nothing else,
+ * so moving a line in that sketch changes what the extrude builds without
+ * changing a character of the extrude. The same goes for a form's cage and for
+ * the triangles behind a mesh. Anything measured rather than copied is measured
+ * cheaply, because this runs for every feature on every rebuild.
+ */
+function featureRebuildKey(doc, feature) {
+  const extra = {};
+  if (feature.sketch && doc.sketches?.[feature.sketch]) {
+    extra.sketch = doc.sketches[feature.sketch];
+  }
+  if (feature.form && doc.forms?.[feature.form]) {
+    extra.form = doc.forms[feature.form];
+  }
+  if (feature.mesh && doc.meshData?.[feature.mesh]) {
+    const m = doc.meshData[feature.mesh];
+    extra.mesh = [feature.mesh, m.verts?.length, m.tris?.length];
+  }
+  if (feature.image && doc.imageData?.[feature.image]) {
+    extra.image = [feature.image, doc.imageData[feature.image].length];
+  }
+  // Sections and profiles can name a second sketch, and a joint names two
+  // components, both of which live outside the feature.
+  if (feature.sections) {
+    extra.sections = feature.sections.map((sec) =>
+      sec?.sketch && doc.sketches?.[sec.sketch] ? doc.sketches[sec.sketch] : sec
+    );
+  }
+  return JSON.stringify(feature) + '|' + JSON.stringify(extra);
+}
+
 export function rebuild(doc, options = {}) {
   const scopeObj = new K.Scope();
   // Provenance ids start again every rebuild, so the map from them to feature
@@ -587,9 +736,34 @@ export function rebuild(doc, options = {}) {
         ? doc.rollback
         : doc.features.length - 1;
 
+  // How much of the last run still stands. The keys are compared in order and
+  // the first difference is where this one has to start, which is exactly the
+  // point a full replay would begin to differ.
+  const cache = options.cache || null;
+  const keys = doc.features.map((f) => (f ? featureRebuildKey(doc, f) : 'null'));
+  let start = 0;
+  if (cache) {
+    const gk = globalRebuildKey(doc, scope);
+    if (cache.globalKey !== gk) {
+      cache.dispose();
+      cache.globalKey = gk;
+    } else {
+      while (
+        start < cache.steps.length &&
+        start < keys.length &&
+        start <= limit &&
+        cache.steps[start].key === keys[start]
+      ) {
+        start++;
+      }
+      cache.trimFrom(start);
+    }
+  }
+
   // Anything baked by direct modelling is the starting point the timeline
-  // builds on, so it goes in before the first feature runs.
-  for (const baked of doc.baseBodies || []) {
+  // builds on, so it goes in before the first feature runs. A run that starts
+  // part way in already has them, inside the checkpoint it starts from.
+  for (const baked of start > 0 ? [] : doc.baseBodies || []) {
     try {
       const solid = K.ofMesh(
         new Float32Array(baked.verts),
@@ -694,9 +868,56 @@ export function rebuild(doc, options = {}) {
     }
   };
 
-  for (let i = 0; i <= limit && i < doc.features.length; i++) {
+  if (cache && start > 0) {
+    const at = cache.steps[start - 1];
+    bodies = at.bodies.slice();
+    Object.assign(sketchRegions, at.sketchRegions);
+    Object.assign(sketchPlanes, at.sketchPlanes);
+    Object.assign(sketchProjections, at.sketchProjections);
+    for (const [k, v] of at.construction) builtConstruction.set(k, v);
+    for (const [k, v] of at.toolOf) toolOf.set(k, v);
+    // Where the geometry came from has to come back with it, or every face
+    // reference into the part before the edit is suddenly anonymous.
+    K.restoreOriginalTags(at.tags);
+    cache.hits += start;
+  }
+
+  /**
+   * Put this point of the run away, so the next rebuild can start from it.
+   *
+   * The geometry passes to the cache rather than being copied, because a
+   * manifold is immutable once built: every feature after this one produces a
+   * new object and leaves this one exactly as it is. What that costs is one
+   * rebuild's worth of intermediates staying alive, and what it buys is not
+   * building them again.
+   */
+  const checkpoint = (i) => {
+    if (!cache) return;
+    for (const b of bodies) if (b.solid) cache.keep(b.solid, scopeObj);
+    for (const entry of toolOf.values()) if (entry.tool) cache.keep(entry.tool, scopeObj);
+    cache.steps[i] = {
+      // Worked out again here rather than reused from before the run, because
+      // a feature is brought up to date as it is built: a fillet written
+      // before it had sets grows them the first time it runs. Keyed on what it
+      // says now, the next rebuild sees no change, which is the truth.
+      key: featureRebuildKey(doc, doc.features[i]),
+      bodies: bodies.slice(),
+      sketchRegions: { ...sketchRegions },
+      sketchPlanes: { ...sketchPlanes },
+      sketchProjections: { ...sketchProjections },
+      construction: new Map(builtConstruction),
+      toolOf: new Map(toolOf),
+      tags: K.originalTagsSnapshot()
+    };
+    cache.replayed++;
+  };
+
+  for (let i = start; i <= limit && i < doc.features.length; i++) {
     const feature = doc.features[i];
-    if (!feature || feature.suppressed) continue;
+    if (!feature || feature.suppressed) {
+      checkpoint(i);
+      continue;
+    }
 
     try {
       switch (feature.type) {
@@ -1004,6 +1225,10 @@ export function rebuild(doc, options = {}) {
           doFaceGroups(feature, scope, scopeObj, errors);
           break;
 
+        case 'faceGroupEdit':
+          doFaceGroupEdit(feature, scope, scopeObj, errors);
+          break;
+
         case 'form':
           doForm(feature, doc, scope, scopeObj, errors);
           break;
@@ -1022,6 +1247,7 @@ export function rebuild(doc, options = {}) {
     } catch (err) {
       errors.push({ feature: feature.id, message: err.message || String(err) });
     }
+    checkpoint(i);
   }
 
   // Any sketch not yet reached by the timeline still needs its regions for the
@@ -1078,7 +1304,9 @@ export function rebuild(doc, options = {}) {
     dispose() {
       scopeObj.dispose();
       for (const b of bodies) {
-        if (!b.solid) continue;
+        // Geometry the cache is holding outlives this result on purpose, so
+        // freeing it here would pull it out from under the next rebuild.
+        if (!b.solid || cache?.owns(b.solid)) continue;
         try {
           b.solid.delete();
         } catch {
@@ -6554,7 +6782,72 @@ export function rebuild(doc, options = {}) {
     if (!targets.length) throw new Error('Face groups are worked out on a mesh body');
     const angle = safeEval(feature.angle, scope, 30);
     for (const b of targets) {
-      replaceBody(bodies, b, { groupAngle: angle });
+      // Regenerating throws the hand set groups away, which is what it is for:
+      // it is the way back to letting the angle decide.
+      replaceBody(bodies, b, { groupAngle: angle, groupLabels: null });
+    }
+  }
+
+  /**
+   * Face groups set by hand rather than worked out from the angle.
+   *
+   * The angle is a good first guess and a poor last word. On a scan there is no
+   * angle that keeps a moulded corner whole and still separates the two flats
+   * beside it, so at some point the answer has to be pointed at rather than
+   * calculated. A group set here holds whatever the angle says, and Generate
+   * Face Groups is the way back.
+   *
+   * Pinning keeps each picked face as it stands. Combining makes one face of
+   * them all. Releasing hands them back to the angle.
+   */
+  function doFaceGroupEdit(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Face groups are set on a mesh body');
+    const op = feature.op || 'combine';
+
+    for (const b of targets) {
+      const mesh = meshOf(b);
+      const triCount = mesh.triVerts.length / 3;
+      let topo;
+      try {
+        topo = buildTopology(
+          mesh,
+          topologyOptions(b)
+        );
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Face groups: ${err.message}` });
+        continue;
+      }
+
+      const wanted = (feature.faces || [])
+        .filter((r) => r.bodyId === b.id || !r.bodyId)
+        .map((r) => r.face || r);
+      const faces = resolveFaceRefs(topo, wanted);
+      if (!faces.length) {
+        errs.push({ feature: feature.id, message: 'No face on that body to group' });
+        continue;
+      }
+
+      const labels = new Int32Array(triCount).fill(-1);
+      if (b.groupLabels && b.groupLabels.length === triCount) labels.set(b.groupLabels);
+      let next = 0;
+      for (let t = 0; t < triCount; t++) next = Math.max(next, labels[t] + 1);
+
+      if (op === 'release') {
+        for (const face of faces) for (const t of face.tris) labels[t] = -1;
+      } else if (op === 'pin') {
+        for (const face of faces) {
+          const id = next++;
+          for (const t of face.tris) labels[t] = id;
+        }
+      } else {
+        const id = next++;
+        for (const face of faces) for (const t of face.tris) labels[t] = id;
+      }
+
+      let any = false;
+      for (let t = 0; t < triCount; t++) if (labels[t] >= 0) any = true;
+      replaceBody(bodies, b, { groupLabels: any ? labels : null });
     }
   }
 
@@ -6799,6 +7092,7 @@ export const FEATURE_LABELS = {
   convertMesh: 'Convert Mesh',
   textureExtrude: 'Texture Extrude',
   faceGroups: 'Face Groups',
+  faceGroupEdit: 'Face Group',
   baseFlange: 'Base Flange',
   flange: 'Flange',
   contourFlange: 'Contour Flange',
@@ -6807,6 +7101,7 @@ export const FEATURE_LABELS = {
   refold: 'Refold',
   rip: 'Rip',
   cornerRelief: 'Corner Relief',
+  miter: 'Miter',
   convertToSheetMetal: 'Convert To Sheet Metal',
   flatPattern: 'Flat Pattern',
   surfaceExtrude: 'Extrude Surface',

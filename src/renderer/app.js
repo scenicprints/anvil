@@ -32,6 +32,8 @@ import {
   meshOf,
   isSheet,
   normalizeSheetRules,
+  topologyOptions,
+  RebuildCache,
   uid
 } from './features.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
@@ -209,6 +211,20 @@ async function boot() {
 /* Rebuild                                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * What the last rebuild left behind, one cache for the session.
+ *
+ * Not one per document: what the cache knows is keyed on what the features
+ * say, not on which object holds them, so opening another document simply
+ * fails to match and frees what it was holding. That is also what makes undo
+ * quick, because undo hands back a document parsed afresh and an identity
+ * check would throw the whole cache away every time.
+ */
+function rebuildCache() {
+  if (!state.cache) state.cache = new RebuildCache();
+  return state.cache;
+}
+
 function rebuildAll() {
   const t0 = performance.now();
   const previous = state.result;
@@ -220,7 +236,10 @@ function rebuildAll() {
 
   let res;
   try {
-    res = rebuild(state.doc);
+    // The cache carries what the last rebuild built, so an edit to the end of
+    // a long timeline does not replay the whole of it. A rebuild that throws
+    // leaves it holding a prefix that is still true, so it is kept.
+    res = rebuild(state.doc, { cache: rebuildCache() });
   } catch (err) {
     setSolveState('err', `Rebuild failed: ${err.message}`);
     return;
@@ -238,7 +257,7 @@ function rebuildAll() {
         // A mesh body can say at what angle two triangles stop being the same
         // surface. Without that a scan is a million faces of one triangle each
         // and nothing on it can be pointed at.
-        topology = buildTopology(mesh, b.groupAngle ? { smoothDeg: b.groupAngle } : {});
+        topology = buildTopology(mesh, topologyOptions(b));
       } catch (err) {
         res.errors.push({ feature: b.createdBy, message: `Topology: ${err.message}` });
       }
@@ -1523,6 +1542,15 @@ async function runCommand(cmd) {
       break;
     case 'convertMesh':
       cmdConvertMesh();
+      break;
+    case 'createFaceGroup':
+      cmdFaceGroupEdit('pin');
+      break;
+    case 'combineFaceGroups':
+      cmdFaceGroupEdit('combine');
+      break;
+    case 'releaseFaceGroups':
+      cmdFaceGroupEdit('release');
       break;
     case 'faceGroups':
       cmdFaceGroups();
@@ -4775,6 +4803,12 @@ const RIBBON_MENUS = {
     ['insertSvg', 'Insert SVG'],
     ['insertDxf', 'Insert DXF']
   ],
+  faceGroups: [
+    ['faceGroups', 'Generate Face Groups'],
+    ['createFaceGroup', 'Create Face Group'],
+    ['combineFaceGroups', 'Combine Face Groups'],
+    ['releaseFaceGroups', 'Delete Face Groups']
+  ],
   primitive: [
     ['primBox', 'Box'],
     ['primCyl', 'Cylinder'],
@@ -7214,6 +7248,7 @@ const PICK_PROMPTS = {
   movePointTo: 'Click where to measure to.',
   embossFaces: 'Click the faces to emboss onto.',
   constructPath: 'Click the curve or edge to measure along.',
+  groupFaces: 'Click the faces to group.',
   holdEdges: 'Click the edge the fillet should run out on.',
   jointAxis2: 'Click the edge or face giving the second direction.',
   alignFrom: 'Click the face on the part being moved.',
@@ -7827,6 +7862,21 @@ function pickIntoEdit(hit) {
     const at = f[key].findIndex((x) => sameFaceRef(x, ref));
     if (at >= 0) f[key].splice(at, 1);
     else f[key].push(ref);
+    if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
+  } else if (ed.pickInto === 'groupFaces') {
+    // Any face at all, curved included: a face group is whatever was pointed
+    // at, which is the whole reason for setting one by hand.
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = record?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    f.faces = f.faces || [];
+    const ref = { bodyId: hit.bodyId, face: faceReference(face) };
+    const at = f.faces.findIndex(
+      (x) => x.bodyId === ref.bodyId && sameFaceRef(x.face, ref.face)
+    );
+    if (at >= 0) f.faces.splice(at, 1);
+    else f.faces.push(ref);
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (ed.pickInto === 'neutral') {
     if (hit.kind === 'plane') {
@@ -9695,9 +9745,84 @@ function cmdFaceGroups() {
       key: '__note',
       label: '',
       type: 'note',
-      text: 'How far two triangles can disagree and still be the same face. Loosen it on a scan, tighten it on something machined.'
+      text: 'How far two triangles can disagree and still be the same face. Loosen it on a scan, tighten it on something machined. This is also the way back: it throws away any group set by hand.'
     }
   ], { angle: '30' });
+}
+
+const FACE_GROUP_OPS = {
+  pin: {
+    title: 'Create Face Group',
+    note: 'Each face picked is kept exactly as it stands, whatever angle is asked for later.',
+    done: 'kept'
+  },
+  combine: {
+    title: 'Combine Face Groups',
+    note: 'Everything picked becomes one face. They have to touch, because a face that is in two places is not one face.',
+    done: 'combined'
+  },
+  release: {
+    title: 'Delete Face Groups',
+    note: 'The faces picked go back to being worked out from the angle.',
+    done: 'released'
+  }
+};
+
+/**
+ * Face groups set by hand.
+ *
+ * The angle is a good first guess and a poor last word: on a scan there is no
+ * angle that keeps a moulded corner whole and still separates the two flats
+ * beside it. At that point the answer has to be pointed at.
+ */
+function cmdFaceGroupEdit(op) {
+  if (state.sketcher.active) finishSketch();
+  const meshes = (state.result?.bodies || []).filter((b) => b.mesh);
+  if (!meshes.length) {
+    setStatus('Face groups are set on a mesh body.');
+    return;
+  }
+  const how = FACE_GROUP_OPS[op] || FACE_GROUP_OPS.combine;
+  // A face reference here carries its body, because a group can be set on more
+  // than one mesh in the same feature.
+  const faces = [];
+  for (const [bodyId, refs] of selectedFaceRefs()) {
+    for (const face of refs) faces.push({ bodyId, face });
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'faceGroupEdit',
+    op,
+    bodies: faces.length ? [...new Set(faces.map((f) => f.bodyId))] : 'all',
+    faces
+  };
+  openFeatureEditor(feature, how.title, faceGroupEditFields(feature));
+  if (!faces.length) {
+    setEditPick('groupFaces');
+    setStatus('Click the faces to group.');
+  }
+}
+
+function faceGroupEditFields(feature) {
+  const how = FACE_GROUP_OPS[feature.op] || FACE_GROUP_OPS.combine;
+  return [
+    {
+      key: '__faces',
+      label: 'Faces',
+      type: 'pick',
+      pick: 'groupFaces',
+      summary: (f) => countOf(f.faces, 'face'),
+      clear: (f) => {
+        f.faces = [];
+      }
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: how.note
+    }
+  ];
 }
 
 /**
@@ -11259,6 +11384,11 @@ function describeFeature(feature) {
       return { title: 'Rip', fields: ripFields() };
     case 'miter':
       return { title: 'Miter', fields: miterFields() };
+    case 'faceGroupEdit':
+      return {
+        title: (FACE_GROUP_OPS[feature.op] || FACE_GROUP_OPS.combine).title,
+        fields: faceGroupEditFields(feature)
+      };
     case 'surfaceExtrude':
       return { title: 'Extrude Surface', fields: surfaceExtrudeFields() };
     case 'surfaceRevolve':
