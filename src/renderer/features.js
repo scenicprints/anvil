@@ -80,9 +80,12 @@ export function newDocument() {
     // Control cages, beside the sketches and for the same reason: a form is
     // drawn rather than derived, so nothing in the timeline can rebuild it.
     forms: {},
-    // One sheet metal rule per document. Every part made here is made to it,
-    // and changing it changes every bend at once, which is what it is for.
-    sheetMetalRule: { ...SM.DEFAULT_RULE }
+    // A small library of sheet metal rules, and the name of the one in force.
+    // A part that is aluminium at the bracket and steel at its mount is two
+    // rules, and swapping the whole document over to make the second is how
+    // the first one gets lost.
+    sheetMetalRules: SM.STOCK_RULES.map((r) => ({ ...r })),
+    sheetMetalRule: SM.STOCK_RULES[0].name
   };
 }
 
@@ -283,8 +286,45 @@ export function normalizeBlend(f) {
     if (!set.chamferType) set.chamferType = 'equal';
     if (set.distance2 === undefined) set.distance2 = set.radius;
     if (set.angle === undefined) set.angle = '45';
+    // A variable radius used to be implied by an end radius being filled in.
+    // It is a named type now, so an older document is read back the way it
+    // behaved rather than quietly turning constant.
+    if (!set.filletType) set.filletType = set.endRadius ? 'variable' : 'constant';
+    if (set.chord === undefined) set.chord = set.radius;
+    if (!set.holdEdges) set.holdEdges = [];
   }
   return f;
+}
+
+/**
+ * Bring a document's sheet metal rules up to the library it now keeps.
+ *
+ * A document written when there was one rule stored it as an object under
+ * `sheetMetalRule`. That becomes an entry in the library, and the field becomes
+ * the name of the one in force, so an old part keeps the numbers it was made
+ * to rather than quietly picking up whatever the first stock rule says.
+ */
+export function normalizeSheetRules(doc) {
+  if (!doc) return doc;
+  const carried =
+    doc.sheetMetalRule && typeof doc.sheetMetalRule === 'object'
+      ? { ...SM.DEFAULT_RULE, ...doc.sheetMetalRule }
+      : null;
+
+  if (!Array.isArray(doc.sheetMetalRules) || !doc.sheetMetalRules.length) {
+    doc.sheetMetalRules = SM.STOCK_RULES.map((r) => ({ ...r }));
+  }
+  if (carried) {
+    if (!carried.name) carried.name = 'Sheet metal rule';
+    const at = doc.sheetMetalRules.findIndex((r) => r.name === carried.name);
+    if (at >= 0) doc.sheetMetalRules[at] = carried;
+    else doc.sheetMetalRules.unshift(carried);
+    doc.sheetMetalRule = carried.name;
+  }
+  if (typeof doc.sheetMetalRule !== 'string' || !doc.sheetMetalRule) {
+    doc.sheetMetalRule = doc.sheetMetalRules[0].name;
+  }
+  return doc;
 }
 
 /** Bring a hole up to the shape the dialog now works in. */
@@ -894,6 +934,10 @@ export function rebuild(doc, options = {}) {
 
         case 'cornerRelief':
           doCornerRelief(feature, scope, scopeObj, errors);
+          break;
+
+        case 'miter':
+          doMiter(feature, scope, scopeObj, errors);
           break;
 
         case 'convertToSheetMetal':
@@ -3470,18 +3514,48 @@ export function rebuild(doc, options = {}) {
       // Each set is cut in turn, against the body as it stands after the last,
       // so several radii on one part are one feature rather than three.
       for (const set of feature.sets) {
-        const size = safeEval(set.radius, scope, 2);
-        if (!(size > 0)) continue;
-
         const topo = buildTopology(K.meshData(solid));
         const edges = set.edges?.length
           ? resolveEdgeRefs(topo, set.edges)
           : topo.edges.filter((e) => e.convex);
         if (!edges.length) continue;
 
-        const endSize = set.endRadius ? safeEval(set.endRadius, scope, size) : undefined;
+        const type = kind === 'fillet' ? set.filletType || 'constant' : 'constant';
+        let size = 0;
+        let sizeFor;
+
+        if (type === 'chord') {
+          // The chord is what the fillet measures across, so the radius falls
+          // out of the angle each edge happens to sit at. Two edges at
+          // different angles take different radii and the same width of blend,
+          // which is the whole point of asking for a chord.
+          const chord = Math.abs(safeEval(set.chord, scope, 2));
+          if (!(chord > 0)) continue;
+          size = chord;
+          sizeFor = (e) => radiusForChord(e, chord);
+        } else if (type === 'hold') {
+          // A hold line pins where the blend has to run out. The radius is
+          // whatever puts the tangent point on that line.
+          const holds = resolveEdgeRefs(topo, set.holdEdges || []);
+          if (!holds.length) {
+            errs.push({
+              feature: feature.id,
+              message: 'Pick the edge the fillet should be held to'
+            });
+            continue;
+          }
+          size = 1;
+          sizeFor = (e) => radiusForHoldLine(e, holds);
+        } else {
+          size = safeEval(set.radius, scope, 2);
+          if (!(size > 0)) continue;
+        }
+
+        const endSize =
+          type === 'variable' && set.endRadius ? safeEval(set.endRadius, scope, size) : undefined;
         const tools = buildEdgeTools(topo, edges, size, kind, ks, {
           endSize,
+          sizeFor,
           size2: chamferSecondDistance(kind, set, size, scope)
         });
         if (!tools.applied) continue;
@@ -3510,6 +3584,79 @@ export function rebuild(doc, options = {}) {
       }
     }
     return out;
+  }
+
+  /**
+   * Half the angle the two faces turn through at an edge, in radians.
+   *
+   * `dihedral` is the angle between the outward normals, so a square corner
+   * reads 90 and a flat one reads 0. Both rules below are written in terms of
+   * that half angle, so it is worked out once.
+   */
+  function halfTurn(edge) {
+    const d = Number(edge.dihedral);
+    if (!Number.isFinite(d) || d <= 1e-6 || d >= 180) return 0;
+    return (d * Math.PI) / 360;
+  }
+
+  /**
+   * The radius that gives a fillet a chord of the width asked for.
+   *
+   * The two tangent points sit R/tan(t) from the edge along each face, where t
+   * is half the interior angle, and the straight line between them is
+   * 2R*cos(t). Written against the dihedral that is 2R*sin(half), so
+   * R = chord / (2 sin(half)).
+   */
+  function radiusForChord(edge, chord) {
+    const half = halfTurn(edge);
+    const s = Math.sin(half);
+    return s > 1e-6 ? chord / (2 * s) : 0;
+  }
+
+  /**
+   * The radius that runs a fillet out exactly on a held edge.
+   *
+   * The tangent point lies R/tan(t) from the edge across the face, so holding
+   * it a distance d away asks for R = d*tan(t), which against the dihedral is
+   * d / tan(half). An edge that shares a face with the hold line is measured
+   * against that one; otherwise the nearest hold line wins, because a hold line
+   * on neither face is a mistake rather than a rule.
+   */
+  function radiusForHoldLine(edge, holds) {
+    const half = halfTurn(edge);
+    const t = Math.tan(half);
+    if (!(t > 1e-6)) return 0;
+
+    const onSameFace = holds.filter(
+      (h) => h.faceA === edge.faceA || h.faceB === edge.faceA ||
+             h.faceA === edge.faceB || h.faceB === edge.faceB
+    );
+    const use = onSameFace.length ? onSameFace : holds;
+
+    let best = Infinity;
+    for (const h of use) {
+      const d = distanceToEdgeLine(edge, h);
+      if (d > 1e-6 && d < best) best = d;
+    }
+    return Number.isFinite(best) ? best / t : 0;
+  }
+
+  /** How far a second edge sits, on average, off the line of the first. */
+  function distanceToEdgeLine(edge, other) {
+    const a = edge.points[0];
+    const b = edge.points[edge.points.length - 1];
+    let dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    const len = Math.hypot(dx, dy, dz);
+    if (!(len > 1e-9)) return 0;
+    dx /= len; dy /= len; dz /= len;
+
+    let total = 0;
+    for (const p of other.points) {
+      const wx = p[0] - a[0], wy = p[1] - a[1], wz = p[2] - a[2];
+      const along = wx * dx + wy * dy + wz * dz;
+      total += Math.hypot(wx - along * dx, wy - along * dy, wz - along * dz);
+    }
+    return other.points.length ? total / other.points.length : 0;
   }
 
   /**
@@ -5227,14 +5374,16 @@ export function rebuild(doc, options = {}) {
   /* ---------------------------------------------------------------- */
 
   /**
-   * The rule in force, with every expression already worked out.
+   * The rule a feature is made to, with every expression already worked out.
    *
-   * One rule per document, which is the useful nine tenths of Fusion's rule
-   * library. Every field is an expression like any other, so a thickness can be
-   * driven by a parameter and every part made to it follows.
+   * A feature that names a rule uses that one; anything else uses the
+   * document's active rule. Every field is an expression like any other, so a
+   * thickness can be driven by a parameter and every part made to it follows.
    */
-  function sheetRule(scope) {
-    const r = { ...SM.DEFAULT_RULE, ...(doc.sheetMetalRule || {}) };
+  function sheetRule(scope, feature) {
+    normalizeSheetRules(doc);
+    const wanted = feature?.rule || doc.sheetMetalRule;
+    const r = { ...SM.DEFAULT_RULE, ...SM.ruleByName(doc.sheetMetalRules, wanted) };
     const num = (v, d) => (v === '' || v === null || v === undefined ? d : safeEval(v, scope, d));
     return {
       name: r.name,
@@ -5248,6 +5397,19 @@ export function rebuild(doc, options = {}) {
       cornerShape: r.cornerShape || 'round',
       cornerSize: num(r.cornerSize, 0)
     };
+  }
+
+  /**
+   * The rule a body already carries, rather than whatever is active now.
+   *
+   * A part records the rule it was built to. A later feature working on that
+   * part has to cut at that thickness or the cut misses the material, which is
+   * what would happen the moment a second rule entered the document.
+   */
+  function ruleOfBody(body, scope, feature) {
+    const carried = body?.sheetMetal?.rule;
+    if (carried && typeof carried.thickness === 'number') return carried;
+    return sheetRule(scope, feature);
   }
 
   /** Every sheet metal body a feature was pointed at. */
@@ -5379,7 +5541,7 @@ export function rebuild(doc, options = {}) {
    * the profile was drawn on, and the root everything later hangs off.
    */
   function doBaseFlange(feature, doc, scope, ks, regionsById, errs) {
-    const rule = sheetRule(scope);
+    const rule = sheetRule(scope, feature);
     const { contours, plane } = extrudeProfiles(feature, doc, scope, regionsById);
     if (!contours.length) throw new Error('Select a closed profile to make a sheet from');
 
@@ -5404,7 +5566,7 @@ export function rebuild(doc, options = {}) {
 
   /** A flange off one or more edges of a sheet metal part. */
   function doFlange(feature, scope, ks, errs) {
-    const rule = sheetRule(scope);
+    const rule = sheetRule(scope, feature);
     const targets = pickSheetMetal(feature);
     if (!targets.length) throw new Error('Flange works on a sheet metal body');
 
@@ -5503,7 +5665,7 @@ export function rebuild(doc, options = {}) {
    * go from a drawing of the part's cross section.
    */
   function doContourFlange(feature, doc, scope, ks, errs) {
-    const rule = sheetRule(scope);
+    const rule = sheetRule(scope, feature);
     const sk = doc.sketches[feature.sketch];
     if (!sk) throw new Error('Contour flange has no sketch');
     solveSketch(sk, { maxIterations: 40 });
@@ -5609,7 +5771,7 @@ export function rebuild(doc, options = {}) {
    * stationary side turned round, so picking it is the whole of the input.
    */
   function doSheetFold(feature, doc, scope, ks, errs) {
-    const rule = sheetRule(scope);
+    const rule = sheetRule(scope, feature);
     const targets = pickSheetMetal(feature);
     if (!targets.length) throw new Error('Fold works on a sheet metal body');
 
@@ -5696,7 +5858,7 @@ export function rebuild(doc, options = {}) {
    * body and its own place in the browser.
    */
   function doUnfold(feature, scope, ks, errs, refold) {
-    const rule = sheetRule(scope);
+    const rule = sheetRule(scope, feature);
     const targets = pickSheetMetal(feature);
     if (!targets.length) throw new Error(`${refold ? 'Refold' : 'Unfold'} works on a sheet metal body`);
 
@@ -5731,12 +5893,12 @@ export function rebuild(doc, options = {}) {
    * it out without tearing it somewhere. Rip is choosing where that tear goes.
    */
   function doRip(feature, scope, ks, errs) {
-    const rule = sheetRule(scope);
     const targets = pickSheetMetal(feature);
     if (!targets.length) throw new Error('Rip works on a sheet metal body');
-    const gap = feature.gap ? safeEval(feature.gap, scope, rule.gap) : rule.gap;
 
     for (const body of targets) {
+      const rule = ruleOfBody(body, scope, feature);
+      const gap = feature.gap ? safeEval(feature.gap, scope, rule.gap) : rule.gap;
       const mesh = meshOf(body);
       let topo;
       try {
@@ -5785,22 +5947,56 @@ export function rebuild(doc, options = {}) {
    * material at the point the two bend lines cross.
    */
   function doCornerRelief(feature, scope, ks, errs) {
-    const rule = sheetRule(scope);
     const targets = pickSheetMetal(feature);
     if (!targets.length) throw new Error('Corner Relief works on a sheet metal body');
-    if (rule.cornerShape === 'none') {
-      errs.push({ feature: feature.id, message: 'The rule has corner relief turned off' });
-      return;
-    }
-    const size = rule.cornerSize > 0 ? rule.cornerSize : rule.thickness * 2;
 
     for (const body of targets) {
+      const rule = ruleOfBody(body, scope, feature);
+      if (rule.cornerShape === 'none') {
+        errs.push({ feature: feature.id, message: 'The rule has corner relief turned off' });
+        continue;
+      }
+      const size = rule.cornerSize > 0 ? rule.cornerSize : rule.thickness * 2;
       const part = body.sheetMetal;
       const frames = SM.resolveFrames(part, rule.thickness, rule.kFactor, {});
       let solid = body.solid;
       let n = 0;
 
-      // Every pair of bends leaving the same panel that meet within the panel.
+      // Corners where three or more bends come together. These live in the
+      // folded part rather than in any one panel, because the third bend
+      // belongs to a panel that has already been folded away, so they are cut
+      // in the world with a ball or a cube rather than flat with a polygon.
+      const deep = SM.bendCorners(part, frames, rule.thickness).filter(
+        (c) => c.bends.length >= 3
+      );
+      for (const corner of deep) {
+        try {
+          // Big enough to clear every bend zone that converges here, because
+          // three thicknesses of material fold into this one point and a notch
+          // that only clears two of them still tears.
+          const r = Math.max(size / 2, corner.reach);
+          const tool =
+            rule.cornerShape === 'square'
+              ? K.box([r * 2, r * 2, r * 2], true, ks)
+              : K.sphere(r, circleSegments(r), ks);
+          solid = K.difference(solid, K.translate(tool, corner.point, ks), ks);
+          n++;
+        } catch {
+          /* a relief that will not build is not worth losing the part */
+        }
+      }
+      const atDeepCorner = (world) =>
+        deep.some(
+          (c) =>
+            Math.hypot(
+              c.point[0] - world[0],
+              c.point[1] - world[1],
+              c.point[2] - world[2]
+            ) < 1e-6
+        );
+
+      // Every pair of bends leaving the same panel that meet within the panel,
+      // less the ones already taken care of as a deeper corner.
       for (const panel of part.panels) {
         const outgoing = SM.bendsFrom(part, panel.id);
         const f = frames.get(panel.id);
@@ -5809,6 +6005,7 @@ export function rebuild(doc, options = {}) {
           for (let j = i + 1; j < outgoing.length; j++) {
             const at = lineCross(outgoing[i], outgoing[j]);
             if (!at) continue;
+            if (atDeepCorner(sketchToWorld(f, at[0], at[1], 0).toArray())) continue;
             const poly =
               rule.cornerShape === 'square'
                 ? squareAt(at, size)
@@ -5845,6 +6042,37 @@ export function rebuild(doc, options = {}) {
         continue;
       }
       replaceBody(bodies, body, { solid });
+    }
+  }
+
+  /**
+   * Cut the corners where two flanges run into each other.
+   *
+   * The part is rebuilt from its panels rather than cut as a solid, so the
+   * miter shows on the flat pattern as well as on the folded part. A blank
+   * that folds up with its corners fighting is a blank that was cut wrong, and
+   * that is a thing the flat has to say.
+   */
+  function doMiter(feature, scope, ks, errs) {
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error('Miter works on a sheet metal body');
+
+    for (const body of targets) {
+      const rule = ruleOfBody(body, scope, feature);
+      const gap = feature.gap ? safeEval(feature.gap, scope, rule.gap) : rule.gap;
+      const part = SM.clonePart(body.sheetMetal);
+      const frames = SM.resolveFrames(part, rule.thickness, rule.kFactor, {});
+      const cut = SM.miterCorners(part, frames, Math.max(0, gap), {
+        thickness: rule.thickness
+      });
+      if (!cut) {
+        errs.push({
+          feature: feature.id,
+          message: 'No two flanges run into each other on this part'
+        });
+        continue;
+      }
+      materialiseSheetPart(feature, part, rule, ks, body, errs);
     }
   }
 
@@ -5887,7 +6115,7 @@ export function rebuild(doc, options = {}) {
    * than quietly converted into something a brake cannot make.
    */
   function doConvertToSheetMetal(feature, scope, ks, errs) {
-    const rule = sheetRule(scope);
+    const rule = sheetRule(scope, feature);
     const targets = pickBodies(feature, bodies);
     if (!targets.length) throw new Error('Convert needs a solid body');
 
@@ -5930,7 +6158,7 @@ export function rebuild(doc, options = {}) {
    * from. Fusion draws the same line and for the same reason.
    */
   function doFlatPattern(feature, scope, ks, errs) {
-    const rule = sheetRule(scope);
+    const rule = sheetRule(scope, feature);
     const targets = pickSheetMetal(feature);
     if (!targets.length) throw new Error('Flat Pattern works on a sheet metal body');
 

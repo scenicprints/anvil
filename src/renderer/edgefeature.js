@@ -264,20 +264,36 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
   const endSize = opts.endSize;
   const varying = endSize !== undefined && Math.abs(endSize - size) > 1e-9;
 
+  // A size per edge, when the caller has one. Chord length and hold line both
+  // work a different radius out for every edge from the shape it sits in, so
+  // one number for the whole set will not do.
+  const sizeOf = (edge) => {
+    if (!opts.sizeFor) return size;
+    const r = opts.sizeFor(edge);
+    return Number.isFinite(r) && r > 0 ? r : 0;
+  };
+  const sizeUsed = new Map();
+
   for (const edge of edges) {
+    const r = sizeOf(edge);
+    if (!(r > 0)) {
+      skipped.push(edge);
+      continue;
+    }
     let tool = null;
     if (edge.kind === 'line') {
       tool = varying
-        ? variableToolForLineEdge(edge, size, endSize, kind, scope, opts)
-        : toolForLineEdge(topo, edge, size, kind, scope, opts);
+        ? variableToolForLineEdge(edge, r, endSize, kind, scope, opts)
+        : toolForLineEdge(topo, edge, r, kind, scope, opts);
     } else if (edge.kind === 'circle') {
-      tool = toolForCircleEdge(topo, edge, size, kind, scope, opts);
+      tool = toolForCircleEdge(topo, edge, r, kind, scope, opts);
     }
 
     if (!tool) {
       skipped.push(edge);
       continue;
     }
+    sizeUsed.set(edge, r);
     (edge.convex ? convexTools : concaveTools).push({ edge, tool });
   }
 
@@ -286,6 +302,7 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
   // ball would rest, tangent to all three faces, not on the sharp corner. Put
   // it on the corner itself and it bulges out and adds volume instead.
   const vertexFaces = new Map();
+  const vertexSize = new Map();
   for (const { edge } of convexTools) {
     if (edge.kind !== 'line') continue;
     for (const v of [edge.verts[0], edge.verts[edge.verts.length - 1]]) {
@@ -293,6 +310,10 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
       if (!set) vertexFaces.set(v, (set = new Set()));
       set.add(edge.faceA);
       set.add(edge.faceB);
+      // The ball has to fit every sweep meeting here, so it takes the smallest
+      // radius of them. A bigger one would stand proud of the narrower fillet.
+      const r = sizeUsed.get(edge);
+      vertexSize.set(v, Math.min(vertexSize.get(v) ?? Infinity, r));
     }
   }
 
@@ -304,9 +325,11 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
         .filter((f) => f && f.planar);
       if (planes.length < 3) continue;
 
-      const centre = ballCentre(planes, size);
+      const r = vertexSize.get(v) ?? size;
+      if (!(r > 0)) continue;
+      const centre = ballCentre(planes, r);
       if (!centre) continue;
-      blends.push(K.translate(K.sphere(size, circleSegments(size), scope), centre, scope));
+      blends.push(K.translate(K.sphere(r, circleSegments(r), scope), centre, scope));
     }
   }
 

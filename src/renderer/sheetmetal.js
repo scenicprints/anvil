@@ -58,6 +58,84 @@ export const DEFAULT_RULE = {
   cornerSize: ''
 };
 
+/**
+ * The rules a new document starts with.
+ *
+ * A library rather than one rule, because a part that is aluminium at the
+ * bracket and steel at the bracket's mount is two rules, and swapping the whole
+ * document over to make the second one is how the first one gets lost. Every
+ * one of these is an ordinary rule that can be edited or thrown away: they are
+ * a starting point, not a fixed list.
+ */
+export const STOCK_RULES = [
+  { ...DEFAULT_RULE },
+  {
+    name: 'Aluminium 3 mm',
+    thickness: '3',
+    bendRadius: '3',
+    kFactor: '0.44',
+    gap: '0.4',
+    reliefShape: 'round',
+    reliefWidth: '',
+    reliefDepth: '',
+    cornerShape: 'round',
+    cornerSize: ''
+  },
+  {
+    name: 'Mild steel 1 mm',
+    thickness: '1',
+    bendRadius: '1',
+    kFactor: '0.41',
+    gap: '0.15',
+    reliefShape: 'round',
+    reliefWidth: '',
+    reliefDepth: '',
+    cornerShape: 'round',
+    cornerSize: ''
+  },
+  {
+    name: 'Mild steel 2 mm',
+    thickness: '2',
+    bendRadius: '2',
+    kFactor: '0.41',
+    gap: '0.3',
+    reliefShape: 'round',
+    reliefWidth: '',
+    reliefDepth: '',
+    cornerShape: 'round',
+    cornerSize: ''
+  },
+  {
+    name: 'Stainless 1.5 mm',
+    thickness: '1.5',
+    bendRadius: '2.25',
+    kFactor: '0.38',
+    gap: '0.2',
+    reliefShape: 'straight',
+    reliefWidth: '',
+    reliefDepth: '',
+    cornerShape: 'square',
+    cornerSize: ''
+  }
+];
+
+/** A rule out of a library by name, or the first one if that name is gone. */
+export function ruleByName(rules, name) {
+  if (!Array.isArray(rules) || !rules.length) return { ...DEFAULT_RULE };
+  return rules.find((r) => r.name === name) || rules[0];
+}
+
+/** A name nothing in the library is using yet. */
+export function uniqueRuleName(rules, wanted) {
+  const taken = new Set((rules || []).map((r) => r.name));
+  if (!taken.has(wanted)) return wanted;
+  for (let i = 2; i < 500; i++) {
+    const tryName = `${wanted} ${i}`;
+    if (!taken.has(tryName)) return tryName;
+  }
+  return `${wanted} ${Date.now()}`;
+}
+
 export const RELIEF_SHAPES = [
   ['round', 'Round'],
   ['straight', 'Straight'],
@@ -665,6 +743,245 @@ export function reliefCuts(part, bend, thickness, rule) {
   if ((bend.v0 ?? 0) > 1e-6) cuts.push(notch(bend.v0, -1));
   if ((bend.v1 ?? span) < span - 1e-6) cuts.push(notch(bend.v1, 1));
   return cuts;
+}
+
+/* ---------------------------------------------------------------- corners */
+
+/**
+ * Where bends come together at a corner, and everything that meets there.
+ *
+ * Two bends off the same panel meet where their lines cross, which is a corner
+ * of that panel and easy to see flat. A third is not: it belongs to a flange
+ * that has already been folded away, so its bend line runs somewhere else
+ * entirely and never passes through the point. What ties it to the corner is
+ * the tree, not the geometry. A tab that closes the corner is a bend running
+ * straight across the end of one of the two flanges, at exactly the distance
+ * along that flange where the corner is, and that is what is looked for.
+ *
+ * This is the corner a two bend relief cannot see and the one that tears when
+ * the part is folded, because three thicknesses of material converge on it.
+ */
+export function bendCorners(part, frames, thickness, tol = 1e-6) {
+  const out = [];
+
+  for (const parent of part.panels) {
+    const outgoing = bendsFrom(part, parent.id);
+    if (outgoing.length < 2) continue;
+    const f = frames.get(parent.id);
+    if (!f) continue;
+
+    for (let i = 0; i < outgoing.length; i++) {
+      for (let j = i + 1; j < outgoing.length; j++) {
+        const at = bendsMeet(outgoing[i], outgoing[j]);
+        if (!at) continue;
+
+        const bends = [outgoing[i].id, outgoing[j].id];
+        const radii = [outgoing[i].radius, outgoing[j].radius];
+        for (const bend of [outgoing[i], outgoing[j]]) {
+          for (const tab of closingBends(part, bend, at, tol)) {
+            bends.push(tab.id);
+            radii.push(tab.radius);
+          }
+        }
+        out.push({
+          point: toWorld(f, at[0], at[1]),
+          panel: parent.id,
+          bends,
+          reach: Math.max(...radii) + (thickness || 0)
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The bends across the end of a flange, at the corner its parent bend meets.
+ *
+ * A bend's child panel measures v along the bend line from its start, so the
+ * corner sits at however far along that line it fell. A tab closing the corner
+ * runs straight across the flange there, which means both ends of its line
+ * share that v.
+ */
+function closingBends(part, bend, at, tol) {
+  const along =
+    (at[0] - bend.a[0]) * (bend.b[0] - bend.a[0]) +
+    (at[1] - bend.a[1]) * (bend.b[1] - bend.a[1]);
+  const span = Math.hypot(bend.b[0] - bend.a[0], bend.b[1] - bend.a[1]);
+  if (!(span > EPS)) return [];
+  const v = along / span;
+  const near = Math.max(tol, span * 1e-6);
+
+  return bendsFrom(part, bend.to).filter(
+    (tab) => Math.abs(tab.a[1] - v) < near && Math.abs(tab.b[1] - v) < near
+  );
+}
+
+/* ------------------------------------------------------------------ miter */
+
+/**
+ * Close the corner where two flanges meet.
+ *
+ * Two flanges off adjoining edges of the same panel do not overlap: each one
+ * stands outside its own edge, so what they leave between them is a notch the
+ * width of the material. A miter fills that notch and then cuts both on the
+ * plane that bisects them, so the two ends meet along one line with the rule's
+ * gap between them. Where the flanges do overlap instead, which is what
+ * happens once a bend line sits inside the panel, the same cut trims them back.
+ * Filling and trimming are the same operation from opposite sides, so it is
+ * written once.
+ *
+ * The cut is straight through the thickness rather than bevelled, because the
+ * blank is cut flat and that is the only shape it can have. The gap is measured
+ * square to the miter plane, so the clearance is the same whatever angle the
+ * two flanges meet at.
+ */
+export function miterCorners(part, frames, gap, opts = {}) {
+  const half = Math.max(0, gap) / 2;
+  const cuts = [];
+  let corners = 0;
+
+  for (const parent of part.panels) {
+    const outgoing = bendsFrom(part, parent.id);
+    if (outgoing.length < 2) continue;
+    for (let i = 0; i < outgoing.length; i++) {
+      for (let j = i + 1; j < outgoing.length; j++) {
+        // The two bends have to meet, or these are opposite sides of the same
+        // panel and there is no corner between them to close.
+        if (!bendsMeet(outgoing[i], outgoing[j])) continue;
+        const pair = miterPair(part, frames, outgoing[i], outgoing[j], half, opts);
+        if (!pair) continue;
+        cuts.push(...pair);
+        corners++;
+      }
+    }
+  }
+
+  // Applied after every pair has been worked out, so a flange mitred against
+  // two neighbours is measured against where it started rather than against
+  // whichever cut happened to run first.
+  for (const cut of cuts) {
+    const panel = panelById(part, cut.id);
+    if (panel) panel.contour = cut.contour;
+  }
+  return corners;
+}
+
+/** Do two bend lines off the same panel run into each other, within their runs? */
+function bendsMeet(p, q, tol = 1e-6) {
+  const r = [p.b[0] - p.a[0], p.b[1] - p.a[1]];
+  const t = [q.b[0] - q.a[0], q.b[1] - q.a[1]];
+  const denom = r[0] * t[1] - r[1] * t[0];
+  if (Math.abs(denom) < 1e-9) return null;
+  const u = ((q.a[0] - p.a[0]) * t[1] - (q.a[1] - p.a[1]) * t[0]) / denom;
+  const v = ((q.a[0] - p.a[0]) * r[1] - (q.a[1] - p.a[1]) * r[0]) / denom;
+  if (u < -tol || u > 1 + tol || v < -tol || v > 1 + tol) return null;
+  return [p.a[0] + r[0] * u, p.a[1] + r[1] * u];
+}
+
+/** One corner: extend both flanges into it, then cut them on the bisector. */
+function miterPair(part, frames, bendA, bendB, half, opts) {
+  const idA = bendA.to;
+  const idB = bendB.to;
+  const A = panelById(part, idA);
+  const B = panelById(part, idB);
+  const fA = frames.get(idA);
+  const fB = frames.get(idB);
+  if (!A || !B || !fA || !fB) return null;
+
+  // Parallel panels never come together along a line, so there is nothing to
+  // bisect. Two flanges folded flat against each other are the usual case.
+  const u = cross(fA.n, fB.n);
+  if (len(u) < 1e-6) return null;
+  const axis = unit(u);
+
+  // A point on the line the two panel planes share.
+  const dA = dot(fA.n, fA.origin);
+  const dB = dot(fB.n, fB.origin);
+  const onLine = mul(
+    add(mul(cross(fB.n, u), dA), mul(cross(u, fA.n), dB)),
+    1 / dot(u, u)
+  );
+
+  // Which way each panel's material lies off that line, square to it.
+  const away = (panel, frame) => {
+    const c = centroid(panel.contour);
+    const w = sub(toWorld(frame, c[0], c[1]), onLine);
+    return unit(sub(w, mul(axis, dot(w, axis))));
+  };
+  const eA = away(A, fA);
+  const eB = away(B, fB);
+  if (len(eA) < 0.5 || len(eB) < 0.5) return null;
+
+  // The bisector's normal runs from B's material toward A's, so A keeps the
+  // side it points into and B the other, each held back by half the gap.
+  const n = unit(sub(eA, eB));
+  if (len(n) < 0.5) return null;
+
+  const reach =
+    opts.reach ??
+    Math.max(bendA.radius, bendB.radius) + (opts.thickness ?? 0) + half + 1e-3;
+
+  const t = opts.thickness ?? 0;
+  const cutA = fitToHalf(A, fA, n, onLine, half, +1, reach, t);
+  const cutB = fitToHalf(B, fB, n, onLine, half, -1, reach, t);
+  if (!cutA || !cutB) return null;
+  return [
+    { id: idA, contour: cutA },
+    { id: idB, contour: cutB }
+  ];
+}
+
+/**
+ * A panel's contour brought to one side of a plane, in its own frame.
+ *
+ * `side` is +1 to keep the half the normal points into and -1 for the other.
+ * The end nearest the plane is first run out by `reach` and then cut, so a
+ * flange that stops short of the corner is carried into it and a flange that
+ * overruns is taken back, both landing on the same line.
+ *
+ * Running the end out moves whichever vertices share the extreme value along
+ * the bend line, which is exact for the rectangles and trapezia flanges are
+ * made of and is the only shape a flange end takes.
+ *
+ * The cut goes straight through the thickness rather than following the
+ * bisector through it, because a contour extruded along its normal is the only
+ * shape a panel has and a laser cutting the blank is the only shape the real
+ * part has either. So the material furthest through the thickness is what the
+ * gap is measured from, not the face the contour sits on. Without that the two
+ * flanges clear at one face and bite into each other at the other.
+ */
+function fitToHalf(panel, frame, n, onLine, half, side, reach, thickness) {
+  const m = [dot(n, frame.x), dot(n, frame.y)];
+  const mm = m[0] * m[0] + m[1] * m[1];
+  // A panel standing square to the miter plane is never crossed by it.
+  if (mm < 1e-12) return null;
+
+  // Keep side * (n.X - n.onLine) >= half everywhere through the thickness, in
+  // the panel's own coordinates.
+  const worst = Math.max(0, -side * dot(n, frame.n)) * (thickness || 0);
+  const c = half + worst + side * (dot(n, onLine) - dot(n, frame.origin));
+  const normal = [-side * m[0], -side * m[1]];
+  const origin = [(m[0] * side * c) / mm, (m[1] * side * c) / mm];
+  const depth = (p) => side * (m[0] * p[0] + m[1] * p[1]) - c;
+
+  let contour = panel.contour;
+  // Only run the end out when the cut crosses the bend line rather than
+  // running along it; along it there is no end to reach with.
+  if (reach > 0 && Math.abs(m[1]) > Math.abs(m[0])) {
+    const vs = contour.map((p) => p[1]);
+    const hi = Math.max(...vs);
+    const lo = Math.min(...vs);
+    const atHi = contour.filter((p) => Math.abs(p[1] - hi) < 1e-6);
+    const atLo = contour.filter((p) => Math.abs(p[1] - lo) < 1e-6);
+    const worst = (list) => Math.min(...list.map(depth));
+    const toHi = worst(atHi) < worst(atLo);
+    const edge = toHi ? hi : lo;
+    const moved = edge + (toHi ? reach : -reach);
+    contour = contour.map((p) => (Math.abs(p[1] - edge) < 1e-6 ? [p[0], moved] : p));
+  }
+
+  return clipPolygon(contour, origin, normal);
 }
 
 /* ------------------------------------------------------------------- flat */

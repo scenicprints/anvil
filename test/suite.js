@@ -60,7 +60,8 @@ import {
   rebuild,
   uid,
   resolvePlane,
-  sketchToWorld
+  sketchToWorld,
+  normalizeSheetRules
 } from '../src/renderer/features.js';
 import {
   toBinarySTL,
@@ -2694,6 +2695,209 @@ async function run() {
     // section over the forty of height.
     const corner = (r) => (1 - Math.PI / 4) * r * r * 40;
     near(removed, 2 * corner(8) + 2 * corner(2), 40, 'two radii in one feature');
+  });
+
+  test('fillet: a chord length picks the radius that spans it', () => {
+    // Asking for a chord is asking for how wide the blend reads across, and
+    // letting the radius fall out of the angle. On a square corner that is
+    // chord over root two, which is checked here two ways: against the closed
+    // form for what a rounded corner removes, and against a constant radius
+    // fillet of exactly that size, which must land on the same volume.
+    const uprights = () => {
+      const t = buildTopology(K.meshData(rebuild(boxDoc(40, 40, 40)).bodies[0].solid));
+      return t.edges
+        .filter((e) => e.kind === 'line' && e.convex && Math.abs(e.dir[2]) > 0.99)
+        .map((e) => edgeReference(e));
+    };
+    const edges = uprights();
+    assert(edges.length === 4, `expected four upright edges, got ${edges.length}`);
+
+    const chordDoc = boxDoc(40, 40, 40);
+    chordDoc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges, filletType: 'chord', chord: '8' }]
+    });
+    const chord = rebuild(chordDoc);
+    assert(chord.bodies.length === 1, JSON.stringify(chord.errors));
+
+    const R = 8 / Math.SQRT2;
+    const removed = 40 * 40 * 40 - chord.bodies[0].solid.volume();
+    near(removed, 4 * (1 - Math.PI / 4) * R * R * 40, 40, 'a chord of eight is a radius of 5.657');
+
+    const sameDoc = boxDoc(40, 40, 40);
+    sameDoc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges, radius: String(R) }]
+    });
+    const same = rebuild(sameDoc);
+    near(
+      chord.bodies[0].solid.volume(),
+      same.bodies[0].solid.volume(),
+      1,
+      'the chord fillet is the constant fillet at the radius it worked out'
+    );
+  });
+
+  test('fillet: a chord reads the angle rather than assuming a square corner', () => {
+    // The rim of a truncated cone is not a right angle, so a chord there asks
+    // for a different radius than the same chord on a box. If the rule were
+    // written for square corners this is where it would show.
+    const coneDoc = () => {
+      const d = newDocument();
+      d.features = [prim('cone', { diameter: '40', topDiameter: '24', height: '20' })];
+      return d;
+    };
+    const first = rebuild(coneDoc());
+    const topo = buildTopology(K.meshData(first.bodies[0].solid));
+    const rim = topo.edges.find((e) => e.kind === 'circle' && e.radius < 13);
+    assert(rim, 'expected the small rim of the cone');
+    assert(Math.abs(rim.dihedral - 90) > 10, `the rim should not be square, it is ${rim.dihedral}`);
+
+    const chord = 6;
+    const expected = chord / (2 * Math.sin((rim.dihedral * Math.PI) / 360));
+    assert(Math.abs(expected - chord / Math.SQRT2) > 0.2, 'this angle has to differ from a box');
+
+    const byChord = coneDoc();
+    byChord.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: [edgeReference(rim)], filletType: 'chord', chord: String(chord) }]
+    });
+    const a = rebuild(byChord);
+    assert(a.bodies.length === 1, JSON.stringify(a.errors));
+
+    const byRadius = coneDoc();
+    byRadius.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: [edgeReference(rim)], radius: String(expected) }]
+    });
+    const b = rebuild(byRadius);
+    assert(b.bodies.length === 1, JSON.stringify(b.errors));
+
+    const va = a.bodies[0].solid.volume();
+    near(va, b.bodies[0].solid.volume(), 1, 'the chord took the radius the angle asks for');
+
+    // And it is not the square corner answer, which would remove a different
+    // amount of material.
+    const bySquare = coneDoc();
+    bySquare.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: [edgeReference(rim)], radius: String(chord / Math.SQRT2) }]
+    });
+    const c = rebuild(bySquare);
+    assert(
+      Math.abs(va - c.bodies[0].solid.volume()) > 5,
+      'a square corner reading would have removed the same amount, so the angle was ignored'
+    );
+  });
+
+  test('fillet: a hold line sets the radius from where it has to run out', () => {
+    // A stepped block, so there is a face with a near edge to hold to rather
+    // than one forty across. The convex edge round the back of the ledge is
+    // filleted, and held first to the bottom of the back face, eight down,
+    // then to the foot of the step, sixteen across. On a square corner the
+    // radius is the distance itself, so those are a fillet of eight and a
+    // fillet of sixteen out of the same pick.
+    const stepDoc = () => {
+      const d = newDocument();
+      d.features = [
+        prim('box', { width: '40', depth: '40', height: '8' }),
+        { ...prim('box', { width: '40', depth: '24', height: '20', y: '-8', z: '14' }), op: 'join' }
+      ];
+      return d;
+    };
+    const base = rebuild(stepDoc());
+    assert(base.bodies.length === 1, JSON.stringify(base.errors));
+    const topo = buildTopology(K.meshData(base.bodies[0].solid));
+    const along = (y, z, convex) =>
+      topo.edges.find(
+        (e) =>
+          e.kind === 'line' &&
+          e.convex === convex &&
+          Math.abs(e.dir[0]) > 0.99 &&
+          Math.abs(e.points[0][1] - y) < 0.01 &&
+          Math.abs(e.points[0][2] - z) < 0.01
+      );
+
+    const target = along(20, 4, true);
+    const lowBack = along(20, -4, true);
+    const stepFoot = along(4, 4, false);
+    assert(target && lowBack && stepFoot, 'expected the three edges of the step');
+
+    const held = (hold) => {
+      const d = stepDoc();
+      d.features.push({
+        id: uid('f'),
+        type: 'fillet',
+        bodies: 'all',
+        sets: [
+          {
+            edges: [edgeReference(target)],
+            filletType: 'hold',
+            holdEdges: [edgeReference(hold)]
+          }
+        ]
+      });
+      const res = rebuild(d);
+      assert(res.bodies.length === 1, JSON.stringify(res.errors));
+      return res.bodies[0].solid.volume();
+    };
+    const constant = (r) => {
+      const d = stepDoc();
+      d.features.push({
+        id: uid('f'),
+        type: 'fillet',
+        bodies: 'all',
+        sets: [{ edges: [edgeReference(target)], radius: String(r) }]
+      });
+      const res = rebuild(d);
+      assert(res.bodies.length === 1, JSON.stringify(res.errors));
+      return res.bodies[0].solid.volume();
+    };
+
+    near(held(lowBack), constant(8), 1, 'held eight down is a fillet of eight');
+    near(held(stepFoot), constant(16), 1, 'held sixteen across is a fillet of sixteen');
+    assert(
+      held(lowBack) > held(stepFoot),
+      'the further hold has to take more material, or the distance was not read'
+    );
+  });
+
+  test('fillet: a hold line with nothing picked says so', () => {
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: [], filletType: 'hold', holdEdges: [] }]
+    });
+    const res = rebuild(doc);
+    assert(
+      res.errors.some((e) => /held/i.test(e.message)),
+      `expected a complaint about the hold line, got ${JSON.stringify(res.errors)}`
+    );
+    near(res.bodies[0].solid.volume(), 40 * 40 * 40, 1, 'and it left the box alone');
+  });
+
+  test('fillet: an older set with an end radius is still a variable one', () => {
+    // The type used to be implied by whether an end radius was filled in.
+    // A document written then has to read back the same way.
+    const doc = boxDoc(40, 40, 40);
+    const set = { edges: [], radius: '6', endRadius: '2' };
+    doc.features.push({ id: uid('f'), type: 'fillet', bodies: 'all', sets: [set] });
+    const res = rebuild(doc);
+    assert(set.filletType === 'variable', `read back as ${set.filletType}`);
+    assert(res.bodies.length === 1, JSON.stringify(res.errors));
+    assert(res.bodies[0].solid.volume() < 40 * 40 * 40, 'and it still removed material');
   });
 
   test('shell: which side the wall goes changes the outside size', () => {
@@ -6207,6 +6411,185 @@ async function run() {
       panelId: 'q1', bendId: 'c0', relief: true
     });
     assert(SM.reliefCuts(full, full.bends[0], SM_T, rule).length === 0, 'and none when it does not');
+  });
+
+  /** A plate with a flange off two adjoining edges, which is one corner. */
+  function trayPart(height = 15) {
+    const part = SM.newPart({ thickness: SM_T, bendRadius: SM_R });
+    SM.addBasePanel(part, [[0, 0], [60, 0], [60, 40], [0, 40]], [], SM_XY, 'p0');
+    SM.addFlangePanel(part, 'p0', { a: [60, 0], b: [60, 40] }, {
+      angle: Math.PI / 2, radius: SM_R, height, panelId: 'p1', bendId: 'b0'
+    });
+    SM.addFlangePanel(part, 'p0', { a: [0, 40], b: [60, 40] }, {
+      angle: Math.PI / 2, radius: SM_R, height, panelId: 'p2', bendId: 'b1'
+    });
+    return part;
+  }
+
+  test('sheet metal: a miter closes the corner between two flanges', () => {
+    // Two flanges off adjoining edges leave a notch: each stands outside its
+    // own edge, so between them is a square of nothing the width of the
+    // material. The miter runs both into it and cuts them on the bisector.
+    //
+    // For a square corner the answer is in closed form. The two flange planes
+    // meet at x = 64 and y = 44, one thickness and one bend radius out from the
+    // sixty by forty plate. Each flange is square cut through its thickness, so
+    // it has to clear that line by the thickness as well as by its share of the
+    // gap, which lands the end at the corner less T + gap/root two.
+    const part = trayPart();
+    const frames = SM.resolveFrames(part, SM_T, SM_K, {});
+    const gap = 0.2;
+    assert(SM.miterCorners(part, frames, gap, { thickness: SM_T }) === 1, 'one corner');
+
+    const back = SM_T + gap / Math.SQRT2;
+    const p1 = SM.panelById(part, 'p1');
+    const p2 = SM.panelById(part, 'p2');
+    const vs = (p) => p.contour.map((q) => q[1]);
+
+    // p1 runs along y and had reached the plate edge at 40. The corner line is
+    // at y = 44, so it now stops short of that by T + gap/root two.
+    near(Math.max(...vs(p1)), 44 - back, 1e-6, 'the first flange reaches the corner');
+    // p2 runs the other way, from x = 60 back to 0, so its corner is at v = -4.
+    near(Math.min(...vs(p2)), -4 + back, 1e-6, 'and the second one meets it');
+
+    // Which leaves exactly the gap between them, square to the miter.
+    const f1 = frames.get('p1');
+    const f2 = frames.get('p2');
+    const endOf = (f, v, w) => SM.panelPointToWorld(f, 0, v, w);
+    // The nearest corners of the two ends, which is where they would touch.
+    const a = endOf(f1, 44 - back, SM_T);
+    const b = endOf(f2, -4 + back, SM_T);
+    near(Math.hypot(a[0] - b[0], a[1] - b[1]), gap, 1e-6, 'and the gap the rule asked for');
+  });
+
+  test('sheet metal: a mitred corner holds more material and grows no bigger', () => {
+    const scope = new K.Scope();
+    const plain = SM.buildPart(trayPart(), scope, { thickness: SM_T, kFactor: SM_K });
+    const part = trayPart();
+    SM.miterCorners(part, SM.resolveFrames(part, SM_T, SM_K, {}), 0.2, { thickness: SM_T });
+    const mitred = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+
+    assert(mitred.volume() > plain.volume(), 'the notch was filled, not opened');
+    const a = plain.boundingBox();
+    const b = mitred.boundingBox();
+    for (let i = 0; i < 3; i++) {
+      near(b.max[i], a.max[i], 1e-3, `it grew along axis ${i}`);
+      near(b.min[i], a.min[i], 1e-3, `it grew back along axis ${i}`);
+    }
+    scope.dispose();
+  });
+
+  test('sheet metal: flanges on opposite edges have no corner to miter', () => {
+    const part = SM.newPart({ thickness: SM_T, bendRadius: SM_R });
+    SM.addBasePanel(part, [[0, 0], [60, 0], [60, 40], [0, 40]], [], SM_XY, 'p0');
+    SM.addFlangePanel(part, 'p0', { a: [60, 0], b: [60, 40] }, {
+      angle: Math.PI / 2, radius: SM_R, height: 15, panelId: 'p1', bendId: 'b0'
+    });
+    SM.addFlangePanel(part, 'p0', { a: [0, 0], b: [0, 40] }, {
+      angle: Math.PI / 2, radius: SM_R, height: 15, panelId: 'p2', bendId: 'b1'
+    });
+    const before = JSON.stringify(part.panels.map((p) => p.contour));
+    const frames = SM.resolveFrames(part, SM_T, SM_K, {});
+    assert(SM.miterCorners(part, frames, 0.2, { thickness: SM_T }) === 0, 'nothing to cut');
+    assert(
+      JSON.stringify(part.panels.map((p) => p.contour)) === before,
+      'and it left the flanges where they were'
+    );
+  });
+
+  test('sheet metal: three bends meeting at a point read as one corner', () => {
+    // Two flanges off the plate, and a third off one of those, all reaching
+    // the same vertex. That corner exists only in the folded part, because the
+    // third bend belongs to a panel that has been folded away, and it is the
+    // one a corner relief worked out flat cannot see.
+    const part = trayPart();
+    // A tab folded across the end of the first flange, at the corner: the
+    // closed corner of a tray, and the one that has three bends in it.
+    SM.addFlangePanel(part, 'p1', { a: [0, 40], b: [15, 40] }, {
+      angle: Math.PI / 2, radius: SM_R, height: 10, panelId: 'p3', bendId: 'b2'
+    });
+    const frames = SM.resolveFrames(part, SM_T, SM_K, {});
+    const corners = SM.bendCorners(part, frames, SM_T);
+
+    const deep = corners.filter((c) => c.bends.length >= 3);
+    assert(deep.length === 1, `one corner of three bends, got ${deep.length}`);
+    assert(
+      ['b0', 'b1', 'b2'].every((id) => deep[0].bends.includes(id)),
+      `all three meet there, got ${JSON.stringify(deep[0].bends)}`
+    );
+
+    // Big enough to clear the bends that fold into it.
+    assert(deep[0].reach >= SM_R + SM_T - 1e-9, `a reach of ${deep[0].reach}`);
+
+    // The plain part has the same two bends meeting and nothing deeper.
+    const flat = trayPart();
+    const only = SM.bendCorners(flat, SM.resolveFrames(flat, SM_T, SM_K, {}), SM_T);
+    assert(only.length === 1 && only[0].bends.length === 2, 'two bends and no more');
+
+    // And a tab at the far end of the same flange is not this corner. It is a
+    // bend on the same panel with the same shape, so nothing but where it sits
+    // tells the two apart.
+    const away = trayPart();
+    SM.addFlangePanel(away, 'p1', { a: [0, 0], b: [15, 0] }, {
+      angle: Math.PI / 2, radius: SM_R, height: 10, panelId: 'p3', bendId: 'b2'
+    });
+    const none = SM.bendCorners(away, SM.resolveFrames(away, SM_T, SM_K, {}), SM_T);
+    assert(
+      none.every((c) => c.bends.length === 2),
+      'a tab at the other end is not part of the corner'
+    );
+  });
+
+  test('sheet metal: a document keeps a library of rules, not one rule', () => {
+    const doc = newDocument();
+    assert(doc.sheetMetalRules.length > 1, 'more than one to choose from');
+    assert(typeof doc.sheetMetalRule === 'string', 'and the active one is named');
+    assert(
+      doc.sheetMetalRules.some((r) => r.name === doc.sheetMetalRule),
+      'by a name the library actually holds'
+    );
+
+    // A document written when there was one rule keeps the numbers it was made
+    // to rather than picking up whatever the first stock rule says.
+    const old = newDocument();
+    old.sheetMetalRules = null;
+    old.sheetMetalRule = { name: 'Brass 0.8', thickness: '0.8', bendRadius: '1', kFactor: '0.4' };
+    normalizeSheetRules(old);
+    assert(old.sheetMetalRule === 'Brass 0.8', `read back as ${old.sheetMetalRule}`);
+    const back = old.sheetMetalRules.find((r) => r.name === 'Brass 0.8');
+    assert(back && back.thickness === '0.8', 'with its own thickness');
+  });
+
+  test('sheet metal: one part per rule, in the same document', () => {
+    const doc = newDocument();
+    doc.sheetMetalRules = [
+      { ...SM.DEFAULT_RULE, name: 'Thin', thickness: '1' },
+      { ...SM.DEFAULT_RULE, name: 'Thick', thickness: '4' }
+    ];
+    doc.sheetMetalRule = 'Thin';
+
+    const sk = newSketch('XY', 'Plate');
+    sk.points = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }];
+    sk.entities = [
+      { id: 1, type: 'line', p: [0, 1] },
+      { id: 2, type: 'line', p: [1, 2] },
+      { id: 3, type: 'line', p: [2, 3] },
+      { id: 4, type: 'line', p: [3, 0] }
+    ];
+    sk.nextEntityId = 5;
+    doc.sketches[sk.id] = sk;
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] },
+      { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [], rule: 'Thick' }
+    ];
+    const out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies.length === 2, `two plates, got ${out.bodies.length}`);
+
+    const volumes = out.bodies.map((b) => b.solid.volume()).sort((a, b) => a - b);
+    near(volumes[0], 40 * 30 * 1, 1, 'the one made to the thin rule');
+    near(volumes[1], 40 * 30 * 4, 1, 'and the one made to the thick one');
   });
 
   test('sheet metal: reading a solid as sheet needs it to be that thick', () => {

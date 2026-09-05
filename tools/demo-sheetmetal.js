@@ -133,12 +133,18 @@ await wait(300);
 }
 
 dev.runCommand('smRule');
-await fillDialog({ Thickness: '2', 'Bend radius': '2', 'K factor': '0.44' });
-report.rule = {
-  thickness: dev.state.doc.sheetMetalRule.thickness,
-  bendRadius: dev.state.doc.sheetMetalRule.bendRadius,
-  kFactor: dev.state.doc.sheetMetalRule.kFactor
-};
+await fillDialog({ Name: 'Demo 2 mm', Thickness: '2', 'Bend radius': '2', 'K factor': '0.44' });
+{
+  const rules = dev.state.doc.sheetMetalRules;
+  const active = rules.find((r) => r.name === dev.state.doc.sheetMetalRule);
+  report.rule = {
+    active: dev.state.doc.sheetMetalRule,
+    inLibrary: rules.length,
+    thickness: active?.thickness,
+    bendRadius: active?.bendRadius,
+    kFactor: active?.kFactor
+  };
+}
 
 /* ---- 2. a base flange from a rectangle ---- */
 
@@ -204,6 +210,24 @@ only([parts()[0]]);
 dev.runCommand('cornerRelief');
 await fillDialog();
 report.cornerReliefMessage = document.getElementById('status').textContent;
+
+/* ---- 4b. the miter that closes the corner ---- */
+
+{
+  const before = vol(parts()[0]);
+  only([parts()[0]]);
+  dev.runCommand('miter');
+  await fillDialog();
+  report.miterErrors = errs();
+  report.miterStatus = document.getElementById('status').textContent;
+  const after = parts().length ? vol(parts()[0]) : 0;
+  report.miterBefore = Math.round(before);
+  report.miterAfter = Math.round(after);
+  // The notch between the two flanges is filled, so the part gains material
+  // and its outside stays where it was.
+  report.miterFilled = after > before;
+  report.miterBox = parts().length ? bbox(parts()[0]) : null;
+}
 
 /* ---- 5. unfold, then refold ---- */
 

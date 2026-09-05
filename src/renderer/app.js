@@ -31,6 +31,7 @@ import {
   sectionedMesh,
   meshOf,
   isSheet,
+  normalizeSheetRules,
   uid
 } from './features.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
@@ -469,7 +470,7 @@ function handleViewportDown(e) {
         'jointAxis2',
         'surfaceCurves',
         'sheetEdges'
-      ].includes(armed) || String(armed).startsWith('set:');
+      ].includes(armed) || !!blendPickRow(armed);
     // A plane click has to be offered before the body raycast, or a plane
     // drawn behind the model can never be reached.
     if (['alignFrom', 'alignTo', 'silhouetteDir'].includes(armed)) {
@@ -1475,6 +1476,9 @@ async function runCommand(cmd) {
     case 'cornerRelief':
       cmdCornerRelief();
       break;
+    case 'miter':
+      cmdMiter();
+      break;
     case 'convertToSheetMetal':
       cmdConvertToSheetMetal();
       break;
@@ -1925,7 +1929,7 @@ function migrate(data) {
   doc.components = doc.components || [];
   doc.joints = doc.joints || [];
   doc.baseBodies = doc.baseBodies || [];
-  doc.sheetMetalRule = { ...SM.DEFAULT_RULE, ...(doc.sheetMetalRule || {}) };
+  normalizeSheetRules(doc);
   doc.meshData = doc.meshData || {};
   doc.imageData = doc.imageData || {};
   doc.forms = doc.forms || {};
@@ -2774,6 +2778,17 @@ function extrudeFields() {
 }
 
 /**
+ * Which of a blend's edge lists a pick is armed for: the edges to blend, or the
+ * hold line the blend has to run out on. Both are edge picks into the same set,
+ * so they are told apart by name rather than by two separate flows.
+ */
+function blendPickRow(armed) {
+  const m = /^(set|hold):(\d+)$/.exec(String(armed || ''));
+  if (!m) return null;
+  return { list: m[1] === 'set' ? 'edges' : 'holdEdges', index: Number(m[2]) };
+}
+
+/**
  * Fillet and Chamfer, which both work on sets of edges. Each set carries its
  * own size, so a part can be blended at three different radii in one feature
  * rather than three.
@@ -2797,18 +2812,57 @@ function blendFields(kind) {
             f.sets[i].edges = [];
           }
         });
-        out.push({
-          key: `sets.${i}.radius`,
-          label: kind === 'fillet' ? `Set ${n} radius` : `Set ${n} distance`,
-          type: 'expr'
-        });
         if (kind === 'fillet') {
+          const typeOf = (f) => f.sets[i]?.filletType || 'constant';
+          out.push({
+            key: `sets.${i}.filletType`,
+            label: `Set ${n} type`,
+            type: 'select',
+            options: [
+              ['constant', 'Constant radius'],
+              ['variable', 'Variable radius'],
+              ['chord', 'Chord length'],
+              ['hold', 'Hold line']
+            ]
+          });
+          out.push({
+            key: `sets.${i}.radius`,
+            label: `Set ${n} radius`,
+            type: 'expr',
+            showIf: (f) => typeOf(f) === 'constant' || typeOf(f) === 'variable'
+          });
           out.push({
             key: `sets.${i}.endRadius`,
             label: `Set ${n} end radius`,
-            type: 'expr'
+            type: 'expr',
+            showIf: (f) => typeOf(f) === 'variable'
+          });
+          out.push({
+            key: `sets.${i}.chord`,
+            label: `Set ${n} chord`,
+            type: 'expr',
+            showIf: (f) => typeOf(f) === 'chord'
+          });
+          out.push({
+            key: `__hold${i}`,
+            label: `Set ${n} hold line`,
+            type: 'pick',
+            pick: `hold:${i}`,
+            showIf: (f) => typeOf(f) === 'hold',
+            summary: (f) => {
+              const c = f.sets[i]?.holdEdges?.length || 0;
+              return c ? `${c} edge${c === 1 ? '' : 's'}` : 'Nothing held yet';
+            },
+            clear: (f) => {
+              f.sets[i].holdEdges = [];
+            }
           });
         } else {
+          out.push({
+            key: `sets.${i}.radius`,
+            label: `Set ${n} distance`,
+            type: 'expr'
+          });
           out.push({
             key: `sets.${i}.chamferType`,
             label: `Set ${n} type`,
@@ -2843,6 +2897,9 @@ function blendFields(kind) {
             edges: [],
             radius: kind === 'fillet' ? '2' : '1',
             endRadius: null,
+            filletType: 'constant',
+            chord: '2',
+            holdEdges: [],
             chamferType: 'equal',
             distance2: '1',
             angle: '45'
@@ -7157,6 +7214,7 @@ const PICK_PROMPTS = {
   movePointTo: 'Click where to measure to.',
   embossFaces: 'Click the faces to emboss onto.',
   constructPath: 'Click the curve or edge to measure along.',
+  holdEdges: 'Click the edge the fillet should run out on.',
   jointAxis2: 'Click the edge or face giving the second direction.',
   alignFrom: 'Click the face on the part being moved.',
   alignTo: 'Click the face it should land on.',
@@ -7172,9 +7230,9 @@ function pickCountText(armed, f) {
     const total = n(f.seeds) + n(f.faces);
     return total ? `${total} chosen` : 'none yet';
   }
-  if (String(armed).startsWith('set:')) {
-    const i = Number(String(armed).slice(4));
-    const c = n(f.sets?.[i]?.edges);
+  const row = blendPickRow(armed);
+  if (row) {
+    const c = n(f.sets?.[row.index]?.[row.list]);
     return c ? `${c} edge${c === 1 ? '' : 's'}` : 'none yet';
   }
   const listFor = {
@@ -7239,7 +7297,8 @@ function syncPickBar() {
   // goes to it. Saying so, next to the cursor rather than off at the top of the
   // window, is the difference between that and the window feeling dead.
   const f = state.editing.feature;
-  const key = String(armed).startsWith('set:') ? 'setEdges' : armed;
+  const blendRow = blendPickRow(armed);
+  const key = blendRow ? (blendRow.list === 'edges' ? 'setEdges' : 'holdEdges') : armed;
   $('#pcTitle').textContent = f ? featureLabel(state.doc, f) : 'Select';
   $('#pcMsg').textContent = PICK_PROMPTS[key] || 'Click the edges to use.';
   $('#pcCount').textContent = pickCountText(armed, f);
@@ -7665,20 +7724,20 @@ function pickIntoEdit(hit) {
     } else {
       return true;
     }
-  } else if (String(ed.pickInto).startsWith('set:')) {
-    // An edge into one of a blend's sets.
+  } else if (blendPickRow(ed.pickInto)) {
+    // An edge into one of a blend's sets, or into that set's hold line.
     if (hit.kind !== 'edge') return true;
-    const i = Number(String(ed.pickInto).slice(4));
-    const set = f.sets?.[i];
+    const { list, index } = blendPickRow(ed.pickInto);
+    const set = f.sets?.[index];
     if (!set) return true;
     const record = (state.records || []).find((r) => r.id === hit.bodyId);
     const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
     if (!edge) return true;
-    set.edges = set.edges || [];
+    set[list] = set[list] || [];
     const ref = edgeReference(edge, record.topology);
-    const at = set.edges.findIndex((x) => sameEdgeRef(x, ref));
-    if (at >= 0) set.edges.splice(at, 1);
-    else set.edges.push(ref);
+    const at = set[list].findIndex((x) => sameEdgeRef(x, ref));
+    if (at >= 0) set[list].splice(at, 1);
+    else set[list].push(ref);
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (ed.pickInto === 'embossFaces') {
     // A face reference here carries its body, because an emboss can put the
@@ -8801,41 +8860,84 @@ function pickedSheetIds() {
 }
 
 /**
- * The rule every sheet metal feature in this document is made to.
+ * The rules this document keeps, and which one is in force.
  *
- * One rule per part, which is the useful nine tenths of Fusion's rule library
- * and far less to keep straight. It is a document setting rather than a
- * timeline feature, because changing it changes every bend at once and that is
- * what it is for.
+ * A library rather than one rule, because a part that is aluminium at the
+ * bracket and steel at its mount is two rules, and swapping the whole document
+ * over to make the second one is how the first one gets lost. A feature can
+ * name a rule of its own; anything that does not is made to the active one, so
+ * changing that still changes every bend at once, which is what it is for.
  */
 function cmdSheetRule() {
   if (state.sketcher.active) finishSketch();
-  const r = { ...SM.DEFAULT_RULE, ...(state.doc.sheetMetalRule || {}) };
+  normalizeSheetRules(state.doc);
+  const rules = state.doc.sheetMetalRules.map((r) => ({ ...r }));
+  let at = Math.max(0, rules.findIndex((r) => r.name === state.doc.sheetMetalRule));
+
+  const field = (key, label, type, options) => ({
+    key,
+    label,
+    type,
+    options,
+    get: () => rules[at][key] ?? '',
+    set: (_f, v) => {
+      // Every field of a rule is an expression, and an expression is text even
+      // when it happens to read as a number.
+      rules[at][key] = String(v);
+    }
+  });
 
   showInspector(
-    'Sheet Metal Rule',
+    'Sheet Metal Rules',
     [
-      { key: 'thickness', label: 'Thickness', type: 'expr', value: r.thickness },
-      { key: 'bendRadius', label: 'Bend radius', type: 'expr', value: r.bendRadius },
-      { key: 'kFactor', label: 'K factor', type: 'expr', value: r.kFactor },
-      { key: 'gap', label: 'Rip and miter gap', type: 'expr', value: r.gap },
       {
-        key: 'reliefShape',
-        label: 'Bend relief',
+        key: '__which',
+        label: 'Rule',
         type: 'select',
-        value: r.reliefShape,
-        options: SM.RELIEF_SHAPES
+        options: rules.map((r, i) => [String(i), r.name]),
+        get: () => String(at),
+        set: (_f, v) => {
+          at = Number(v) || 0;
+        }
       },
-      { key: 'reliefWidth', label: 'Relief width', type: 'expr', value: r.reliefWidth },
-      { key: 'reliefDepth', label: 'Relief depth', type: 'expr', value: r.reliefDepth },
       {
-        key: 'cornerShape',
-        label: 'Corner relief',
-        type: 'select',
-        value: r.cornerShape,
-        options: SM.CORNER_SHAPES
+        key: '__active',
+        label: '',
+        type: 'note',
+        text: 'The one shown here becomes the active rule when you accept.'
       },
-      { key: 'cornerSize', label: 'Corner size', type: 'expr', value: r.cornerSize },
+      field('name', 'Name', 'text'),
+      field('thickness', 'Thickness', 'text'),
+      field('bendRadius', 'Bend radius', 'text'),
+      field('kFactor', 'K factor', 'text'),
+      field('gap', 'Rip and miter gap', 'text'),
+      field('reliefShape', 'Bend relief', 'select', SM.RELIEF_SHAPES),
+      field('reliefWidth', 'Relief width', 'text'),
+      field('reliefDepth', 'Relief depth', 'text'),
+      field('cornerShape', 'Corner relief', 'select', SM.CORNER_SHAPES),
+      field('cornerSize', 'Corner size', 'text'),
+      {
+        key: '__add',
+        label: 'Copy this into a new rule',
+        type: 'action',
+        run: () => {
+          rules.push({
+            ...rules[at],
+            name: SM.uniqueRuleName(rules, `${rules[at].name} copy`)
+          });
+          at = rules.length - 1;
+        }
+      },
+      {
+        key: '__drop',
+        label: 'Remove this rule',
+        type: 'action',
+        showIf: () => rules.length > 1,
+        run: () => {
+          rules.splice(at, 1);
+          at = Math.min(at, rules.length - 1);
+        }
+      },
       {
         key: '__note',
         label: '',
@@ -8843,14 +8945,89 @@ function cmdSheetRule() {
         text: 'A blank relief size means the thickness. The K factor is how far through the material the neutral axis sits, and it is what the flat length turns on.'
       }
     ],
-    (values) => {
-      pushUndo('sheet metal rule');
-      state.doc.sheetMetalRule = { ...r, ...values };
+    () => {
+      pushUndo('sheet metal rules');
+      // Named while it was being edited, so a part that was made to the old
+      // name is moved over rather than left pointing at nothing.
+      const wasActive = state.doc.sheetMetalRule;
+      const stillThere = rules.some((r) => r.name === wasActive);
+      state.doc.sheetMetalRules = rules;
+      state.doc.sheetMetalRule = rules[at]?.name || rules[0].name;
+      if (!stillThere) {
+        for (const f of state.doc.features) {
+          if (f.rule === wasActive) f.rule = state.doc.sheetMetalRule;
+        }
+      }
       state.dirty = true;
       rebuildAll();
-      setStatus(`Sheet metal rule: ${values.thickness} thick, ${values.bendRadius} radius.`);
+      setStatus(
+        `Sheet metal rule: ${state.doc.sheetMetalRule}, ${rules[at].thickness} thick.`
+      );
     }
   );
+}
+
+/**
+ * The rule row every sheet metal feature carries.
+ *
+ * Blank means the document's active rule, which is what nearly every feature
+ * wants. Naming one pins the feature to it, so a second part in a second
+ * material does not move the moment the active rule changes.
+ */
+function sheetRuleField() {
+  return {
+    key: 'rule',
+    label: 'Rule',
+    type: 'select',
+    options: () => [
+      ['', `Active rule (${state.doc.sheetMetalRule})`],
+      ...(state.doc.sheetMetalRules || []).map((r) => [r.name, r.name])
+    ],
+    get: (f) => f.rule || '',
+    set: (f, v) => {
+      f.rule = v || null;
+    }
+  };
+}
+
+/** Close the corner where two flanges run into each other. */
+function cmdMiter() {
+  if (state.sketcher.active) finishSketch();
+  if (!sheetBodies().length) {
+    setStatus('Miter works on a sheet metal body.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'miter',
+    bodies: pickedSheetIds(),
+    gap: '',
+    rule: null
+  };
+  openFeatureEditor(feature, 'Miter', miterFields());
+}
+
+function miterFields() {
+  return [
+    {
+      key: '__bodies',
+      label: 'Bodies',
+      type: 'pick',
+      pick: 'moveBodies',
+      summary: (f) => (f.bodies === 'all' ? 'every part' : countOf(f.bodies, 'part')),
+      clear: (f) => {
+        f.bodies = 'all';
+      }
+    },
+    { key: 'gap', label: 'Gap', type: 'expr' },
+    sheetRuleField(),
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Every corner where two flanges meet is run into and then cut on the plane that bisects them. A blank gap means the rule.'
+    }
+  ];
 }
 
 /** A flat sheet from a closed profile, which every later panel hangs off. */
@@ -9007,11 +9184,12 @@ function cmdCornerRelief() {
         f.bodies = 'all';
       }
     },
+    sheetRuleField(),
     {
       key: '__note',
       label: '',
       type: 'note',
-      text: 'The shape and size come from the rule.'
+      text: 'The shape and size come from the rule. Where three bends meet, the notch is cut big enough to clear all three.'
     }
   ]);
 }
@@ -9140,6 +9318,7 @@ function baseFlangeFields() {
         f.seeds = [];
       }
     },
+    sheetRuleField(),
     {
       key: '__note',
       label: '',
@@ -9177,6 +9356,7 @@ function flangeFields() {
     { key: 'height', label: 'Height', type: 'expr' },
     { key: 'angle', label: 'Angle', type: 'expr' },
     { key: 'radius', label: 'Bend radius', type: 'expr' },
+    sheetRuleField(),
     {
       key: 'bendPosition',
       label: 'Bend position',
@@ -9197,6 +9377,7 @@ function contourFlangeFields() {
   return [
     { key: 'width', label: 'Width', type: 'expr' },
     { key: 'radius', label: 'Bend radius', type: 'expr' },
+    sheetRuleField(),
     {
       key: '__note',
       label: '',
@@ -9260,6 +9441,7 @@ function ripFields() {
       }
     },
     { key: 'gap', label: 'Gap', type: 'expr' },
+    sheetRuleField(),
     {
       key: '__note',
       label: '',
@@ -11075,6 +11257,8 @@ function describeFeature(feature) {
       return { title: 'Refold', fields: unfoldFields(feature) };
     case 'rip':
       return { title: 'Rip', fields: ripFields() };
+    case 'miter':
+      return { title: 'Miter', fields: miterFields() };
     case 'surfaceExtrude':
       return { title: 'Extrude Surface', fields: surfaceExtrudeFields() };
     case 'surfaceRevolve':
@@ -11458,9 +11642,24 @@ function showInspector(title, fields, onOk) {
         }
       };
 
+      if (f.type === 'action') {
+        // The same row the feature editor has, so a panel that offers to add
+        // or remove something reads the same wherever it is shown.
+        const btn = document.createElement('button');
+        btn.textContent = f.label;
+        label.textContent = '';
+        btn.addEventListener('click', () => {
+          f.run();
+          draw();
+        });
+        wrap.appendChild(btn);
+        el.inspectorBody.appendChild(wrap);
+        continue;
+      }
+
       if (f.type === 'select') {
         const sel = document.createElement('select');
-        for (const [v, t] of f.options) {
+        for (const [v, t] of (typeof f.options === 'function' ? f.options() : f.options)) {
           const o = document.createElement('option');
           o.value = v;
           o.textContent = t;
@@ -11481,7 +11680,10 @@ function showInspector(title, fields, onOk) {
         input.value = current ?? '';
         input.addEventListener('input', () => {
           const n = Number(input.value);
-          take(f.get && Number.isFinite(n) ? n : input.value, false);
+          // A row that says it holds text keeps it. Without that a rule named
+          // for its alloy number stops being a name the moment it is typed.
+          const asNumber = f.get && f.type !== 'text' && Number.isFinite(n);
+          take(asNumber ? n : input.value, false);
         });
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') ok();
