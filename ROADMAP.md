@@ -8,7 +8,8 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.2.0**. 288 tests. Batches 1 to 9 shipped.
+Current version: **2.3.0**. 305 tests. Batches 1 to 9 shipped, and the first
+half of Batch 10.
 
 ---
 
@@ -195,6 +196,10 @@ recurring:
 - Wrap a driven demo's body in a try/catch that reports `err.stack`. Without it
   a failure is one line with no idea where, and finding it costs a run each
   time. Check it parses first: a demo is an async function body, not a module.
+- A body handle does not survive a rebuild: the last result's solids are freed.
+  Keep ids across a rebuild and look the body up again, never the object.
+- A demo that puts everything at the origin proves the arithmetic and shows
+  nothing. Lay the work out along an axis before taking the picture.
 
 ---
 
@@ -794,15 +799,75 @@ behind a uniform grid so the reprojection is not quadratic.
 
 ## Batch 10. Form, the sculpt workspace
 
-**Depends on:** Batch 7's sheet representation.
+He asked for it, and said it could take two sessions. **The first shipped in
+v2.3.0.** The second is below and has not been started.
 
-T-Splines: box/plane/cylinder/sphere/torus primitives, edit form, insert edge,
-subdivide, bridge, fill hole, weld, crease, thicken, convert.
+### Session one, shipped in v2.3.0
 
-This is subdivision surface modelling and it is the largest single item on this
-list, plausibly larger than everything above it put together. It is also the one
-least connected to printing a functional part. **Do not start it without asking
-him.**
+`src/renderer/form.js` and a Form tab. The control cage, Catmull-Clark with
+creases, the six primitives, every topological operation, symmetry, the three
+display modes, Finish Form and Thicken.
+
+A form is one timeline entry whose cage lives in `doc.forms`, beside the
+sketches and for the same reason: it is drawn rather than derived. The Form tab
+commands change the cage in place, the way sketch tools change a sketch, rather
+than adding a feature each.
+
+**What it is measured against.** Creased hard all round, Catmull-Clark
+reproduces the cage exactly, so a box of 20 stays 8000 at every level, to twelve
+decimal places. Face counts are exactly four times per step. A quadball of 20
+finishes at 33626 against a true sphere's 33510. Those are the checks worth
+keeping: a subdivision surface has few exact answers and those are three of them.
+
+**What was learned.**
+
+- **Subdivision does not pass through its own cage.** A round primitive has to
+  be fitted to its own limit surface or it comes out four fifths of the size
+  that was asked for. `fitToLimit` builds it, measures the limit, and scales.
+- **A cage face is one face only if the topology is told so.** Following smooth
+  joins splits a curved quad in two and merges a flat cage into one. A cage mesh
+  now tags each triangle with its cage face and sets `splitBySource`, which both
+  skips the angle test and skips the flat-patch pass. Solids are untouched.
+- **Mirror has to cut before it reflects.** Reflecting a cage whose faces
+  straddle the plane doubles them instead of halving it: 40 faces where there
+  should be 24. `splitCageByPlane` runs first.
+- **A cage built by hand has no reason to wind consistently.** Every primitive
+  goes through `orientCage`, or the kernel reads a negative volume and every
+  normal in the viewport points inward.
+- **The ribbon went to three rows** the moment the Modify group had twelve
+  buttons, exactly as the cross-cutting note warns. Insert, Weld, Crease and
+  Display are dropdown groups now.
+
+### Session two, not started
+
+**Edit Form**, which is the direct manipulation half and the reason the rest was
+built first. Everything below is documented on Fusion's own Edit Form reference
+page, which gives the option set verbatim:
+
+- A **3D gizmo** on the selection: translate along an axis or in a plane, rotate
+  about an axis, scale. Transform Mode picks which manipulators show: Multi,
+  Translation, Rotation, Scale.
+- **Coordinate Space**: World, View, Selection, Local Per Entity.
+- **Selection Filter**: Vertex, Edge, Face, All, Body. Vertex picking does not
+  exist anywhere in the app yet and will have to be built; face and edge picking
+  already work on a cage.
+- **Soft Modification**: Extent as a distance, a face count or a rectangular
+  face count; Transition smooth, linear or bulge; a weight.
+- **Selection helpers**: Grow and Shrink, Loop Grow and Shrink, Ring Grow and
+  Shrink, Select Next, Invert, Range.
+- **Live symmetry**: a drag on one half moves the other as it happens.
+  `mirrorMoves` in `form.js` already does the arithmetic; nothing calls it yet.
+- **Edit Form can also pull a new face out** of a selected one, which is how a
+  limb is drawn out of a body and the single most used thing in the workspace.
+
+The groundwork is all in place: cage picking works through the ordinary face and
+edge selection, `doc.forms` holds the cage, and `editCage` in `app.js` is the
+one place a change goes through.
+
+### Done when
+
+Version 2.4.0, and a face can be dragged out into a limb with the other half of
+a mirrored body following it.
 
 ---
 

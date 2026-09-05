@@ -76,6 +76,7 @@ import {
 import * as SH from '../src/renderer/sheet.js';
 import * as SM from '../src/renderer/sheetmetal.js';
 import * as MT from '../src/renderer/meshtools.js';
+import * as FM from '../src/renderer/form.js';
 import { screenUpFor, rollTheta, ISO_VIEW } from '../src/renderer/viewport.js';
 import { resolveDimensionExprs } from '../src/renderer/features.js';
 
@@ -6728,6 +6729,307 @@ async function run() {
     const P = SH.sheetPoints(out.bodies[0].sheet);
     const xs = P.map((p) => p[0]);
     near(Math.max(...xs) - Math.min(...xs), 254, 0.01, 'ten inches across');
+  });
+
+  /* -------- batch 10: form -------- */
+
+  const FXY = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+
+  /** A cage as a solid, so it can be measured rather than eyeballed. */
+  function formSolid(cage, levels, scope) {
+    const m = FM.formMesh(cage, levels);
+    return K.ofMesh(m.vertProperties, m.triVerts, scope);
+  }
+
+  test('form: every face becomes four, at every level', () => {
+    // The one thing about Catmull-Clark that is exactly true whatever the shape.
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    assert(box.faces.length === 6, `six to start, got ${box.faces.length}`);
+    const counts = [0, 1, 2, 3].map((n) => FM.subdivided(box, n).faces.length);
+    assert(
+      counts.join(',') === '6,24,96,384',
+      `four times each step, got ${counts.join(',')}`
+    );
+    // And every one of them is a quad after the first step, whatever it was.
+    const tri = FM.faceCage([[0, 0, 0], [10, 0, 0], [5, 8, 0]]);
+    const once = FM.subdivide(tri);
+    assert(once.faces.length === 3, 'a triangle becomes three faces');
+    assert(once.faces.every((f) => f.length === 4), 'and all of them are quads');
+  });
+
+  test('form: a fully creased cage is exactly the cage', () => {
+    // The exact test. With every edge and corner held sharp, Catmull-Clark
+    // reproduces the control mesh, so a box of 20 stays a box of 20 for ever.
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    const hard = FM.cloneCage(box);
+    for (const e of FM.adjacency(box).edges.values()) hard.creases[e.key] = 9;
+    for (let v = 0; v < box.points.length; v++) hard.corners[v] = 9;
+
+    const scope = new K.Scope();
+    for (const level of [0, 1, 2, 3]) {
+      const solid = formSolid(hard, level, scope);
+      assert(K.status(solid) === 'NoError', `a real solid at level ${level}`);
+      near(solid.volume(), 8000, 1e-6, `exactly the box at level ${level}`);
+    }
+    scope.dispose();
+  });
+
+  test('form: without creases it rounds off, and settles', () => {
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    const scope = new K.Scope();
+    const vols = [0, 1, 2, 3, 4].map((n) => formSolid(box, n, scope).volume());
+    for (let i = 1; i < vols.length; i++) {
+      assert(vols[i] < vols[i - 1], `it shrinks at every level, ${vols[i].toFixed(1)}`);
+    }
+    // And converges: the last step moves it far less than the first.
+    const first = vols[0] - vols[1];
+    const last = vols[3] - vols[4];
+    assert(last < first / 20, `it settles, ${last.toFixed(1)} against ${first.toFixed(1)}`);
+    scope.dispose();
+  });
+
+  test('form: a quadball really is the radius it was asked for', () => {
+    // Subdivision does not pass through its own cage, so a cage of points all
+    // exactly 20 out gives a surface nearer 17. The primitive is fitted to its
+    // own limit, and this is the check that the fitting works.
+    const scope = new K.Scope();
+    const ball = FM.quadballCage(FXY, 20, 2);
+    const solid = formSolid(ball, 2, scope);
+    assert(K.status(solid) === 'NoError', 'a real solid');
+    assert(solid.genus() === 0, 'and a plain ball');
+    const want = (4 / 3) * Math.PI * 8000;
+    near(solid.volume(), want, want * 0.02, 'a sphere of twenty');
+
+    // Twice the size is eight times the volume, which the fitting must not
+    // quietly break.
+    const big = formSolid(FM.quadballCage(FXY, 40, 2), 2, scope);
+    near(big.volume() / solid.volume(), 8, 0.15, 'and it scales');
+    scope.dispose();
+  });
+
+  test('form: every primitive closes, and the flat one does not', () => {
+    const scope = new K.Scope();
+    for (const [name, cage] of [
+      ['box', FM.boxCage(FXY, [20, 20, 20], [2, 2, 2])],
+      ['cylinder', FM.cylinderCage(FXY, 15, 40, 8, 2, true)],
+      ['sphere', FM.sphereCage(FXY, 15, 8, 6)],
+      ['torus', FM.torusCage(FXY, 20, 6, 12, 8)],
+      ['quadball', FM.quadballCage(FXY, 20, 2)]
+    ]) {
+      assert(FM.boundaryLoops(cage).length === 0, `${name} has no open edge`);
+      const solid = formSolid(cage, 2, scope);
+      assert(K.status(solid) === 'NoError', `${name} is a real solid`);
+      assert(solid.volume() > 0, `${name} is not inside out, ${solid.volume().toFixed(0)}`);
+    }
+    // A torus has a hole through it, which is the one place genus is not zero.
+    const torus = formSolid(FM.torusCage(FXY, 20, 6, 12, 8), 2, scope);
+    assert(torus.genus() === 1, `a torus has one hole, got ${torus.genus()}`);
+
+    const flat = FM.planeCage(FXY, 30, 30, 3, 3);
+    assert(FM.boundaryLoops(flat).length === 1, 'and a plane is open all round');
+    scope.dispose();
+  });
+
+  test('form: an uncapped cylinder is open at both ends', () => {
+    const open = FM.cylinderCage(FXY, 15, 40, 8, 2, false);
+    assert(FM.boundaryLoops(open).length === 2, 'two rims');
+    const capped = FM.cylinderCage(FXY, 15, 40, 8, 2, true);
+    assert(FM.boundaryLoops(capped).length === 0, 'and none when it is closed');
+  });
+
+  test('form: subdividing chosen faces leaves no crack', () => {
+    // The neighbour that was not subdivided has to take the new point into its
+    // own boundary, or the two disagree about the edge and the cage is torn.
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    const one = FM.subdivideFaces(box, [0]);
+    assert(one.faces.length === 9, `six less one plus four, got ${one.faces.length}`);
+    assert(FM.boundaryLoops(one).length === 0, 'and it is still closed');
+
+    const scope = new K.Scope();
+    const solid = formSolid(one, 2, scope);
+    assert(K.status(solid) === 'NoError', 'and still a solid');
+    scope.dispose();
+  });
+
+  test('form: an edge loop runs all the way round a ring of quads', () => {
+    const grid = FM.planeCage(FXY, 40, 40, 4, 4);
+    const ring = FM.edgeRing(grid, FM.adjacency(grid), 0, 1);
+    assert(ring.length === 4, `four quads across, got ${ring.length}`);
+
+    const looped = FM.insertEdgeLoop(grid, 0, 1, 0.5);
+    assert(looped, 'it inserted');
+    assert(looped.faces.length === 20, `sixteen plus four, got ${looped.faces.length}`);
+    assert(looped.points.length === 30, `twenty five plus five, got ${looped.points.length}`);
+    // The loop does not change the shape, only what there is to grab.
+    assert(FM.boundaryLoops(looped).length === 1, 'still one rim');
+  });
+
+  test('form: delete a face, then fill the hole it left', () => {
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    const holed = FM.deleteFaces(box, [0]);
+    assert(holed.faces.length === 5, 'five faces left');
+    assert(FM.boundaryLoops(holed).length === 1, 'and one hole');
+
+    const filled = FM.fillHole(holed, FM.boundaryLoops(holed)[0], 'single');
+    assert(filled.faces.length === 6, 'six again');
+    assert(FM.boundaryLoops(filled).length === 0, 'and closed again');
+
+    const fanned = FM.fillHole(holed, FM.boundaryLoops(holed)[0], 'fan');
+    assert(fanned.faces.length === 9, 'a fan puts four triangles in instead');
+    assert(FM.boundaryLoops(fanned).length === 0, 'and closes it too');
+  });
+
+  test('form: a crease holds an edge and then lets go', () => {
+    // Sharpness counts down a level each subdivision, so two holds it for two
+    // and the third rounds it off. That is what makes it a dial, not a switch.
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    const adj = FM.adjacency(box);
+    const first = [...adj.edges.values()][0];
+
+    const creased = FM.creaseEdges(box, [[first.a, first.b]], 2);
+    assert(creased.creases[first.key] === 2, 'it took the crease');
+    const once = FM.subdivide(creased);
+    const left = Object.values(once.creases);
+    assert(left.length === 2 && left.every((w) => w === 1), 'a level down, and split in two');
+    const twice = FM.subdivide(once);
+    assert(Object.keys(twice.creases).length === 0, 'and gone by the third');
+
+    const cleared = FM.creaseEdges(creased, [[first.a, first.b]], 0);
+    assert(!cleared.creases[first.key], 'and it can be taken off again');
+  });
+
+  test('form: mirror internal makes one half of it, twice', () => {
+    const ball = FM.quadballCage(FXY, 20, 2);
+    const mirrored = FM.mirrorInternal(ball, { origin: [0, 0, 0], n: [1, 0, 0] });
+    assert(mirrored, 'it mirrored');
+    assert(FM.boundaryLoops(mirrored).length === 0, 'and stayed closed');
+    assert(mirrored.symmetry?.kind === 'mirror', 'and remembers that it is symmetric');
+
+    // Exactly symmetric: every point has a twin at minus its own x.
+    const xs = mirrored.points.map((p) => +p[0].toFixed(6));
+    for (const x of xs) {
+      assert(xs.includes(-x), `every point has a twin, ${x} does not`);
+    }
+    // And it did not simply double the faces of a shape that straddled.
+    assert(
+      mirrored.faces.length === ball.faces.length,
+      `the same face count, got ${mirrored.faces.length} against ${ball.faces.length}`
+    );
+  });
+
+  test('form: circular internal repeats one wedge', () => {
+    const ring = FM.torusCage(FXY, 20, 6, 12, 8);
+    const six = FM.circularInternal(ring, { origin: [0, 0, 0], dir: [0, 0, 1] }, 6);
+    assert(six, 'it repeated');
+    assert(six.symmetry?.kind === 'circular', 'and remembers it');
+    assert(six.symmetry.count === 6, 'six of them');
+    assert(FM.boundaryLoops(six).length === 0, 'and it closed up');
+  });
+
+  test('form: welding joins points and unwelding gives them back', () => {
+    const cage = FM.newCage();
+    // Two squares that meet along an edge, but with their own points there.
+    cage.points = [
+      [0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0],
+      [10, 0, 0], [20, 0, 0], [20, 10, 0], [10, 10, 0]
+    ];
+    cage.faces = [[0, 1, 2, 3], [4, 5, 6, 7]];
+    assert(FM.boundaryLoops(cage).length === 2, 'two separate squares');
+
+    const welded = FM.weldVertices(cage, null, 1e-4);
+    assert(welded.points.length === 6, `six points left, got ${welded.points.length}`);
+    assert(FM.boundaryLoops(welded).length === 1, 'and one outline round both');
+
+    const apart = FM.unweldVertices(welded, [1, 2]);
+    assert(apart.points.length === 8, `and unwelding gives them back, got ${apart.points.length}`);
+  });
+
+  test('form: flatten pulls points onto a plane and nothing else moves', () => {
+    const box = FM.boxCage(FXY, [20, 20, 20], [1, 1, 1]);
+    const top = box.points.map((p, i) => (p[2] > 0 ? i : -1)).filter((i) => i >= 0);
+    const flat = FM.flatten(box, top, { origin: [0, 0, 5], n: [0, 0, 1] });
+    for (const i of top) near(flat.points[i][2], 5, 1e-9, 'the chosen points landed');
+    for (let i = 0; i < box.points.length; i++) {
+      if (top.includes(i)) continue;
+      near(flat.points[i][2], box.points[i][2], 1e-9, 'and nothing else moved');
+    }
+  });
+
+  test('form: through the timeline, a form and then a solid', () => {
+    const doc = newDocument();
+    const cage = FM.quadballCage(FXY, 20, 2);
+    doc.forms.f1 = cage;
+    const formId = uid('f');
+    doc.features = [
+      { id: formId, type: 'form', form: 'f1', levels: '2', display: 'control' }
+    ];
+    let out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies.length === 1, 'the form is a body');
+    assert(out.bodies[0].form === 'f1', 'and it knows which cage it is');
+    assert(!out.bodies[0].solid, 'and has not reached the kernel');
+    assert(out.bodies[0].overlayMesh, 'and carries the surface to draw behind it');
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'finishForm',
+      bodies: 'all',
+      levels: '3',
+      op: 'new',
+      targets: 'all'
+    });
+    out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies.length === 1, `one body, got ${out.bodies.length}`);
+    assert(out.bodies[0].solid, 'now it is a solid');
+    const want = (4 / 3) * Math.PI * 8000;
+    near(out.bodies[0].solid.volume(), want, want * 0.02, 'a ball of twenty');
+  });
+
+  test('form: finishing an open form is refused, thickening it is not', () => {
+    const doc = newDocument();
+    doc.forms.f1 = FM.planeCage(FXY, 40, 40, 3, 3);
+    doc.features = [
+      { id: uid('f'), type: 'form', form: 'f1', levels: '2', display: 'box' },
+      { id: uid('f'), type: 'finishForm', bodies: 'all', levels: '2', op: 'new' }
+    ];
+    let out = rebuild(doc);
+    assert(out.errors.length === 1, `it refuses an open form, got ${out.errors.length}`);
+    assert(/not closed/.test(out.errors[0].message), out.errors[0].message);
+
+    doc.features[1] = {
+      id: uid('f'),
+      type: 'formThicken',
+      bodies: 'all',
+      levels: '2',
+      distance: '3',
+      op: 'new'
+    };
+    out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    const solid = out.bodies.find((b) => b.solid);
+    assert(solid, 'thickening gives a solid');
+    // A flat sheet, so the volume is its area times the thickness, near enough:
+    // the smooth surface is a little smaller than the cage it came from.
+    assert(solid.solid.volume() > 2000, `and it has some size to it, ${solid.solid.volume().toFixed(0)}`);
+  });
+
+  test('form: one cage face is one selectable face', () => {
+    // The cage mesh tags each triangle with the face it came from, and the
+    // topology is told to keep those apart. Without that a flat cage is a
+    // single face and there is nothing at all to point at.
+    const grid = FM.planeCage(FXY, 40, 40, 3, 3);
+    const mesh = FM.cageToMesh(grid);
+    const topo = buildTopology(mesh);
+    assert(topo.faces.length === 9, `nine faces, got ${topo.faces.length}`);
+    const sources = topo.faces.map((f) => f.src?.face);
+    assert(new Set(sources).size === 9, 'each from its own cage face');
+
+    // And a solid is not affected: there, merging by angle is the whole point.
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([20, 20, 20], true, scope));
+    assert(buildTopology(box).faces.length === 6, 'a box is still six faces');
+    scope.dispose();
   });
 
   /* -------- report -------- */

@@ -132,6 +132,18 @@ export function buildTopology(mesh, opts = {}) {
   const smoothDeg = opts.smoothDeg ?? SMOOTH_DEG;
   const cosSmooth = Math.cos((smoothDeg * Math.PI) / 180);
 
+  /** Which feature and face a triangle came from, as one comparable string. */
+  const srcOf = (t) =>
+    mesh.triTag && mesh.triTag[t]
+      ? `${mesh.triTag[t]}|${mesh.triFaceID[t]}`
+      : null;
+
+  // A mesh can ask for its own faces to be kept apart rather than merged by
+  // angle. A control cage does: two quads of it lying dead flat against each
+  // other are still two faces, and merging them leaves nothing to point at.
+  // Solids do not, because there the angle is the whole point.
+  const splitBySource = !!mesh.splitBySource;
+
   /** Neighbouring triangles across a shared welded edge. */
   const neighboursOf = (t) => {
     const found = [];
@@ -186,7 +198,14 @@ export function buildTopology(mesh, opts = {}) {
           members.push(other);
           continue;
         }
-        if (dot(tn, N(other)) < cosSmooth) continue; // a real edge
+        if (splitBySource) {
+          // A cage says which face each triangle belongs to, and that is the
+          // whole answer: the angle between two halves of one curved quad is
+          // neither here nor there, and going by it splits a face in two.
+          if (srcOf(t) !== srcOf(other)) continue;
+        } else if (dot(tn, N(other)) < cosSmooth) {
+          continue; // a real edge
+        }
         group[other] = id;
         stack.push(other);
       }
@@ -321,10 +340,7 @@ export function buildTopology(mesh, opts = {}) {
   }
 
   /** Which feature and face a triangle came from, as one comparable string. */
-  const sourceKey = (t) =>
-    mesh.triTag && mesh.triTag[t]
-      ? `${mesh.triTag[t]}|${mesh.triFaceID[t]}`
-      : null;
+  const sourceKey = srcOf;
 
   /** Connected runs of exactly-coplanar triangles inside one surface. */
   const coplanarPatches = (members) => {
@@ -375,6 +391,15 @@ export function buildTopology(mesh, opts = {}) {
   for (const members of groups) {
     const solid = members.filter((t) => !degenerate[t]);
     if (!solid.length) continue;
+
+    // A cage has already said what its faces are, so there is nothing to work
+    // out. Splitting a group into its flat patches would break every curved
+    // quad back into the two triangles it is drawn with.
+    if (splitBySource) {
+      const flat = coplanarPatches(members);
+      addFace(solid, flat.length === 1, flat.length === 1 ? flat[0].normal : null);
+      continue;
+    }
 
     const patches = coplanarPatches(members);
     if (!patches.length) {

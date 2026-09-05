@@ -1,0 +1,1306 @@
+/**
+ * Form: subdivision surface modelling, the sculpt side of the app.
+ *
+ * A form is a **control cage**, a coarse polygon mesh, plus the smooth surface
+ * that cage implies. You edit the cage, which has a handful of faces you can
+ * actually grab, and the surface follows. Catmull-Clark is what turns one into
+ * the other, and it is the whole of the geometry here: everything else in this
+ * file either builds a cage, changes its topology, or reads the surface off it.
+ *
+ * The cage is stored in the document the way a sketch is, because nothing in
+ * the timeline can reproduce it: it is drawn rather than derived. A form body
+ * is a surface until Finish Form, which is the point it becomes a solid the
+ * rest of the app can boolean.
+ *
+ * Faces are ordered lists of point indices, of any length. Quads are what
+ * subdivision wants and what every primitive here makes, but a triangle or a
+ * five sided face is legal and subdivides correctly: after one step everything
+ * is quads regardless, which is the property the whole scheme rests on.
+ */
+
+const EPS = 1e-12;
+
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0]
+];
+const len = (a) => Math.hypot(a[0], a[1], a[2]);
+const unit = (a) => {
+  const l = len(a);
+  return l > EPS ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 0];
+};
+
+/** The key an undirected edge is filed under. */
+export const edgeKey = (a, b) => `${Math.min(a, b)}_${Math.max(a, b)}`;
+
+/* ------------------------------------------------------------------ cages */
+
+export function newCage() {
+  return { points: [], faces: [], creases: {}, corners: {} };
+}
+
+export function cloneCage(cage) {
+  return {
+    points: cage.points.map((p) => [p[0], p[1], p[2]]),
+    faces: cage.faces.map((f) => f.slice()),
+    creases: { ...cage.creases },
+    corners: { ...cage.corners },
+    symmetry: cage.symmetry ? { ...cage.symmetry } : undefined
+  };
+}
+
+/**
+ * Who touches what.
+ *
+ * Rebuilt on demand rather than kept alongside the cage, because every
+ * operation here changes the topology and a stale adjacency is worse than no
+ * adjacency at all.
+ */
+export function adjacency(cage) {
+  const edges = new Map();
+  const facesAt = cage.points.map(() => []);
+  const edgesAt = cage.points.map(() => []);
+
+  cage.faces.forEach((face, fi) => {
+    for (let i = 0; i < face.length; i++) {
+      const a = face[i];
+      const b = face[(i + 1) % face.length];
+      facesAt[a].push(fi);
+      const k = edgeKey(a, b);
+      let e = edges.get(k);
+      if (!e) {
+        e = { key: k, a: Math.min(a, b), b: Math.max(a, b), faces: [] };
+        edges.set(k, e);
+        edgesAt[e.a].push(k);
+        edgesAt[e.b].push(k);
+      }
+      e.faces.push(fi);
+    }
+  });
+  return { edges, facesAt, edgesAt };
+}
+
+/** Every edge that has only one face on it: the rim of an open cage. */
+export function boundaryEdges(cage, adj = adjacency(cage)) {
+  return [...adj.edges.values()].filter((e) => e.faces.length === 1);
+}
+
+/** The rim, walked into loops. */
+export function boundaryLoops(cage, adj = adjacency(cage)) {
+  const open = boundaryEdges(cage, adj);
+  const next = new Map();
+  for (const e of open) {
+    if (!next.has(e.a)) next.set(e.a, []);
+    if (!next.has(e.b)) next.set(e.b, []);
+    next.get(e.a).push(e.b);
+    next.get(e.b).push(e.a);
+  }
+  const seen = new Set();
+  const loops = [];
+  for (const e of open) {
+    if (seen.has(e.key)) continue;
+    const loop = [e.a, e.b];
+    seen.add(e.key);
+    let guard = 0;
+    while (guard++ < 1e5) {
+      const end = loop[loop.length - 1];
+      const step = (next.get(end) || []).find(
+        (v) => !seen.has(edgeKey(end, v))
+      );
+      if (step === undefined) break;
+      seen.add(edgeKey(end, step));
+      if (step === loop[0]) break;
+      loop.push(step);
+    }
+    if (loop.length > 2) loops.push(loop);
+  }
+  return loops;
+}
+
+/* ---------------------------------------------------------- subdivision */
+
+/**
+ * One step of Catmull-Clark.
+ *
+ * Every face becomes a quad per corner, built from the corner, the two edge
+ * points either side of it, and the face's own centre. Where an edge is creased
+ * or on the rim it keeps its own shape instead of being averaged into the
+ * surface, and a crease loses a level of sharpness each step, which is what
+ * makes a sharpness of two hold an edge for two subdivisions and then let go.
+ */
+export function subdivide(cage) {
+  const adj = adjacency(cage);
+  const P = cage.points;
+  const out = [];
+  const creases = {};
+  const corners = {};
+
+  // Face points.
+  const facePoint = cage.faces.map((face) => {
+    let c = [0, 0, 0];
+    for (const v of face) c = add(c, P[v]);
+    return mul(c, 1 / face.length);
+  });
+  const faceIndex = facePoint.map((p) => out.push(p) - 1);
+
+  // Edge points.
+  const edgeIndex = new Map();
+  for (const e of adj.edges.values()) {
+    const sharp = cage.creases[e.key] || 0;
+    const mid = mul(add(P[e.a], P[e.b]), 0.5);
+    let point = mid;
+    if (e.faces.length === 2 && sharp < 1) {
+      const smooth = mul(
+        add(add(P[e.a], P[e.b]), add(facePoint[e.faces[0]], facePoint[e.faces[1]])),
+        0.25
+      );
+      // A sharpness between nothing and one is a blend, which is what makes a
+      // crease adjustable rather than on or off.
+      point = sharp > 0 ? add(mul(smooth, 1 - sharp), mul(mid, sharp)) : smooth;
+    }
+    edgeIndex.set(e.key, out.push(point) - 1);
+    }
+
+  // Vertex points.
+  const vertexIndex = P.map((p, v) => {
+    const around = adj.edgesAt[v].map((k) => adj.edges.get(k));
+    const faces = [...new Set(adj.facesAt[v])];
+    const n = around.length;
+
+    const cornerWeight = cage.corners[v] || 0;
+    const sharpEdges = around.filter(
+      (e) => (cage.creases[e.key] || 0) >= 1 || e.faces.length === 1
+    );
+
+    // A corner, or a vertex where three or more sharp edges meet, does not
+    // move at all: that is what makes the tip of a creased box stay a tip.
+    if (cornerWeight >= 1 || sharpEdges.length > 2) return out.push(p.slice()) - 1;
+
+    if (sharpEdges.length === 2) {
+      // On a crease or a rim the vertex follows the crease alone, which keeps
+      // the line of it smooth without the surface either side pulling on it.
+      const m = sharpEdges.map((e) => P[e.a === v ? e.b : e.a]);
+      const crease = mul(add(add(m[0], m[1]), mul(p, 6)), 1 / 8);
+      return out.push(crease) - 1;
+    }
+
+    if (!n || !faces.length) return out.push(p.slice()) - 1;
+
+    let F = [0, 0, 0];
+    for (const fi of faces) F = add(F, facePoint[fi]);
+    F = mul(F, 1 / faces.length);
+
+    let R = [0, 0, 0];
+    for (const e of around) R = add(R, mul(add(P[e.a], P[e.b]), 0.5));
+    R = mul(R, 1 / n);
+
+    const moved = mul(add(add(F, mul(R, 2)), mul(p, n - 3)), 1 / n);
+    return out.push(moved) - 1;
+  });
+
+  // The faces: one quad per corner of every original face.
+  const faces = [];
+  cage.faces.forEach((face, fi) => {
+    for (let i = 0; i < face.length; i++) {
+      const v = face[i];
+      const prev = face[(i - 1 + face.length) % face.length];
+      const next = face[(i + 1) % face.length];
+      faces.push([
+        vertexIndex[v],
+        edgeIndex.get(edgeKey(v, next)),
+        faceIndex[fi],
+        edgeIndex.get(edgeKey(prev, v))
+      ]);
+    }
+  });
+
+  // Creases carry down a level, one sharpness less.
+  for (const e of adj.edges.values()) {
+    const sharp = cage.creases[e.key] || 0;
+    if (sharp <= 0) continue;
+    const left = Math.max(0, sharp - 1);
+    if (left <= 0) continue;
+    const mid = edgeIndex.get(e.key);
+    creases[edgeKey(vertexIndex[e.a], mid)] = left;
+    creases[edgeKey(mid, vertexIndex[e.b])] = left;
+  }
+  for (const [v, w] of Object.entries(cage.corners)) {
+    if (w > 0) corners[vertexIndex[Number(v)]] = Math.max(0, w - 1);
+  }
+
+  return { points: out, faces, creases, corners, symmetry: cage.symmetry };
+}
+
+/** The cage subdivided a few times, which is the surface it stands for. */
+export function subdivided(cage, levels = 2) {
+  let out = cage;
+  for (let i = 0; i < Math.max(0, Math.min(5, levels)); i++) out = subdivide(out);
+  return out;
+}
+
+/**
+ * A cage as triangles, in the shape the rest of the app passes meshes around.
+ *
+ * Quads are split on the shorter diagonal, which keeps a saddle looking like a
+ * saddle instead of folding it along whichever way the indices happened to run.
+ */
+export function cageToMesh(cage) {
+  const P = cage.points;
+  const tris = [];
+  // Which cage face each triangle came from, kept in step with the triangles.
+  const triFace = [];
+  const emit = (fi, ...idx) => {
+    for (let i = 0; i < idx.length; i += 3) triFace.push(fi);
+    tris.push(...idx);
+  };
+
+  cage.faces.forEach((face, fi) => {
+    if (face.length < 3) return;
+    if (face.length === 3) {
+      emit(fi, face[0], face[1], face[2]);
+      return;
+    }
+    if (face.length === 4) {
+      const [a, b, c, d] = face;
+      // The shorter diagonal, so a saddle looks like a saddle rather than
+      // folding along whichever way the indices happened to run.
+      const ac = len(sub(P[c], P[a]));
+      const bd = len(sub(P[d], P[b]));
+      if (ac <= bd) emit(fi, a, b, c, a, c, d);
+      else emit(fi, a, b, d, b, c, d);
+      return;
+    }
+    // Anything larger is fanned. After one subdivision everything is a quad, so
+    // this only ever sees the cage itself, where a fan is good enough to draw.
+    emit(fi, ...fanFace(face));
+  });
+
+  const verts = new Float32Array(P.length * 3);
+  for (let i = 0; i < P.length; i++) {
+    verts[i * 3] = P[i][0];
+    verts[i * 3 + 1] = P[i][1];
+    verts[i * 3 + 2] = P[i][2];
+  }
+  return {
+    numProp: 3,
+    vertProperties: verts,
+    triVerts: new Uint32Array(tris),
+    // Which cage face each triangle belongs to. The topology reads this and
+    // refuses to merge triangles that disagree, so one cage face stays one
+    // selectable face however flat it lies against its neighbour. Without it a
+    // flat cage is a single face and there is nothing to point at.
+    triTag: triFace.map(() => 'cage'),
+    triFaceID: Int32Array.from(triFace),
+    splitBySource: true
+  };
+}
+
+function fanFace(face) {
+  const out = [];
+  for (let i = 1; i + 1 < face.length; i++) out.push(face[0], face[i], face[i + 1]);
+  return out;
+}
+
+/** The smooth surface, as triangles. */
+export function formMesh(cage, levels = 2) {
+  return cageToMesh(subdivided(cage, levels));
+}
+
+/**
+ * Wind every face the same way round, and outward.
+ *
+ * A cage built by hand has no reason to agree with itself, and a mesh whose
+ * faces disagree has no inside: the kernel reads it as having negative volume
+ * and every normal in the viewport points the wrong way. Walking from one face
+ * to its neighbours settles which way round they go, and the sign of the
+ * enclosed volume settles which of the two answers is out.
+ */
+export function orientCage(cage) {
+  const faces = cage.faces.map((f) => f.slice());
+  if (!faces.length) return cage;
+
+  const across = new Map();
+  faces.forEach((face, fi) => {
+    for (let i = 0; i < face.length; i++) {
+      const k = edgeKey(face[i], face[(i + 1) % face.length]);
+      if (!across.has(k)) across.set(k, []);
+      across.get(k).push(fi);
+    }
+  });
+
+  const done = new Set();
+  for (let start = 0; start < faces.length; start++) {
+    if (done.has(start)) continue;
+    done.add(start);
+    const queue = [start];
+    while (queue.length) {
+      const fi = queue.pop();
+      const face = faces[fi];
+      for (let i = 0; i < face.length; i++) {
+        const a = face[i];
+        const b = face[(i + 1) % face.length];
+        for (const fj of across.get(edgeKey(a, b)) || []) {
+          if (fj === fi || done.has(fj)) continue;
+          const other = faces[fj];
+          // Neighbours that agree cross their shared edge in opposite
+          // directions. Reading it the same way means one is flipped.
+          let sameWay = false;
+          for (let j = 0; j < other.length; j++) {
+            if (other[j] === a && other[(j + 1) % other.length] === b) sameWay = true;
+          }
+          if (sameWay) faces[fj] = other.slice().reverse();
+          done.add(fj);
+          queue.push(fj);
+        }
+      }
+    }
+  }
+
+  // Six times the enclosed volume, which only needs its sign to be read.
+  let vol = 0;
+  for (const face of faces) {
+    for (let i = 1; i + 1 < face.length; i++) {
+      const a = cage.points[face[0]];
+      const b = cage.points[face[i]];
+      const c = cage.points[face[i + 1]];
+      vol += dot(a, cross(b, c));
+    }
+  }
+  const out = cloneCage(cage);
+  out.faces = vol < 0 ? faces.map((f) => f.slice().reverse()) : faces;
+  return out;
+}
+
+/**
+ * Move a cage so the surface it stands for is the size that was asked for.
+ *
+ * Subdivision does not pass through its own cage: the smooth surface sits well
+ * inside it, and a ball whose cage points are all exactly 20 from the middle
+ * comes out nearer 17. Nobody asking for a radius of 20 means the cage, so the
+ * cage is measured against its own limit once and scaled to suit.
+ */
+export function fitToLimit(cage, measure, target, apply, levels = 3) {
+  const got = measure(subdivided(cage, levels));
+  if (!(got > EPS) || !(target > EPS)) return cage;
+  const out = cloneCage(cage);
+  out.points = out.points.map((p) => apply(p, target / got));
+  return out;
+}
+
+/** The average distance from a point, over a cage's own points. */
+export function meanRadius(cage, centre) {
+  if (!cage.points.length) return 0;
+  let total = 0;
+  for (const p of cage.points) total += len(sub(p, centre));
+  return total / cage.points.length;
+}
+
+/** The largest distance from an axis, over a cage's own points. */
+export function maxAxialRadius(cage, origin, dir) {
+  let most = 0;
+  for (const p of cage.points) {
+    const d = sub(p, origin);
+    most = Math.max(most, len(sub(d, mul(dir, dot(d, dir)))));
+  }
+  return most;
+}
+
+/* ------------------------------------------------------------ primitives */
+
+/** A point on a plane's own coordinates, in the world. */
+function at(plane, u, v, w = 0) {
+  return [
+    plane.origin[0] + plane.x[0] * u + plane.y[0] * v + plane.n[0] * w,
+    plane.origin[1] + plane.x[1] * u + plane.y[1] * v + plane.n[1] * w,
+    plane.origin[2] + plane.x[2] * u + plane.y[2] * v + plane.n[2] * w
+  ];
+}
+
+/** A flat grid of quads. */
+export function planeCage(plane, width, height, nx = 2, ny = 2) {
+  const cage = newCage();
+  const cols = Math.max(1, Math.round(nx));
+  const rows = Math.max(1, Math.round(ny));
+  for (let r = 0; r <= rows; r++) {
+    for (let c = 0; c <= cols; c++) {
+      cage.points.push(
+        at(plane, -width / 2 + (width * c) / cols, -height / 2 + (height * r) / rows)
+      );
+    }
+  }
+  const id = (r, c) => r * (cols + 1) + c;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      cage.faces.push([id(r, c), id(r, c + 1), id(r + 1, c + 1), id(r + 1, c)]);
+    }
+  }
+  return cage;
+}
+
+/** A box of quads, divided as asked in each direction. */
+export function boxCage(plane, size, divisions = [2, 2, 2]) {
+  const [w, d, h] = size;
+  const [nx, ny, nz] = divisions.map((v) => Math.max(1, Math.round(v)));
+  const cage = newCage();
+  const index = new Map();
+
+  const key = (i, j, k) => `${i}_${j}_${k}`;
+  const point = (i, j, k) => {
+    const kk = key(i, j, k);
+    if (index.has(kk)) return index.get(kk);
+    const p = at(
+      plane,
+      -w / 2 + (w * i) / nx,
+      -d / 2 + (d * j) / ny,
+      -h / 2 + (h * k) / nz
+    );
+    index.set(kk, cage.points.push(p) - 1);
+    return index.get(kk);
+  };
+
+  // Only the shell: the six sides, each a grid, sharing their edges.
+  const quad = (a, b, c, d2) => cage.faces.push([a, b, c, d2]);
+  for (let i = 0; i < nx; i++) {
+    for (let j = 0; j < ny; j++) {
+      quad(point(i, j, 0), point(i + 1, j, 0), point(i + 1, j + 1, 0), point(i, j + 1, 0));
+      quad(point(i, j, nz), point(i, j + 1, nz), point(i + 1, j + 1, nz), point(i + 1, j, nz));
+    }
+  }
+  for (let i = 0; i < nx; i++) {
+    for (let k = 0; k < nz; k++) {
+      quad(point(i, 0, k), point(i, 0, k + 1), point(i + 1, 0, k + 1), point(i + 1, 0, k));
+      quad(point(i, ny, k), point(i + 1, ny, k), point(i + 1, ny, k + 1), point(i, ny, k + 1));
+    }
+  }
+  for (let j = 0; j < ny; j++) {
+    for (let k = 0; k < nz; k++) {
+      quad(point(0, j, k), point(0, j + 1, k), point(0, j + 1, k + 1), point(0, j, k + 1));
+      quad(point(nx, j, k), point(nx, j, k + 1), point(nx, j + 1, k + 1), point(nx, j + 1, k));
+    }
+  }
+  return orientCage(cage);
+}
+
+/** A tube of quads, optionally closed at each end. */
+export function cylinderCage(plane, radius, height, sides = 8, rows = 2, capped = true) {
+  const cage = newCage();
+  const n = Math.max(3, Math.round(sides));
+  const r = Math.max(1, Math.round(rows));
+  for (let k = 0; k <= r; k++) {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      cage.points.push(
+        at(plane, radius * Math.cos(a), radius * Math.sin(a), -height / 2 + (height * k) / r)
+      );
+    }
+  }
+  const id = (k, i) => k * n + (i % n);
+  for (let k = 0; k < r; k++) {
+    for (let i = 0; i < n; i++) {
+      cage.faces.push([id(k, i), id(k, i + 1), id(k + 1, i + 1), id(k + 1, i)]);
+    }
+  }
+  if (capped) {
+    const bottom = [];
+    const top = [];
+    for (let i = 0; i < n; i++) {
+      bottom.push(id(0, n - 1 - i));
+      top.push(id(r, i));
+    }
+    cage.faces.push(bottom, top);
+  }
+  const axis = unit(plane.n);
+  return orientCage(
+    fitToLimit(
+      cage,
+      (c) => maxAxialRadius(c, plane.origin, axis),
+      radius,
+      (p, k) => {
+        // Radially only: the height was asked for as well and must not move.
+        const d = sub(p, plane.origin);
+        const along = mul(axis, dot(d, axis));
+        return add(plane.origin, add(along, mul(sub(d, along), k)));
+      }
+    )
+  );
+}
+
+/** A ball of quads, with a pole at each end. */
+export function sphereCage(plane, radius, sides = 8, rows = 6) {
+  const cage = newCage();
+  const n = Math.max(3, Math.round(sides));
+  const r = Math.max(2, Math.round(rows));
+  const south = cage.points.push(at(plane, 0, 0, -radius)) - 1;
+  const ringStart = cage.points.length;
+  for (let k = 1; k < r; k++) {
+    const phi = Math.PI * (k / r);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      cage.points.push(
+        at(
+          plane,
+          radius * Math.sin(phi) * Math.cos(a),
+          radius * Math.sin(phi) * Math.sin(a),
+          -radius * Math.cos(phi)
+        )
+      );
+    }
+  }
+  const north = cage.points.push(at(plane, 0, 0, radius)) - 1;
+  const id = (k, i) => ringStart + (k - 1) * n + (i % n);
+
+  for (let i = 0; i < n; i++) cage.faces.push([south, id(1, i + 1), id(1, i)]);
+  for (let k = 1; k < r - 1; k++) {
+    for (let i = 0; i < n; i++) {
+      cage.faces.push([id(k, i), id(k, i + 1), id(k + 1, i + 1), id(k + 1, i)]);
+    }
+  }
+  for (let i = 0; i < n; i++) cage.faces.push([north, id(r - 1, i), id(r - 1, i + 1)]);
+  return orientCage(
+    fitToLimit(
+      cage,
+      (c) => meanRadius(c, plane.origin),
+      radius,
+      (p, k) => add(plane.origin, mul(sub(p, plane.origin), k))
+    )
+  );
+}
+
+/** A ring of quads. */
+export function torusCage(plane, ringRadius, tubeRadius, ringSides = 12, tubeSides = 8) {
+  const cage = newCage();
+  const R = Math.max(3, Math.round(ringSides));
+  const T = Math.max(3, Math.round(tubeSides));
+  for (let i = 0; i < R; i++) {
+    const a = (i / R) * Math.PI * 2;
+    for (let j = 0; j < T; j++) {
+      const b = (j / T) * Math.PI * 2;
+      const rad = ringRadius + tubeRadius * Math.cos(b);
+      cage.points.push(
+        at(plane, rad * Math.cos(a), rad * Math.sin(a), tubeRadius * Math.sin(b))
+      );
+    }
+  }
+  const id = (i, j) => (i % R) * T + (j % T);
+  for (let i = 0; i < R; i++) {
+    for (let j = 0; j < T; j++) {
+      cage.faces.push([id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j + 1)]);
+    }
+  }
+
+  // A torus has two sizes to hit, so both are measured off the limit: how far
+  // the surface reaches from the axis at its widest and its narrowest gives the
+  // ring and the tube it actually came out as.
+  const axis = unit(plane.n);
+  const radii = (c) => {
+    let lo = Infinity;
+    let hi = 0;
+    for (const p of c.points) {
+      const d = sub(p, plane.origin);
+      const rad = len(sub(d, mul(axis, dot(d, axis))));
+      lo = Math.min(lo, rad);
+      hi = Math.max(hi, rad);
+    }
+    return { ring: (hi + lo) / 2, tube: (hi - lo) / 2 };
+  };
+  const got = radii(subdivided(cage, 3));
+  if (got.ring > EPS && got.tube > EPS) {
+    const kr = ringRadius / got.ring;
+    const kt = tubeRadius / got.tube;
+    cage.points = cage.points.map((p) => {
+      const d = sub(p, plane.origin);
+      const along = mul(axis, dot(d, axis));
+      const flat = sub(d, along);
+      const rad = len(flat);
+      const outward = rad > EPS ? mul(flat, 1 / rad) : [0, 0, 0];
+      const onRing = mul(outward, got.ring);
+      const fromRing = add(sub(flat, onRing), along);
+      return add(plane.origin, add(mul(onRing, kr), mul(fromRing, kt)));
+    });
+  }
+  return orientCage(cage);
+}
+
+/**
+ * A ball made of six grids rather than of rings and poles.
+ *
+ * Six quads pushed out onto a sphere. It has no poles, so every vertex has four
+ * neighbours and the surface has no pinch in it: this is the one to start a
+ * rounded shape from, which is why Fusion gives it its own button.
+ */
+export function quadballCage(plane, radius, divisions = 3) {
+  const n = Math.max(1, Math.round(divisions));
+  const cage = newCage();
+  const index = new Map();
+  const key = (p) =>
+    `${Math.round(p[0] * 1e5)},${Math.round(p[1] * 1e5)},${Math.round(p[2] * 1e5)}`;
+
+  const push = (x, y, z) => {
+    const onBall = mul(unit([x, y, z]), radius);
+    const k = key(onBall);
+    if (index.has(k)) return index.get(k);
+    index.set(k, cage.points.push(at(plane, onBall[0], onBall[1], onBall[2])) - 1);
+    return index.get(k);
+  };
+
+  // The six faces of a cube, each a grid, each point pushed out to the radius.
+  const dirs = [
+    [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    [[-1, 0, 0], [0, -1, 0], [0, 0, 1]],
+    [[0, 1, 0], [-1, 0, 0], [0, 0, 1]],
+    [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+    [[0, 0, 1], [1, 0, 0], [0, 1, 0]],
+    [[0, 0, -1], [-1, 0, 0], [0, 1, 0]]
+  ];
+  for (const [normal, u, v] of dirs) {
+    const grid = [];
+    for (let i = 0; i <= n; i++) {
+      const row = [];
+      for (let j = 0; j <= n; j++) {
+        const s = -1 + (2 * i) / n;
+        const t = -1 + (2 * j) / n;
+        row.push(
+          push(
+            normal[0] + u[0] * s + v[0] * t,
+            normal[1] + u[1] * s + v[1] * t,
+            normal[2] + u[2] * s + v[2] * t
+          )
+        );
+      }
+      grid.push(row);
+    }
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        cage.faces.push([grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]]);
+      }
+    }
+  }
+  return orientCage(
+    fitToLimit(
+      cage,
+      (c) => meanRadius(c, plane.origin),
+      radius,
+      (p, k) => add(plane.origin, mul(sub(p, plane.origin), k))
+    )
+  );
+}
+
+/** A single face from a run of points, which is where a hand made shape starts. */
+export function faceCage(points) {
+  const cage = newCage();
+  for (const p of points) cage.points.push([p[0], p[1], p[2]]);
+  cage.faces.push(points.map((_, i) => i));
+  return cage;
+}
+
+/* ------------------------------------------------------------- topology */
+
+/** Take faces out, and the points nothing uses any more with them. */
+export function deleteFaces(cage, faceIds) {
+  const drop = new Set(faceIds);
+  const kept = cage.faces.filter((_, i) => !drop.has(i));
+  return compactCage({ ...cloneCage(cage), faces: kept });
+}
+
+/** The same cage with only the points its faces use. */
+export function compactCage(cage) {
+  const map = new Map();
+  const points = [];
+  const faces = cage.faces.map((face) =>
+    face.map((v) => {
+      if (!map.has(v)) {
+        map.set(v, points.length);
+        points.push(cage.points[v]);
+      }
+      return map.get(v);
+    })
+  );
+  const creases = {};
+  for (const [k, w] of Object.entries(cage.creases || {})) {
+    const [a, b] = k.split('_').map(Number);
+    if (map.has(a) && map.has(b)) creases[edgeKey(map.get(a), map.get(b))] = w;
+  }
+  const corners = {};
+  for (const [v, w] of Object.entries(cage.corners || {})) {
+    if (map.has(Number(v))) corners[map.get(Number(v))] = w;
+  }
+  return { points, faces, creases, corners, symmetry: cage.symmetry };
+}
+
+/** Split every chosen face into one quad per corner. */
+export function subdivideFaces(cage, faceIds) {
+  const drop = new Set(faceIds);
+  if (!drop.size) return cage;
+  const out = cloneCage(cage);
+  const midOf = new Map();
+  const mid = (a, b) => {
+    const k = edgeKey(a, b);
+    if (midOf.has(k)) return midOf.get(k);
+    const i = out.points.push(mul(add(out.points[a], out.points[b]), 0.5)) - 1;
+    midOf.set(k, i);
+    return i;
+  };
+
+  const faces = [];
+  cage.faces.forEach((face, fi) => {
+    if (!drop.has(fi)) {
+      faces.push(face.slice());
+      return;
+    }
+    let c = [0, 0, 0];
+    for (const v of face) c = add(c, cage.points[v]);
+    const centre = out.points.push(mul(c, 1 / face.length)) - 1;
+    for (let i = 0; i < face.length; i++) {
+      const v = face[i];
+      const prev = face[(i - 1 + face.length) % face.length];
+      const next = face[(i + 1) % face.length];
+      faces.push([v, mid(v, next), centre, mid(prev, v)]);
+    }
+  });
+  out.faces = faces;
+  return splitNeighbours(out, cage, midOf);
+}
+
+/**
+ * Keep the cage watertight after splitting only some of its faces.
+ *
+ * A face that was not split still has the old long edge along it, while its
+ * neighbour now has two shorter ones with a point in the middle. Left alone
+ * that is a T-junction, and a T-junction is a crack in the surface. So the
+ * unsplit neighbour has the new point put into its own boundary.
+ */
+function splitNeighbours(out, original, midOf) {
+  if (!midOf.size) return out;
+  out.faces = out.faces.map((face) => {
+    const grown = [];
+    for (let i = 0; i < face.length; i++) {
+      const a = face[i];
+      const b = face[(i + 1) % face.length];
+      grown.push(a);
+      const m = midOf.get(edgeKey(a, b));
+      if (m !== undefined && !face.includes(m)) grown.push(m);
+    }
+    return grown;
+  });
+  void original;
+  return out;
+}
+
+/** Put a point in the middle of an edge, and into the faces that share it. */
+export function insertPoint(cage, a, b) {
+  const out = cloneCage(cage);
+  const m = out.points.push(mul(add(out.points[a], out.points[b]), 0.5)) - 1;
+  const midOf = new Map([[edgeKey(a, b), m]]);
+  return splitNeighbours(out, cage, midOf);
+}
+
+/**
+ * Run a new edge all the way round a ring of quads.
+ *
+ * Starting from one edge, the ring is the quads reached by stepping across each
+ * to the edge opposite, until it comes back round or runs off the rim. That is
+ * what makes one click add a whole loop rather than a single edge, and it is
+ * the operation the shape of a form is actually built with.
+ */
+export function insertEdgeLoop(cage, a, b, t = 0.5) {
+  const adj = adjacency(cage);
+  const ring = edgeRing(cage, adj, a, b);
+  if (!ring.length) return null;
+
+  const out = cloneCage(cage);
+  const midOf = new Map();
+  const cut = (x, y) => {
+    const k = edgeKey(x, y);
+    if (midOf.has(k)) return midOf.get(k);
+    const p = add(out.points[x], mul(sub(out.points[y], out.points[x]), t));
+    const i = out.points.push(p) - 1;
+    midOf.set(k, i);
+    return i;
+  };
+
+  const split = new Set(ring.map((r) => r.face));
+  const faces = [];
+  cage.faces.forEach((face, fi) => {
+    const step = ring.find((r) => r.face === fi);
+    if (!split.has(fi) || !step) {
+      faces.push(face.slice());
+      return;
+    }
+    // The two edges the loop crosses, and the two halves of the quad between.
+    const m1 = cut(step.e1[0], step.e1[1]);
+    const m2 = cut(step.e2[0], step.e2[1]);
+    const i1 = face.indexOf(step.e1[0]);
+    const ordered = [];
+    for (let i = 0; i < face.length; i++) ordered.push(face[(i1 + i) % face.length]);
+    // ordered starts at e1[0]; e1 is ordered[0]..ordered[1] and e2 is
+    // ordered[2]..ordered[3] on a quad.
+    faces.push([ordered[0], m1, m2, ordered[3]]);
+    faces.push([m1, ordered[1], ordered[2], m2]);
+  });
+
+  out.faces = faces;
+  return splitNeighbours(out, cage, midOf);
+}
+
+/** The quads a loop would pass through, starting from one edge. */
+export function edgeRing(cage, adj, a, b) {
+  const start = adj.edges.get(edgeKey(a, b));
+  if (!start) return [];
+  const steps = [];
+  const seenFace = new Set();
+  const seenEdge = new Set();
+
+  let edge = start;
+  let guard = 0;
+  while (edge && guard++ < 1e4) {
+    if (seenEdge.has(edge.key)) break;
+    seenEdge.add(edge.key);
+    const face = edge.faces.find((f) => !seenFace.has(f));
+    if (face === undefined) break;
+    const poly = cage.faces[face];
+    if (poly.length !== 4) break;
+    seenFace.add(face);
+
+    // The edge opposite, in the same quad.
+    const i = poly.findIndex(
+      (v, k) => edgeKey(v, poly[(k + 1) % 4]) === edge.key
+    );
+    if (i < 0) break;
+    const oppA = poly[(i + 2) % 4];
+    const oppB = poly[(i + 3) % 4];
+    steps.push({
+      face,
+      e1: [poly[i], poly[(i + 1) % 4]],
+      e2: [oppA, oppB]
+    });
+    edge = adj.edges.get(edgeKey(oppA, oppB));
+    if (edge && edge.key === start.key) break;
+  }
+  return steps;
+}
+
+/** Set or clear a crease on the chosen edges. */
+export function creaseEdges(cage, pairs, weight) {
+  const out = cloneCage(cage);
+  for (const [a, b] of pairs) {
+    const k = edgeKey(a, b);
+    if (weight > 0) out.creases[k] = weight;
+    else delete out.creases[k];
+  }
+  return out;
+}
+
+/** Weld points that sit on top of each other into one. */
+export function weldVertices(cage, verts, tolerance = 1e-4) {
+  const out = cloneCage(cage);
+  const pick = verts?.length ? new Set(verts) : null;
+  const seen = new Map();
+  const map = new Int32Array(out.points.length);
+  const kept = [];
+  const q = Math.max(tolerance, 1e-9);
+
+  out.points.forEach((p, i) => {
+    if (pick && !pick.has(i)) {
+      map[i] = kept.length;
+      kept.push(p);
+      return;
+    }
+    const k = `${Math.round(p[0] / q)},${Math.round(p[1] / q)},${Math.round(p[2] / q)}`;
+    if (seen.has(k)) {
+      map[i] = seen.get(k);
+      return;
+    }
+    seen.set(k, kept.length);
+    map[i] = kept.length;
+    kept.push(p);
+  });
+
+  const faces = [];
+  for (const face of out.faces) {
+    const moved = [];
+    for (const v of face) {
+      const m = map[v];
+      if (!moved.length || moved[moved.length - 1] !== m) moved.push(m);
+    }
+    if (moved.length > 2 && moved[0] === moved[moved.length - 1]) moved.pop();
+    if (moved.length > 2) faces.push(moved);
+  }
+  const creases = {};
+  for (const [k, w] of Object.entries(out.creases)) {
+    const [a, b] = k.split('_').map(Number);
+    if (map[a] !== map[b]) creases[edgeKey(map[a], map[b])] = w;
+  }
+  return compactCage({ points: kept, faces, creases, corners: {}, symmetry: cage.symmetry });
+}
+
+/** Give a point of its own back to every face that was sharing one. */
+export function unweldVertices(cage, verts) {
+  const out = cloneCage(cage);
+  const pick = new Set(verts);
+  const first = new Set();
+  out.faces = out.faces.map((face) =>
+    face.map((v) => {
+      if (!pick.has(v)) return v;
+      if (!first.has(v)) {
+        first.add(v);
+        return v;
+      }
+      return out.points.push(out.points[v].slice()) - 1;
+    })
+  );
+  return out;
+}
+
+/**
+ * Close a hole in the cage.
+ *
+ * A single face across it is the plain answer and often the right one. Fanning
+ * to a point in the middle gives the surface somewhere to go on a big opening,
+ * which a single many sided face does not.
+ */
+export function fillHole(cage, loop, mode = 'single') {
+  if (!loop || loop.length < 3) return null;
+  const out = cloneCage(cage);
+  if (mode === 'single') {
+    out.faces.push(loop.slice());
+    return out;
+  }
+  let c = [0, 0, 0];
+  for (const v of loop) c = add(c, out.points[v]);
+  const centre = out.points.push(mul(c, 1 / loop.length)) - 1;
+  for (let i = 0; i < loop.length; i++) {
+    out.faces.push([loop[i], loop[(i + 1) % loop.length], centre]);
+  }
+  return out;
+}
+
+/**
+ * Join two openings with a run of faces between them.
+ *
+ * Both rims are walked the same way round and lined up at their nearest points,
+ * which is what stops a bridge coming out with a twist through it. The number of
+ * faces along it decides how much the surface has to work with.
+ */
+export function bridge(cage, loopA, loopB, segments = 1) {
+  if (loopA.length !== loopB.length || loopA.length < 3) return null;
+  const out = cloneCage(cage);
+  const n = loopA.length;
+
+  // Line the second rim up with the first, and turn it round if that makes the
+  // total distance shorter: a bridge between two rings can be made either way.
+  let best = null;
+  for (const flip of [false, true]) {
+    const ring = flip ? [loopB[0], ...loopB.slice(1).reverse()] : loopB.slice();
+    for (let off = 0; off < n; off++) {
+      let total = 0;
+      for (let i = 0; i < n; i++) {
+        total += len(sub(out.points[loopA[i]], out.points[ring[(i + off) % n]]));
+      }
+      if (!best || total < best.total) best = { total, ring, off };
+    }
+  }
+  const other = (i) => best.ring[(i + best.off) % n];
+
+  const steps = Math.max(1, Math.round(segments));
+  let previous = loopA.slice();
+  for (let s = 1; s <= steps; s++) {
+    const row =
+      s === steps
+        ? loopA.map((_, i) => other(i))
+        : loopA.map((v, i) => {
+            const a = out.points[v];
+            const b = out.points[other(i)];
+            return out.points.push(add(a, mul(sub(b, a), s / steps))) - 1;
+          });
+    for (let i = 0; i < n; i++) {
+      out.faces.push([previous[i], previous[(i + 1) % n], row[(i + 1) % n], row[i]]);
+    }
+    previous = row;
+  }
+  return out;
+}
+
+/** Pull the chosen points onto a plane. */
+export function flatten(cage, verts, plane) {
+  const out = cloneCage(cage);
+  const n = unit(plane.n);
+  for (const v of verts) {
+    const d = dot(sub(out.points[v], plane.origin), n);
+    out.points[v] = sub(out.points[v], mul(n, d));
+  }
+  return out;
+}
+
+/**
+ * Even the cage out without changing what it stands for.
+ *
+ * Every point moves toward the middle of its neighbours, and then back onto the
+ * surface it was on. A cage that has been pulled about has faces of wildly
+ * different sizes, and it is the uneven ones that make a subdivision surface
+ * ripple.
+ */
+export function makeUniform(cage, iterations = 3) {
+  let out = cloneCage(cage);
+  for (let it = 0; it < Math.max(1, iterations); it++) {
+    const adj = adjacency(out);
+    const before = out.points.map((p) => p.slice());
+    const rim = new Set();
+    for (const e of boundaryEdges(out, adj)) {
+      rim.add(e.a);
+      rim.add(e.b);
+    }
+    out.points = out.points.map((p, v) => {
+      if (rim.has(v)) return p;
+      const around = adj.edgesAt[v];
+      if (!around.length) return p;
+      let mid = [0, 0, 0];
+      for (const k of around) {
+        const e = adj.edges.get(k);
+        mid = add(mid, before[e.a === v ? e.b : e.a]);
+      }
+      mid = mul(mid, 1 / around.length);
+      // Along the surface only: the part of the move that leaves it is dropped,
+      // so evening the cage out does not also deflate it.
+      const nrm = vertexNormal(out, adj, v, before);
+      const move = sub(mid, p);
+      return add(p, sub(move, mul(nrm, dot(move, nrm))));
+    });
+  }
+  return out;
+}
+
+function vertexNormal(cage, adj, v, points) {
+  let n = [0, 0, 0];
+  for (const fi of new Set(adj.facesAt[v])) {
+    const face = cage.faces[fi];
+    for (let i = 1; i + 1 < face.length; i++) {
+      n = add(
+        n,
+        cross(
+          sub(points[face[i]], points[face[0]]),
+          sub(points[face[i + 1]], points[face[0]])
+        )
+      );
+    }
+  }
+  const u = unit(n);
+  return len(u) ? u : [0, 0, 1];
+}
+
+/* ------------------------------------------------------------- symmetry */
+
+/**
+ * Split every face a plane crosses, along the plane.
+ *
+ * The cut points go in once per edge and are shared by both faces on it, so the
+ * cage stays watertight rather than gaining a crack where the two sides of a
+ * split disagree about where the plane was. Faces the plane only touches at a
+ * corner are left alone: there is nothing to split.
+ */
+export function splitCageByPlane(cage, plane) {
+  const n = unit(plane.n);
+  const side = (p) => dot(sub(p, plane.origin), n);
+  const out = cloneCage(cage);
+  const cutOf = new Map();
+
+  const cut = (a, b) => {
+    const k = edgeKey(a, b);
+    if (cutOf.has(k)) return cutOf.get(k);
+    const da = side(out.points[a]);
+    const db = side(out.points[b]);
+    const t = da / (da - db);
+    const p = add(out.points[a], mul(sub(out.points[b], out.points[a]), t));
+    const i = out.points.push(p) - 1;
+    cutOf.set(k, i);
+    return i;
+  };
+
+  const faces = [];
+  for (const face of cage.faces) {
+    const d = face.map((v) => side(out.points[v]));
+    const crosses = d.some((x) => x > 1e-7) && d.some((x) => x < -1e-7);
+    if (!crosses) {
+      faces.push(face.slice());
+      continue;
+    }
+
+    // Walk the face, adding a cut point wherever the plane is crossed, and
+    // cutting the ring into two where those points fall.
+    const walk = [];
+    for (let i = 0; i < face.length; i++) {
+      const a = face[i];
+      const b = face[(i + 1) % face.length];
+      walk.push({ v: a, on: Math.abs(d[i]) <= 1e-7 });
+      const j = (i + 1) % face.length;
+      if ((d[i] > 1e-7 && d[j] < -1e-7) || (d[i] < -1e-7 && d[j] > 1e-7)) {
+        walk.push({ v: cut(a, b), on: true });
+      }
+    }
+    const marks = walk.map((w, i) => (w.on ? i : -1)).filter((i) => i >= 0);
+    if (marks.length !== 2) {
+      // Three or more crossings means a face folded through the plane more than
+      // once, which a cage should not do. Left whole rather than guessed at.
+      faces.push(face.slice());
+      continue;
+    }
+
+    const [p1, p2] = marks;
+    const one = [];
+    for (let i = p1; i !== p2; i = (i + 1) % walk.length) one.push(walk[i].v);
+    one.push(walk[p2].v);
+    const two = [];
+    for (let i = p2; i !== p1; i = (i + 1) % walk.length) two.push(walk[i].v);
+    two.push(walk[p1].v);
+    if (one.length > 2) faces.push(one);
+    if (two.length > 2) faces.push(two);
+  }
+
+  out.faces = faces;
+  // Every face that shared a cut edge needs the new point in its own ring too,
+  // or the two disagree about the edge and the cage is no longer closed.
+  return splitNeighbours(out, cage, cutOf);
+}
+
+/**
+ * Make the cage symmetric about a plane, and remember that it is.
+ *
+ * The cage is cut on the plane first, so a face that straddles it becomes two
+ * faces that do not. Then the far side goes and is replaced by a mirror of the
+ * near side, which is what makes the two halves the same thing rather than two
+ * things that happen to match. Remembering it is what lets a later edit be
+ * mirrored as it is made rather than repaired afterwards.
+ */
+export function mirrorInternal(cage, plane) {
+  const n = unit(plane.n);
+  const side = (p) => dot(sub(p, plane.origin), n);
+  const split = splitCageByPlane(cage, plane);
+
+  const near = compactCage({
+    ...split,
+    faces: split.faces.filter((face) => {
+      // A face is on the near side if its middle is, which is the only test
+      // that works for one lying along the plane.
+      let c = [0, 0, 0];
+      for (const v of face) c = add(c, split.points[v]);
+      return side(mul(c, 1 / face.length)) > 1e-7;
+    })
+  });
+  if (!near.faces.length) return null;
+
+  // Anything within a whisker of the plane is put exactly on it, so the seam
+  // welds rather than nearly welding.
+  near.points = near.points.map((p) => {
+    const d = side(p);
+    return Math.abs(d) < 1e-6 ? sub(p, mul(n, d)) : p;
+  });
+
+  const out = cloneCage(near);
+  const onSeam = near.points.map((p) => Math.abs(side(p)) < 1e-9);
+  const mirrorOf = near.points.map((p, i) =>
+    onSeam[i] ? i : out.points.push(sub(p, mul(n, 2 * side(p)))) - 1
+  );
+  for (const face of near.faces) out.faces.push(face.map((v) => mirrorOf[v]).reverse());
+  for (const [k, w] of Object.entries(near.creases)) {
+    const [a, b] = k.split('_').map(Number);
+    out.creases[edgeKey(mirrorOf[a], mirrorOf[b])] = w;
+  }
+  out.symmetry = { kind: 'mirror', origin: plane.origin, n };
+  return orientCage(weldVertices(out, null, 1e-7));
+}
+
+/** The same, turned about an axis instead of reflected. */
+export function circularInternal(cage, axis, count) {
+  const n = Math.max(2, Math.round(count));
+  const dir = unit(axis.dir);
+  const wedge = (Math.PI * 2) / n;
+
+  // Only what lies in the first wedge, measured about the axis.
+  const basis = frameFor(dir);
+  const angleOf = (p) => {
+    const d = sub(p, axis.origin);
+    const flat = sub(d, mul(dir, dot(d, dir)));
+    return Math.atan2(dot(flat, basis.y), dot(flat, basis.x));
+  };
+  const inWedge = (p) => {
+    let a = angleOf(p);
+    if (a < -1e-7) a += Math.PI * 2;
+    return a <= wedge + 1e-7;
+  };
+
+  const keep = cloneCage(cage);
+  keep.faces = keep.faces.filter((face) =>
+    face.some((v) => inWedge(keep.points[v]))
+  );
+  const one = compactCage(keep);
+  if (!one.faces.length) return null;
+
+  const out = cloneCage(one);
+  for (let k = 1; k < n; k++) {
+    const turn = wedge * k;
+    const base = out.points.length;
+    for (const p of one.points) out.points.push(rotateAbout(p, axis.origin, dir, turn));
+    for (const face of one.faces) out.faces.push(face.map((v) => base + v));
+  }
+  out.symmetry = { kind: 'circular', origin: axis.origin, dir, count: n };
+  return weldVertices(out, null, 1e-5);
+}
+
+function frameFor(n) {
+  const x = unit(Math.abs(n[0]) < 0.9 ? cross(n, [1, 0, 0]) : cross(n, [0, 1, 0]));
+  return { x, y: cross(n, x) };
+}
+
+function rotateAbout(p, origin, axis, angle) {
+  const v = sub(p, origin);
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return add(
+    origin,
+    add(add(mul(v, c), mul(cross(axis, v), s)), mul(axis, dot(axis, v) * (1 - c)))
+  );
+}
+
+/** Forget the symmetry without changing the shape. */
+export function clearSymmetry(cage) {
+  const out = cloneCage(cage);
+  delete out.symmetry;
+  return out;
+}
+
+/**
+ * Mirror a move so the other half of a symmetric form follows it.
+ *
+ * Called as an edit is made rather than after it, which is the difference
+ * between symmetry that holds and symmetry you have to keep repairing.
+ */
+export function mirrorMoves(cage, moved) {
+  const sym = cage.symmetry;
+  if (!sym || sym.kind !== 'mirror') return moved;
+  const reflect = (p) => sub(p, mul(sym.n, 2 * dot(sub(p, sym.origin), sym.n)));
+  const at2 = new Map();
+  cage.points.forEach((p, i) => {
+    at2.set(
+      `${Math.round(p[0] * 1e4)},${Math.round(p[1] * 1e4)},${Math.round(p[2] * 1e4)}`,
+      i
+    );
+  });
+
+  const out = new Map(moved);
+  for (const [v, p] of moved) {
+    const twin = at2.get(
+      (() => {
+        const r = reflect(cage.points[v]);
+        return `${Math.round(r[0] * 1e4)},${Math.round(r[1] * 1e4)},${Math.round(r[2] * 1e4)}`;
+      })()
+    );
+    if (twin !== undefined && twin !== v && !out.has(twin)) out.set(twin, reflect(p));
+  }
+  return out;
+}
+
+export { unit as formUnit, add as formAdd, sub as formSub, mul as formMul, dot as formDot };

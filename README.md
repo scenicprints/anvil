@@ -626,6 +626,44 @@ it can be pointed at. **Create Mesh Section Sketch** gives the curve where a
 plane crosses a mesh, which is what you trace over when the only thing you have
 is a scan.
 
+**Forms.** A form is a **control cage**, a coarse polygon mesh, and the smooth
+surface that cage stands for. You shape the cage, which has a handful of faces
+you can actually grab, and the surface follows. Catmull-Clark is what turns one
+into the other, and it is the whole of the geometry: everything else either
+builds a cage, changes its topology, or reads the surface off it.
+
+The cage lives in the document beside the sketches, and for the same reason: it
+is drawn rather than derived, so nothing in the timeline could rebuild it. One
+timeline entry per form, the way Fusion does it, because a hundred pushes and
+pulls on a cage are one act of shaping rather than a hundred features.
+
+**Box**, **Plane**, **Cylinder**, **Sphere**, **Torus** and **Quadball** start
+one. The quadball is the one to reach for when the answer is round: it is six
+grids pushed onto a sphere rather than rings and poles, so every vertex has four
+neighbours and the surface has no pinch in it. Each round primitive is fitted to
+its own limit surface, because subdivision does not pass through its own cage: a
+ball whose cage points all sit exactly 20 out has a surface nearer 17, and
+nobody asking for a radius of 20 means the cage.
+
+**Insert Edge** runs a new loop the whole way round a ring of quads, which is
+how the shape of a form is actually built. **Insert Point**, **Subdivide**,
+**Bridge**, **Fill Hole**, **Delete**, **Weld** and **Unweld**, **Flatten** and
+**Make Uniform** do the rest of the topology. **Crease** holds an edge sharp,
+and it is a dial rather than a switch: sharpness counts down a level with each
+subdivision, so two holds an edge for two levels and the third rounds it off.
+Creased hard all round, Catmull-Clark reproduces the cage exactly, which is how
+a form can be a box of precisely 20 as easily as a blob.
+
+**Mirror** cuts the cage on a plane, throws the far side away and replaces it
+with a reflection of the near one, so the two halves are the same thing rather
+than two things that happen to match, and it remembers that. **Circular** does
+the same about an axis. **Display** shows the cage, the surface, or the cage
+over the surface, which is the one to work in.
+
+**Finish Form** turns it into a solid, and refuses a form that is not closed
+rather than handing the kernel something that looks right and is not watertight.
+**Thicken** is for the ones that are meant to be open.
+
 ---
 
 ## The window
@@ -732,6 +770,7 @@ src/renderer/
   sheet.js             Surfaces: open meshes, and everything done to them
   sheetmetal.js        Panels, bends, the flat pattern and its DXF
   meshtools.js         Repair, reduce, remesh, smooth, cut and section
+  form.js              Control cages, Catmull-Clark, and the tools on them
   construction.js      Planes, axes and points that exist to be referenced
   assembly.js          Components and joint kinematics
   features.js          Document model, planes, and the parametric rebuild
@@ -784,6 +823,14 @@ A surface cuts a solid by being stretched past it and given the thickness of the
 whole model, which turns it into a lump the size of a half space with that
 surface as its face, after which an ordinary boolean does the rest. That is what
 Boundary Fill, Replace Face and Split Face by a surface all stand on.
+
+**A cage face is one face because the cage says so.** Anvil works faces out of
+a triangle mesh by following smooth joins and then splitting off the flat
+patches, which is right for a solid and wrong for a cage: a curved quad's two
+triangles differ by enough to be split, and a flat cage merges into one face
+with nothing to point at. So a cage mesh tags each triangle with the cage face
+it came from and asks the topology to go by that instead. Solids are untouched,
+because there the angle is the whole point.
 
 **A mesh never reaches the kernel unmeasured.** manifold will take a mesh with
 holes in it and produce something that looks plausible and is not a solid, so
@@ -865,9 +912,14 @@ Stack, Display Component Colors and Find Similar Components are not modelling
 analyses at all.
 
 **Modelling gaps that remain:** chord-length and rule fillets (constant and
-variable radius work), the Form workspace, and Fusion's compute options for
-patterns that hit different geometry. Silhouette Split works only where the
-parting line is flat.
+variable radius work), and Fusion's compute options for patterns that hit
+different geometry. Silhouette Split works only where the parting line is flat.
+
+**Where the form tools stop, for now.** Edit Form, the gizmo that moves, rotates
+and scales what is selected, is not here yet: the cage is changed by the
+commands on the tab rather than by dragging it. That means no soft modification,
+no selection grow, loop or ring, and no live symmetry mirroring of a drag. It is
+the next thing, and it is why the rest of this was built first.
 
 **Where the mesh tools stop.** Face groups are worked out from the angle between
 triangles rather than kept as a stored grouping you can edit by hand, so

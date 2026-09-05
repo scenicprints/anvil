@@ -35,6 +35,7 @@ import {
 } from './features.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
 import * as SM from './sheetmetal.js';
+import * as FM from './form.js';
 import { meshHealth, sectionCurves } from './meshtools.js';
 import {
   newComponent,
@@ -205,6 +206,11 @@ function rebuildAll() {
   const t0 = performance.now();
   const previous = state.result;
 
+  // A form's size fields build its cage, but only while the dialog that made
+  // it is open. After that the cage has been shaped by hand, and rebuilding it
+  // from a width and a height would throw that away.
+  if (state.editing?.feature?.type === 'form') refreshFormCage(state.editing.feature);
+
   let res;
   try {
     res = rebuild(state.doc);
@@ -240,6 +246,10 @@ function rebuildAll() {
         // Not `mesh`: that name already holds this record's triangles, and
         // setting it to a flag replaces the geometry with a boolean.
         isMesh: !!b.mesh,
+        isForm: !!b.form,
+        // The smooth surface drawn behind the cage in Control Frame, so what is
+        // being shaped and what it stands for are both on screen at once.
+        overlayMesh: b.overlayMesh || null,
         visible: !state.hiddenBodies.has(b.id)
       });
     } catch (err) {
@@ -1502,6 +1512,84 @@ async function runCommand(cmd) {
     case 'meshSection':
       cmdMeshSection();
       break;
+    case 'formBox':
+      startFormPrimitive('box');
+      break;
+    case 'formPlane':
+      startFormPrimitive('plane');
+      break;
+    case 'formCylinder':
+      startFormPrimitive('cylinder');
+      break;
+    case 'formSphere':
+      startFormPrimitive('sphere');
+      break;
+    case 'formTorus':
+      startFormPrimitive('torus');
+      break;
+    case 'formQuadball':
+      startFormPrimitive('quadball');
+      break;
+    case 'formSubdivide':
+      cmdFormSubdivideFaces();
+      break;
+    case 'formInsertEdge':
+      cmdFormInsertEdge();
+      break;
+    case 'formInsertPoint':
+      cmdFormInsertPoint();
+      break;
+    case 'formDelete':
+      cmdFormDeleteFaces();
+      break;
+    case 'formFillHole':
+      cmdFormFillHole();
+      break;
+    case 'formBridge':
+      cmdFormBridge();
+      break;
+    case 'formCrease':
+      cmdFormCrease(true);
+      break;
+    case 'formUncrease':
+      cmdFormCrease(false);
+      break;
+    case 'formWeld':
+      cmdFormWeld(false);
+      break;
+    case 'formUnweld':
+      cmdFormWeld(true);
+      break;
+    case 'formFlatten':
+      cmdFormFlatten();
+      break;
+    case 'formUniform':
+      cmdFormMakeUniform();
+      break;
+    case 'formMirror':
+      cmdFormMirror();
+      break;
+    case 'formCircular':
+      cmdFormCircular();
+      break;
+    case 'formClearSymmetry':
+      cmdFormClearSymmetry();
+      break;
+    case 'formDisplayBox':
+      cmdFormDisplay('box');
+      break;
+    case 'formDisplayControl':
+      cmdFormDisplay('control');
+      break;
+    case 'formDisplaySmooth':
+      cmdFormDisplay('smooth');
+      break;
+    case 'formThicken':
+      cmdFormThicken();
+      break;
+    case 'finishForm':
+      cmdFinishForm();
+      break;
     case 'loft':
       startLoft();
       break;
@@ -1799,6 +1887,7 @@ function migrate(data) {
   doc.sheetMetalRule = { ...SM.DEFAULT_RULE, ...(doc.sheetMetalRule || {}) };
   doc.meshData = doc.meshData || {};
   doc.imageData = doc.imageData || {};
+  doc.forms = doc.forms || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
   if (doc.rollback === undefined) doc.rollback = null;
   return doc;
@@ -2279,8 +2368,9 @@ function renderTree() {
   // but it is not one to work on: it has its own tab and its own tools.
   const allBodies = state.result?.bodies || [];
   const solidList = allBodies.filter((b) => b.solid);
-  const sheetList = allBodies.filter((b) => !b.solid && !b.mesh);
-  const meshList = allBodies.filter((b) => !b.solid && b.mesh);
+  const sheetList = allBodies.filter((b) => !b.solid && !b.mesh && !b.form);
+  const meshList = allBodies.filter((b) => !b.solid && b.mesh && !b.form);
+  const formList = allBodies.filter((b) => !b.solid && b.form);
   const bodyNode = (b) =>
     addNode(b.name, {
       child: true,
@@ -2300,7 +2390,7 @@ function renderTree() {
       }
     });
 
-  if (solidList.length || (!sheetList.length && !meshList.length)) {
+  if (solidList.length || (!sheetList.length && !meshList.length && !formList.length)) {
     addNode('Bodies', { head: true });
     for (const b of solidList) bodyNode(b);
   }
@@ -2311,6 +2401,10 @@ function renderTree() {
   if (meshList.length) {
     addNode('Meshes', { head: true });
     for (const b of meshList) bodyNode(b);
+  }
+  if (formList.length) {
+    addNode('Forms', { head: true });
+    for (const b of formList) bodyNode(b);
   }
 
   if (state.result?.errors.length) {
@@ -4589,6 +4683,24 @@ const RIBBON_MENUS = {
     ['primSphere', 'Sphere'],
     ['primTorus', 'Torus'],
     ['primPipe', 'Pipe']
+  ],
+  formInsert: [
+    ['formInsertEdge', 'Insert Edge'],
+    ['formInsertPoint', 'Insert Point'],
+    ['formSubdivide', 'Subdivide Faces']
+  ],
+  formWeld: [
+    ['formWeld', 'Weld Vertices'],
+    ['formUnweld', 'Unweld Vertices']
+  ],
+  formCrease: [
+    ['formCrease', 'Crease'],
+    ['formUncrease', 'Uncrease']
+  ],
+  formDisplay: [
+    ['formDisplayBox', 'Box'],
+    ['formDisplayControl', 'Control Frame'],
+    ['formDisplaySmooth', 'Smooth']
   ],
   pattern: [
     ['patternRect', 'Rectangular Pattern'],
@@ -9610,6 +9722,641 @@ function textureExtrudeFields() {
   ];
 }
 
+/* ---------------------------------------------------------------- */
+/* Forms                                                             */
+/* ---------------------------------------------------------------- */
+
+/** Every form body in the model. */
+function formBodies() {
+  return (state.result?.bodies || []).filter((b) => b.form);
+}
+
+/**
+ * The form being worked on.
+ *
+ * Whichever is selected, or the only one there is. A form is edited in place
+ * rather than through a feature per change, so the commands need to know which
+ * cage they are changing without a dialog asking every time.
+ */
+function activeForm() {
+  const all = formBodies();
+  if (!all.length) return null;
+  const chosen = all.find((b) => state.selection.bodies.has(b.id));
+  if (chosen) return chosen;
+  for (const key of state.selection.faces) {
+    const { bodyId } = splitKey(key);
+    const hit = all.find((b) => b.id === bodyId);
+    if (hit) return hit;
+  }
+  for (const key of state.selection.edges) {
+    const { bodyId } = splitKey(key);
+    const hit = all.find((b) => b.id === bodyId);
+    if (hit) return hit;
+  }
+  return all.length === 1 ? all[0] : null;
+}
+
+/**
+ * Which cage faces are selected, as indices into the cage.
+ *
+ * The body's own topology carries the cage face each of its faces came from,
+ * because the cage mesh is tagged that way when it is built. So a click in the
+ * viewport lands on a cage face without any picking code of its own.
+ */
+function selectedCageFaces(body) {
+  const rec = (state.records || []).find((r) => r.id === body.id);
+  const out = [];
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    if (bodyId !== body.id) continue;
+    const face = rec?.topology?.faces[index];
+    const at = face?.src?.face;
+    if (at !== undefined && at >= 0) out.push(at);
+  }
+  return [...new Set(out)];
+}
+
+/** Which cage edges are selected, as pairs of cage point indices. */
+function selectedCageEdges(body) {
+  const rec = (state.records || []).find((r) => r.id === body.id);
+  const cage = body.cage;
+  const out = [];
+  for (const key of state.selection.edges) {
+    const { bodyId, index } = splitKey(key);
+    if (bodyId !== body.id) continue;
+    const edge = rec?.topology?.edges[index];
+    if (!edge?.points?.length) continue;
+    // The cage points the drawn edge runs between, found by position: the
+    // topology's own vertices are the mesh's, and the mesh is the cage.
+    const ends = [edge.points[0], edge.points[edge.points.length - 1]];
+    const found = ends.map((p) => nearestCagePoint(cage, p));
+    if (found[0] !== null && found[1] !== null && found[0] !== found[1]) {
+      out.push([found[0], found[1]]);
+    }
+  }
+  return out;
+}
+
+function nearestCagePoint(cage, p) {
+  let best = null;
+  cage.points.forEach((q, i) => {
+    const d = Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]);
+    if (!best || d < best.d) best = { d, i };
+  });
+  return best && best.d < 1e-4 ? best.i : null;
+}
+
+/** The points those edges run between. */
+function pointsOfEdges(pairs) {
+  const out = new Set();
+  for (const [a, b] of pairs) {
+    out.add(a);
+    out.add(b);
+  }
+  return [...out];
+}
+
+/**
+ * Change the cage in place and rebuild.
+ *
+ * Every Form tab command goes through here, so undo, the dirty flag and the
+ * rebuild are in one place rather than repeated fourteen times.
+ */
+function editCage(label, body, change) {
+  const cage = state.doc.forms[body.form];
+  if (!cage) {
+    setStatus('That form is not in this document any more.');
+    return false;
+  }
+  let next;
+  try {
+    next = change(cage);
+  } catch (err) {
+    setStatus(`Could not do that: ${err.message}`);
+    return false;
+  }
+  if (!next) return false;
+
+  pushUndo(label);
+  next.name = cage.name;
+  state.doc.forms[body.form] = next;
+  state.dirty = true;
+  clearGeometrySelection(false);
+  rebuildAll();
+  return true;
+}
+
+/* -------- creating a form -------- */
+
+/**
+ * Start a form from one of the shapes worth starting from.
+ *
+ * A cage rather than a surface: what appears is a handful of faces you can
+ * grab, and the smooth shape they stand for. The primitives are the ones Fusion
+ * offers, and the quadball is the one to reach for when the answer is round,
+ * because it has no poles and so no pinch in the surface.
+ */
+function startFormPrimitive(shape) {
+  if (state.sketcher.active) finishSketch();
+  const id = uid('form');
+  const feature = {
+    id: uid('f'),
+    type: 'form',
+    form: id,
+    shape,
+    plane: 'XY',
+    levels: '2',
+    display: 'control',
+    params: {
+      width: '40',
+      depth: '40',
+      height: '40',
+      radius: '20',
+      tubeRadius: '6',
+      length: '60',
+      sides: '8',
+      rows: '3',
+      divisions: '2',
+      nx: '2',
+      ny: '2',
+      nz: '2',
+      capped: true,
+      x: '0',
+      y: '0',
+      z: '0'
+    }
+  };
+  state.doc.forms[id] = { ...buildFormCage(feature), name: formName() };
+  openFeatureEditor(feature, `Form: ${shape}`, formFields(feature));
+}
+
+/** A name that is not already taken. */
+function formName() {
+  const used = new Set(Object.values(state.doc.forms || {}).map((f) => f.name));
+  let n = 1;
+  while (used.has(`Form ${n}`)) n++;
+  return `Form ${n}`;
+}
+
+/** The cage a primitive's settings describe. */
+function buildFormCage(feature) {
+  const scope = resolveParameters(state.doc.parameters).scope;
+  const num = (k, d) => safeEval(feature.params[k], scope, d);
+  const plane = resolvePlane(feature.plane || 'XY', scope, state.result?.construction);
+  const base = plane || { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+  // Where on that plane it sits. A form is placed like anything else, and
+  // without this every form in a document is built on top of the last.
+  const p = {
+    ...base,
+    origin: [
+      base.origin[0] + num('x', 0),
+      base.origin[1] + num('y', 0),
+      base.origin[2] + num('z', 0)
+    ]
+  };
+
+  switch (feature.shape) {
+    case 'plane':
+      return FM.planeCage(p, num('width', 40), num('depth', 40), num('nx', 2), num('ny', 2));
+    case 'cylinder':
+      return FM.cylinderCage(
+        p,
+        num('radius', 20),
+        num('length', 60),
+        num('sides', 8),
+        num('rows', 3),
+        feature.params.capped !== false
+      );
+    case 'sphere':
+      return FM.sphereCage(p, num('radius', 20), num('sides', 8), num('rows', 6));
+    case 'torus':
+      return FM.torusCage(p, num('radius', 20), num('tubeRadius', 6), num('sides', 12), num('rows', 8));
+    case 'quadball':
+      return FM.quadballCage(p, num('radius', 20), num('divisions', 2));
+    default:
+      return FM.boxCage(
+        p,
+        [num('width', 40), num('depth', 40), num('height', 40)],
+        [num('nx', 2), num('ny', 2), num('nz', 2)]
+      );
+  }
+}
+
+/**
+ * Rebuild the cage when a primitive's settings change.
+ *
+ * Only while the dialog that made it is open: once it is accepted the cage has
+ * been shaped by hand and rebuilding it from a width and a height would throw
+ * that away.
+ */
+function refreshFormCage(feature) {
+  if (!feature?.form || !state.doc.forms[feature.form]) return;
+  const name = state.doc.forms[feature.form].name;
+  state.doc.forms[feature.form] = { ...buildFormCage(feature), name };
+}
+
+/* -------- editing the cage -------- */
+
+function withForm(what, run) {
+  if (state.sketcher.active) finishSketch();
+  const body = activeForm();
+  if (!body) {
+    setStatus(`${what} works on a form. Make one from the Form tab first.`);
+    return;
+  }
+  run(body);
+}
+
+function cmdFormSubdivideFaces() {
+  withForm('Subdivide', (body) => {
+    const faces = selectedCageFaces(body);
+    if (!faces.length) {
+      setStatus('Select the faces to subdivide.');
+      return;
+    }
+    if (editCage('subdivide faces', body, (cage) => FM.subdivideFaces(cage, faces))) {
+      setStatus(`${faces.length} face${faces.length === 1 ? '' : 's'} subdivided.`);
+    }
+  });
+}
+
+function cmdFormInsertEdge() {
+  withForm('Insert Edge', (body) => {
+    const edges = selectedCageEdges(body);
+    if (!edges.length) {
+      setStatus('Select an edge to run the new loop across.');
+      return;
+    }
+    const [a, b] = edges[0];
+    if (editCage('insert edge', body, (cage) => FM.insertEdgeLoop(cage, a, b, 0.5))) {
+      setStatus('Edge loop inserted.');
+    } else {
+      setStatus('That edge is not on a run of quads, so there is no loop to insert.');
+    }
+  });
+}
+
+function cmdFormInsertPoint() {
+  withForm('Insert Point', (body) => {
+    const edges = selectedCageEdges(body);
+    if (!edges.length) {
+      setStatus('Select the edge to put a point in.');
+      return;
+    }
+    const [a, b] = edges[0];
+    if (editCage('insert point', body, (cage) => FM.insertPoint(cage, a, b))) {
+      setStatus('Point inserted.');
+    }
+  });
+}
+
+function cmdFormDeleteFaces() {
+  withForm('Delete', (body) => {
+    const faces = selectedCageFaces(body);
+    if (!faces.length) {
+      setStatus('Select the faces to delete.');
+      return;
+    }
+    if (editCage('delete faces', body, (cage) => FM.deleteFaces(cage, faces))) {
+      setStatus(`${faces.length} face${faces.length === 1 ? '' : 's'} deleted.`);
+    }
+  });
+}
+
+function cmdFormFillHole() {
+  withForm('Fill Hole', (body) => {
+    const cage = state.doc.forms[body.form];
+    const loops = FM.boundaryLoops(cage);
+    if (!loops.length) {
+      setStatus('There are no holes in this form.');
+      return;
+    }
+    if (
+      editCage('fill hole', body, (c) => {
+        let out = c;
+        for (const loop of FM.boundaryLoops(c)) {
+          const next = FM.fillHole(out, loop, loop.length > 5 ? 'fan' : 'single');
+          if (next) out = next;
+        }
+        return out;
+      })
+    ) {
+      setStatus(`${loops.length} hole${loops.length === 1 ? '' : 's'} filled.`);
+    }
+  });
+}
+
+function cmdFormBridge() {
+  withForm('Bridge', (body) => {
+    const cage = state.doc.forms[body.form];
+    const loops = FM.boundaryLoops(cage);
+    if (loops.length < 2) {
+      setStatus('Bridge joins two openings. Delete a face at each end first.');
+      return;
+    }
+    if (loops[0].length !== loops[1].length) {
+      setStatus(
+        `Those two openings have ${loops[0].length} and ${loops[1].length} edges. A bridge needs the same number at each end.`
+      );
+      return;
+    }
+    const segments = 2;
+    if (editCage('bridge', body, (c) => {
+      const l = FM.boundaryLoops(c);
+      return FM.bridge(c, l[0], l[1], segments);
+    })) {
+      setStatus('Bridged.');
+    }
+  });
+}
+
+function cmdFormCrease(on) {
+  withForm(on ? 'Crease' : 'Uncrease', (body) => {
+    const edges = selectedCageEdges(body);
+    if (!edges.length) {
+      setStatus(`Select the edges to ${on ? 'crease' : 'uncrease'}.`);
+      return;
+    }
+    if (
+      editCage(on ? 'crease' : 'uncrease', body, (cage) =>
+        FM.creaseEdges(cage, edges, on ? 2 : 0)
+      )
+    ) {
+      setStatus(
+        `${edges.length} edge${edges.length === 1 ? '' : 's'} ${on ? 'creased' : 'uncreased'}.`
+      );
+    }
+  });
+}
+
+function cmdFormWeld(unweld) {
+  withForm(unweld ? 'Unweld' : 'Weld', (body) => {
+    const verts = pointsOfEdges(selectedCageEdges(body));
+    if (!verts.length) {
+      setStatus('Select edges whose ends should be joined.');
+      return;
+    }
+    if (
+      editCage(unweld ? 'unweld' : 'weld', body, (cage) =>
+        unweld ? FM.unweldVertices(cage, verts) : FM.weldVertices(cage, verts, 1e-3)
+      )
+    ) {
+      setStatus(`${verts.length} point${verts.length === 1 ? '' : 's'} ${unweld ? 'unwelded' : 'welded'}.`);
+    }
+  });
+}
+
+function cmdFormFlatten() {
+  withForm('Flatten', (body) => {
+    const verts = pointsOfEdges(selectedCageEdges(body));
+    if (!verts.length) {
+      setStatus('Select the edges whose points should be brought onto a plane.');
+      return;
+    }
+    const scope = resolveParameters(state.doc.parameters).scope;
+    const plane = resolvePlane('XY', scope, state.result?.construction);
+    if (editCage('flatten', body, (cage) => FM.flatten(cage, verts, plane))) {
+      setStatus(`${verts.length} points flattened onto XY.`);
+    }
+  });
+}
+
+function cmdFormMakeUniform() {
+  withForm('Make Uniform', (body) => {
+    if (editCage('make uniform', body, (cage) => FM.makeUniform(cage, 3))) {
+      setStatus('Cage evened out.');
+    }
+  });
+}
+
+function cmdFormMirror() {
+  withForm('Mirror Internal', (body) => {
+    const scope = resolveParameters(state.doc.parameters).scope;
+    const plane = resolvePlane('YZ', scope, state.result?.construction);
+    if (editCage('mirror internal', body, (cage) => FM.mirrorInternal(cage, plane))) {
+      setStatus('Symmetric about YZ. Both halves move together from now on.');
+    } else {
+      setStatus('Nothing lies on the near side of that plane.');
+    }
+  });
+}
+
+function cmdFormCircular() {
+  withForm('Circular Internal', (body) => {
+    const scope = resolveParameters(state.doc.parameters).scope;
+    void scope;
+    const count = 6;
+    if (
+      editCage('circular internal', body, (cage) =>
+        FM.circularInternal(cage, { origin: [0, 0, 0], dir: [0, 0, 1] }, count)
+      )
+    ) {
+      setStatus(`Repeated ${count} times about Z.`);
+    } else {
+      setStatus('Nothing lies in the first wedge about that axis.');
+    }
+  });
+}
+
+function cmdFormClearSymmetry() {
+  withForm('Clear Symmetry', (body) => {
+    if (editCage('clear symmetry', body, (cage) => FM.clearSymmetry(cage))) {
+      setStatus('Symmetry cleared. The halves move on their own now.');
+    }
+  });
+}
+
+/** How the form is drawn: the cage, both, or the surface it stands for. */
+function cmdFormDisplay(mode) {
+  const body = activeForm();
+  if (!body) {
+    setStatus('Display Mode works on a form.');
+    return;
+  }
+  const feature = state.doc.features.find((f) => f.id === body.createdBy);
+  if (!feature) return;
+  pushUndo('display mode');
+  feature.display = mode;
+  state.dirty = true;
+  rebuildAll();
+  setStatus(
+    mode === 'box'
+      ? 'The cage on its own.'
+      : mode === 'smooth'
+        ? 'The surface on its own. Nothing on it can be picked.'
+        : 'The cage over the surface it stands for.'
+  );
+}
+
+function cmdFinishForm() {
+  if (state.sketcher.active) finishSketch();
+  if (!formBodies().length) {
+    setStatus('Finish Form turns a form into a solid. There are none yet.');
+    return;
+  }
+  const chosen = formBodies().filter((b) => state.selection.bodies.has(b.id));
+  const feature = {
+    id: uid('f'),
+    type: 'finishForm',
+    bodies: (chosen.length ? chosen : formBodies()).map((b) => b.id),
+    levels: '3',
+    op: 'new',
+    targets: 'all'
+  };
+  openFeatureEditor(feature, 'Finish Form', finishFormFields());
+}
+
+function cmdFormThicken() {
+  if (state.sketcher.active) finishSketch();
+  if (!formBodies().length) {
+    setStatus('Thicken works on a form. There are none yet.');
+    return;
+  }
+  const chosen = formBodies().filter((b) => state.selection.bodies.has(b.id));
+  const feature = {
+    id: uid('f'),
+    type: 'formThicken',
+    bodies: (chosen.length ? chosen : formBodies()).map((b) => b.id),
+    levels: '3',
+    distance: '2',
+    symmetric: false,
+    keepForm: false,
+    op: 'new',
+    targets: 'all'
+  };
+  openFeatureEditor(feature, 'Thicken Form', formThickenFields());
+}
+
+/* -------- the fields those dialogs show -------- */
+
+function formFields(feature) {
+  const shape = feature.shape || 'box';
+  const size = {
+    box: [
+      { key: 'params.width', label: 'Width', type: 'expr' },
+      { key: 'params.depth', label: 'Depth', type: 'expr' },
+      { key: 'params.height', label: 'Height', type: 'expr' },
+      { key: 'params.nx', label: 'Faces across X', type: 'expr' },
+      { key: 'params.ny', label: 'Faces across Y', type: 'expr' },
+      { key: 'params.nz', label: 'Faces across Z', type: 'expr' }
+    ],
+    plane: [
+      { key: 'params.width', label: 'Width', type: 'expr' },
+      { key: 'params.depth', label: 'Depth', type: 'expr' },
+      { key: 'params.nx', label: 'Faces across', type: 'expr' },
+      { key: 'params.ny', label: 'Faces along', type: 'expr' }
+    ],
+    cylinder: [
+      { key: 'params.radius', label: 'Radius', type: 'expr' },
+      { key: 'params.length', label: 'Height', type: 'expr' },
+      { key: 'params.sides', label: 'Faces round', type: 'expr' },
+      { key: 'params.rows', label: 'Faces up', type: 'expr' },
+      { key: 'params.capped', label: 'Closed ends', type: 'bool' }
+    ],
+    sphere: [
+      { key: 'params.radius', label: 'Radius', type: 'expr' },
+      { key: 'params.sides', label: 'Faces round', type: 'expr' },
+      { key: 'params.rows', label: 'Faces pole to pole', type: 'expr' }
+    ],
+    torus: [
+      { key: 'params.radius', label: 'Ring radius', type: 'expr' },
+      { key: 'params.tubeRadius', label: 'Tube radius', type: 'expr' },
+      { key: 'params.sides', label: 'Faces round the ring', type: 'expr' },
+      { key: 'params.rows', label: 'Faces round the tube', type: 'expr' }
+    ],
+    quadball: [
+      { key: 'params.radius', label: 'Radius', type: 'expr' },
+      { key: 'params.divisions', label: 'Faces per side', type: 'expr' }
+    ]
+  }[shape];
+
+  return [
+    {
+      key: 'plane',
+      label: 'Plane',
+      type: 'select',
+      options: [
+        ['XY', 'XY'],
+        ['XZ', 'XZ'],
+        ['YZ', 'YZ']
+      ]
+    },
+    ...size,
+    { key: 'params.x', label: 'X', type: 'expr' },
+    { key: 'params.y', label: 'Y', type: 'expr' },
+    { key: 'params.z', label: 'Z', type: 'expr' },
+    { key: 'levels', label: 'Smoothness', type: 'expr' },
+    {
+      key: 'display',
+      label: 'Display',
+      type: 'select',
+      options: [
+        ['box', 'Box'],
+        ['control', 'Control frame'],
+        ['smooth', 'Smooth']
+      ]
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The cage is what you shape and the surface is what it stands for. Once this dialog is accepted the size fields no longer rebuild it, because by then it has been shaped by hand.'
+    }
+  ];
+}
+
+function finishFormFields() {
+  return [
+    {
+      key: '__bodies',
+      label: 'Forms',
+      type: 'pick',
+      pick: 'moveBodies',
+      summary: (f) => (f.bodies === 'all' ? 'every form' : countOf(f.bodies, 'form')),
+      clear: (f) => {
+        f.bodies = 'all';
+      }
+    },
+    { key: 'levels', label: 'Smoothness', type: 'expr' },
+    {
+      key: 'op',
+      label: 'Operation',
+      type: 'select',
+      options: [
+        ['new', 'New body'],
+        ['join', 'Join'],
+        ['cut', 'Cut'],
+        ['intersect', 'Intersect']
+      ]
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'A form has to be closed to become a solid. One with a hole in it is refused and told so, rather than handed over and quietly wrong.'
+    }
+  ];
+}
+
+function formThickenFields() {
+  return [
+    {
+      key: '__bodies',
+      label: 'Forms',
+      type: 'pick',
+      pick: 'moveBodies',
+      summary: (f) => (f.bodies === 'all' ? 'every form' : countOf(f.bodies, 'form')),
+      clear: (f) => {
+        f.bodies = 'all';
+      }
+    },
+    { key: 'distance', label: 'Thickness', type: 'expr' },
+    { key: 'levels', label: 'Smoothness', type: 'expr' },
+    { key: 'symmetric', label: 'Both sides', type: 'bool' },
+    { key: 'keepForm', label: 'Keep the form too', type: 'bool' }
+  ];
+}
+
 function describeFeature(feature) {
   const opOptions = [
     ['new', 'New body'],
@@ -9618,6 +10365,12 @@ function describeFeature(feature) {
     ['intersect', 'Intersect']
   ];
   switch (feature.type) {
+    case 'form':
+      return { title: `Form: ${feature.shape || 'box'}`, fields: formFields(feature) };
+    case 'finishForm':
+      return { title: 'Finish Form', fields: finishFormFields() };
+    case 'formThicken':
+      return { title: 'Thicken Form', fields: formThickenFields() };
     case 'insertMesh':
       return { title: 'Insert Mesh', fields: insertMeshFields() };
     case 'meshRepair':

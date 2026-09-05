@@ -14,6 +14,10 @@ import { buildGeometry, buildEdges } from './meshutil.js';
 // a glance rather than needing the browser to be checked.
 const SHEET_COLOUR = 0xd9c187;
 
+// A form is neither solid nor surface while it is being shaped, and it reads as
+// its own thing: a cool grey against the two warm ones.
+const FORM_COLOUR = 0xc4cbd2;
+
 const UP = new THREE.Vector3(0, 0, 1);
 
 /**
@@ -663,7 +667,7 @@ export class Viewport {
         // A pale warm grey, brighter than the ground it sits on, with no
         // metal in it. The shape is the subject, not the finish.
         const mat = new THREE.MeshStandardMaterial({
-          color: rec.sheet ? SHEET_COLOUR : 0xe0dcd2,
+          color: rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : 0xe0dcd2,
           metalness: 0.0,
           roughness: 0.62,
           flatShading: false,
@@ -702,7 +706,7 @@ export class Viewport {
       } else if (entry.mat.metalness) {
         entry.mat.metalness = 0;
         entry.mat.roughness = 0.62;
-        entry.mat.color.set(rec.sheet ? SHEET_COLOUR : 0xe0dcd2);
+        entry.mat.color.set(rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : 0xe0dcd2);
       }
 
       // A surface has no inside, so it is drawn from both sides and in its own
@@ -715,7 +719,7 @@ export class Viewport {
         entry.mat.needsUpdate = true;
       }
       if (rec.sheet && !rec.chrome && !entry.mat.vertexColors) {
-        entry.mat.color.set(SHEET_COLOUR);
+        entry.mat.color.set(rec.isForm ? FORM_COLOUR : SHEET_COLOUR);
       }
 
       // Coloured per vertex when an analysis says so, and back to the plain
@@ -733,7 +737,7 @@ export class Viewport {
         entry.mat.color.set(0xffffff);
       } else if (entry.mat.vertexColors) {
         entry.mat.vertexColors = false;
-        entry.mat.color.set(rec.sheet ? SHEET_COLOUR : 0xe0dcd2);
+        entry.mat.color.set(rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : 0xe0dcd2);
       }
       entry.mat.needsUpdate = true;
 
@@ -744,9 +748,40 @@ export class Viewport {
         ? 0xf2f0ec
         : entry.mat.vertexColors
           ? 0xffffff
-          : rec.sheet
-            ? SHEET_COLOUR
-            : 0xe0dcd2;
+          : rec.isForm
+            ? FORM_COLOUR
+            : rec.sheet
+              ? SHEET_COLOUR
+              : 0xe0dcd2;
+
+      // Control Frame shows the cage and the surface it stands for at the same
+      // time. The cage is the body, because that is what has to be pointed at;
+      // the surface goes behind it, see-through, so the shape is visible while
+      // the thing shaping it is what the pointer finds.
+      if (rec.overlayMesh) {
+        const geom2 = buildGeometry(rec.overlayMesh);
+        if (entry.overlay) {
+          entry.overlay.geometry.dispose();
+          entry.overlay.geometry = geom2;
+        } else {
+          const mat2 = new THREE.MeshStandardMaterial({
+            color: 0xe0dcd2,
+            metalness: 0,
+            roughness: 0.6,
+            transparent: true,
+            opacity: 0.55,
+            depthWrite: false,
+            side: THREE.DoubleSide
+          });
+          entry.overlay = new THREE.Mesh(geom2, mat2);
+          entry.overlay.userData.pickable = false;
+          entry.overlay.renderOrder = -1;
+          entry.mesh.add(entry.overlay);
+        }
+        entry.overlay.visible = true;
+      } else if (entry.overlay) {
+        entry.overlay.visible = false;
+      }
 
       entry.mesh.visible = rec.visible !== false && !(rec.displayMesh === null);
       entry.record = rec;

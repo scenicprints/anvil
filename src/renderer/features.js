@@ -44,6 +44,7 @@ import {
 import * as SH from './sheet.js';
 import * as SM from './sheetmetal.js';
 import * as MT from './meshtools.js';
+import * as FM from './form.js';
 
 /* ------------------------------------------------------------------ */
 /* Document                                                            */
@@ -76,6 +77,9 @@ export function newDocument() {
     // them: the file they came from may not be there next time.
     meshData: {},
     imageData: {},
+    // Control cages, beside the sketches and for the same reason: a form is
+    // drawn rather than derived, so nothing in the timeline can rebuild it.
+    forms: {},
     // One sheet metal rule per document. Every part made here is made to it,
     // and changing it changes every bend at once, which is what it is for.
     sheetMetalRule: { ...SM.DEFAULT_RULE }
@@ -954,6 +958,18 @@ export function rebuild(doc, options = {}) {
 
         case 'faceGroups':
           doFaceGroups(feature, scope, scopeObj, errors);
+          break;
+
+        case 'form':
+          doForm(feature, doc, scope, scopeObj, errors);
+          break;
+
+        case 'finishForm':
+          doFinishForm(feature, doc, scope, scopeObj, applyBoolean, errors);
+          break;
+
+        case 'formThicken':
+          doFormThicken(feature, doc, scope, scopeObj, applyBoolean, errors);
           break;
 
         default:
@@ -6314,6 +6330,150 @@ export function rebuild(doc, options = {}) {
     }
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Forms                                                             */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * A form in the model.
+   *
+   * One timeline entry per form, the way Fusion does it: the cage is edited in
+   * place rather than through a feature per change, because a hundred pushes
+   * and pulls on a cage are one act of shaping and not a hundred features. The
+   * cage lives in the document beside the sketches, for the same reason a sketch
+   * does: nothing in the timeline can reproduce it.
+   */
+  function doForm(feature, doc, scope, ks, errs) {
+    const cage = doc.forms?.[feature.form];
+    if (!cage) throw new Error('That form is not in this document any more');
+    if (!cage.faces?.length) throw new Error('That form has no faces yet');
+
+    const levels = Math.max(0, Math.min(4, Math.round(safeEval(feature.levels, scope, 2))));
+    const display = feature.display || 'control';
+
+    // Box and Control Frame show the cage, because that is what is being
+    // worked on and what has to be pointed at. Smooth shows the surface it
+    // stands for, and nothing on it is selectable, which is the honest state
+    // of affairs rather than a limitation to apologise for.
+    const cageMesh = FM.cageToMesh(cage);
+    const smooth = FM.formMesh(cage, levels);
+
+    const key = `${feature.id}:${bodies.length}`;
+    bodies.push({
+      id: key,
+      name: doc.bodyNames?.[key] || feature.name || `Form ${bodies.length + 1}`,
+      sheet: display === 'smooth' ? smooth : cageMesh,
+      form: feature.form,
+      cage,
+      levels,
+      display,
+      // What the viewport draws over the top: the smooth surface while the cage
+      // is the thing being picked.
+      overlayMesh: display === 'control' ? smooth : null,
+      createdBy: feature.id,
+      component: feature.component || null
+    });
+  }
+
+  /** Every form body a feature was pointed at. */
+  function pickForms(feature) {
+    const wanted = feature.bodies && feature.bodies !== 'all' ? feature.bodies : null;
+    return bodies.filter((b) => b.form && (!wanted || wanted.includes(b.id)));
+  }
+
+  /**
+   * Turn a form into a solid the rest of the app can work with.
+   *
+   * Up to this point a form is a surface: you can shape it, but you cannot cut
+   * a hole in it or measure what it weighs. Finishing is where it crosses over,
+   * and a form that does not close is refused rather than handed to the kernel,
+   * for the same reason an open mesh is.
+   */
+  function doFinishForm(feature, doc, scope, ks, apply, errs) {
+    const targets = pickForms(feature);
+    if (!targets.length) throw new Error('Finish Form works on a form body');
+
+    for (const body of targets) {
+      const levels = Math.max(
+        0,
+        Math.min(4, Math.round(safeEval(feature.levels, scope, body.levels ?? 2)))
+      );
+      const mesh = FM.formMesh(body.cage, levels);
+      const health = MT.meshHealth(mesh);
+      if (!health.closed) {
+        errs.push({
+          feature: feature.id,
+          message: `${body.name} is not closed: ${health.openEdges} open edge${
+            health.openEdges === 1 ? '' : 's'
+          }. Fill the holes, or thicken it instead of finishing it.`
+        });
+        continue;
+      }
+
+      let solid = null;
+      try {
+        solid = K.ofMesh(mesh.vertProperties, mesh.triVerts, ks);
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Finish Form: ${err.message}` });
+        continue;
+      }
+      if (!solid || K.isEmpty(solid) || K.status(solid) !== 'NoError') {
+        errs.push({
+          feature: feature.id,
+          message: `${body.name} closes but runs into itself, so it is not a solid.`
+        });
+        continue;
+      }
+      bodies.splice(bodies.indexOf(body), 1);
+      apply(feature, solid, feature.op || 'new');
+    }
+  }
+
+  /**
+   * Give an open form thickness, and so a solid.
+   *
+   * A form that is a sheet rather than a shell has no inside to fill, so this
+   * is how it becomes something printable: the same offset both ways and a wall
+   * round the rim, which is what Thicken does everywhere else in the app.
+   */
+  function doFormThicken(feature, doc, scope, ks, apply, errs) {
+    const targets = pickForms(feature);
+    if (!targets.length) throw new Error('Thicken works on a form body');
+    const distance = safeEval(feature.distance, scope, 2);
+    if (Math.abs(distance) < 1e-9) throw new Error('Thicken needs a thickness');
+
+    for (const body of targets) {
+      const levels = Math.max(
+        0,
+        Math.min(4, Math.round(safeEval(feature.levels, scope, body.levels ?? 2)))
+      );
+      const mesh = FM.formMesh(body.cage, levels);
+      const { sheet, closed } = SH.thickenSheet(mesh, distance, !!feature.symmetric);
+      if (!closed) {
+        errs.push({
+          feature: feature.id,
+          message: `${body.name} did not close when thickened, so it cannot become a solid.`
+        });
+        continue;
+      }
+      let solid = null;
+      try {
+        solid = K.ofMesh(sheet.vertProperties, sheet.triVerts, ks);
+      } catch {
+        solid = null;
+      }
+      if (!solid || K.isEmpty(solid) || K.status(solid) !== 'NoError') {
+        errs.push({
+          feature: feature.id,
+          message: `Thickening ${body.name} made it run into itself. Try a smaller thickness.`
+        });
+        continue;
+      }
+      if (!feature.keepForm) bodies.splice(bodies.indexOf(body), 1);
+      apply(feature, solid, feature.op || 'new');
+    }
+  }
+
   function pickBodies(feature, bodies, opts = {}) {
     // Solid features must never be handed a sheet. Surface features say so.
     const kind = opts.sheets === true
@@ -6394,6 +6554,9 @@ function normalizeVec(v) {
 
 export const FEATURE_LABELS = {
   sketch: 'Sketch',
+  form: 'Form',
+  finishForm: 'Finish Form',
+  formThicken: 'Thicken Form',
   insertMesh: 'Insert Mesh',
   tessellate: 'Tessellate',
   meshRepair: 'Repair',
@@ -6469,6 +6632,9 @@ export function featureLabel(doc, feature) {
   if (feature.name) return feature.name;
   if (feature.type === 'sketch') {
     return doc.sketches[feature.sketch]?.name || 'Sketch';
+  }
+  if (feature.type === 'form') {
+    return doc.forms[feature.form]?.name || 'Form';
   }
   if (feature.type === 'primitive') {
     const s = feature.shape || 'box';
