@@ -1005,6 +1005,18 @@ analyses at all.
 **Modelling gaps that remain:** Fusion's compute options for patterns that hit
 different geometry. Silhouette Split works only where the parting line is flat.
 
+**Reaching for a tool starts the sketch.** Clicking Rectangle on the Sketch tab
+with nothing open asks which plane to put it on and then opens the sketch with
+the rectangle already in hand. It used to say "start a sketch first" and do
+nothing, which left every button on the tab dead with no route from the tab you
+were looking at to the state it needed.
+
+**Snapping** catches the origin first of all, then sketch points, midpoints and
+centres, then anything projected in from the model, then the nearest point on
+any curve, all within ten pixels of the cursor. The origin is deliberately the
+strongest of them, because it is the anchor most sketches want to start from.
+Grid snap is a separate switch and only applies where nothing else was caught.
+
 **Where the form tools stop.** A circular symmetry is remembered but a drag is
 not mirrored round it: only mirror symmetry follows a drag live. Range selection
 and Select Next are not there; Grow, Shrink, Loop, Ring, Invert and Select All

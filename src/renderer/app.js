@@ -1060,14 +1060,7 @@ function wireUI() {
   });
 
   document.querySelectorAll('[data-tool]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!state.sketcher.active) {
-        setStatus('Start a sketch first.');
-        return;
-      }
-      state.sketcher.setTool(btn.dataset.tool);
-      syncToolButtons();
-    });
+    btn.addEventListener('click', () => reachForTool(btn.dataset.tool));
   });
 
   document.querySelectorAll('[data-con]').forEach((btn) => {
@@ -1154,6 +1147,65 @@ function setTab(name) {
     .querySelectorAll('.ribbon-panel')
     .forEach((p) => p.classList.toggle('active', p.dataset.panel === name));
 }
+
+/**
+ * Take up a sketch tool, starting a sketch if there is not one already.
+ *
+ * Reaching for the rectangle tool is saying you want to draw a rectangle, and
+ * the only honest answer to that is to let you. The tab used to answer "start a
+ * sketch first" and then do nothing, which leaves every button on it dead with
+ * no way from the tab you are looking at to the state it needs. The tool is
+ * remembered across the plane pick and put in your hand when the sketch opens.
+ */
+function reachForTool(tool) {
+  if (state.sketcher.active) {
+    state.sketcher.setTool(tool);
+    syncToolButtons();
+    return;
+  }
+  state.pendingTool = tool;
+  cmdNewSketch();
+  // A face was already picked, so the sketch is open and the tool is in hand.
+  if (state.sketcher.active) return;
+  setStatus(`Select a plane or a planar face to sketch on, then ${TOOL_NAMES[tool] || tool}.`);
+}
+
+/** What a tool is called, for the line that asks where to put the sketch. */
+const TOOL_NAMES = {
+  select: 'select',
+  line: 'draw a line',
+  rectangle: 'draw a rectangle',
+  centerRectangle: 'draw a rectangle',
+  rectangle3: 'draw a rectangle',
+  circle: 'draw a circle',
+  circleDia: 'draw a circle',
+  circleTan2: 'draw a circle',
+  circleTan3: 'draw a circle',
+  arc: 'draw an arc',
+  arc3: 'draw an arc',
+  tangentArc: 'draw an arc',
+  polygon: 'draw a polygon',
+  polygonCirc: 'draw a polygon',
+  polygonEdge: 'draw a polygon',
+  slot: 'draw a slot',
+  slotOverall: 'draw a slot',
+  slotCentre: 'draw a slot',
+  slotArc3: 'draw a slot',
+  slotArcCentre: 'draw a slot',
+  point: 'place a point',
+  ellipse: 'draw an ellipse',
+  spline: 'draw a spline',
+  splineCP: 'draw a spline',
+  conic: 'draw a conic',
+  text: 'place text',
+  fillet: 'round a corner',
+  chamfer: 'cut a corner',
+  trim: 'trim',
+  offset: 'offset',
+  breakCurve: 'break a curve',
+  extend: 'extend',
+  mirror: 'mirror'
+};
 
 function syncToolButtons() {
   const active = state.sketcher.active ? state.sketcher.tool : null;
@@ -1996,7 +2048,9 @@ function beginPlanePick() {
   const wasVisible = state.vp.originPlanes.visible;
   state.vp.setPlanesVisible(true);
 
+  let taken = false;
   const take = (spec) => {
+    taken = true;
     // The pick is still open at this point, so close it before the sketch
     // starts and steals the pointer.
     endPicking(false);
@@ -2013,6 +2067,11 @@ function beginPlanePick() {
       state.pickingPlane = null;
       state.vp.setPlaneHover(null);
       state.vp.setPlanesVisible(wasVisible);
+      // Tidying runs whether the plane was taken or not, so a tool reached for
+      // and then thought better of is dropped here rather than lying in wait
+      // for the next sketch. It cannot be dropped unconditionally: on a taken
+      // pick this runs before the sketch opens.
+      if (!taken) state.pendingTool = null;
     },
     onPick: (hit) => {
       if (hit.kind === 'plane') {
@@ -2115,10 +2174,13 @@ function enterSketch(feature, opts = {}) {
   // A new sketch opens on the line tool, the way Fusion does, because the only
   // reason to have made one is to draw. Reopening an existing sketch is usually
   // to change something, so that lands on select.
-  if (opts.draw) {
-    state.sketcher.setTool('line');
+  if (opts.draw || state.pendingTool) {
+    // Whatever was reached for on the tab, or the line tool, which is what a
+    // sketch made for no stated reason opens on.
+    state.sketcher.setTool(state.pendingTool || 'line');
     syncToolButtons();
   }
+  state.pendingTool = null;
 
   setStatus(`Editing ${sk.name}. Draw, then press Finish.`);
   updateHints();
@@ -4872,12 +4934,7 @@ function showRibbonMenu(name, anchor) {
     b.addEventListener('click', () => {
       closeMarkingMenu();
       if (cmd.startsWith('tool:')) {
-        if (!state.sketcher.active) {
-          setStatus('Start a sketch first.');
-          return;
-        }
-        state.sketcher.setTool(cmd.slice(5));
-        syncToolButtons();
+        reachForTool(cmd.slice(5));
       } else {
         runCommand(cmd);
       }
