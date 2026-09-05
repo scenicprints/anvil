@@ -144,6 +144,10 @@ cmd /c "dist\Anvil-Setup-<version>.exe /S"
   stale install has been mistaken for a broken feature before.
 - Always `node --check` after editing `src/main/main.js`.
 - Bump the version in `package.json` for every shipped batch.
+- **Commit and push at the end of every batch.** The repo is
+  `scenicprints/anvil`, public, on `main`. Batches 1 to 6 shipped with no
+  version control at all because nobody checked `git remote -v` before
+  starting. Check it first, push last.
 
 ### Traps that have already bitten
 
