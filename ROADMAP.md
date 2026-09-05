@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.0.0**. 251 tests. Batches 1 to 7 shipped.
+Current version: **2.1.0**. 265 tests. Batches 1 to 8 shipped.
 
 ---
 
@@ -184,6 +184,12 @@ recurring:
 - A surface body has no volume. Mass, section and interference all have to skip
   one, and every boolean has to refuse one, or the kernel produces nonsense
   rather than an error.
+- Handedness is not worth deriving. Where a sign depends on whether a frame is
+  right handed, compute it at runtime from a dot product and move on. Batch 8's
+  bends did this and every measurement was right first time; the arc slots in an
+  earlier batch did not, and cost a session.
+- Any id a later feature refers to has to come from the feature that made it. A
+  counter is reset by the rebuild and renames everything under the references.
 
 ---
 
@@ -679,33 +685,55 @@ parameterisation, meaning one built here rather than a face lifted off a solid.
 
 ---
 
-## Batch 8. Sheet Metal
+## Batch 8, shipped in v2.1.0
 
-**Depends on:** nothing.
+Sheet metal. The roadmap said to ask whether this was wanted before spending a
+session on it; he said to start it, so it was built.
 
 ### What ships
 
-Sheet metal rules (thickness, bend radius, K-factor), Flange, Contour Flange,
-Bend, Unfold, Refold, Rip, Corner Relief, Convert to Sheet Metal, Create Flat
-Pattern, and DXF export of the flat.
+`src/renderer/sheetmetal.js`, and a Sheet Metal tab. One rule per document
+(thickness, bend radius, K factor, gap, bend relief, corner relief), Base
+Flange, Flange, Contour Flange, Fold, Unfold, Refold, Rip, Corner Relief,
+Convert To Sheet Metal, Flat Pattern, and DXF export of the flat.
 
-### The hard parts
+### How it is modelled
 
-- **The flat pattern is a second parallel model**, not a view of the first. A
-  bend knows its own unfolded length from the K-factor, and the flat is built
-  from the same feature list with every bend flattened. Model it that way from
-  the start.
+A part is a tree of flat **panels** joined by **bends**. A panel is a contour in
+its own frame with the material one thickness deep. A bend stores the line it
+folds about in its parent's frame, and the child's frame is that parent's frame
+rotated about the bend axis. Lay the child in the same plane instead, pushed out
+by the bend allowance, and that is the flat.
 
-### Note
+So the folded part and the flat pattern are the same walk over the same tree,
+differing only in what a bend does to its child. There is no second model to
+keep in step. Unfold is the same thing again, per bend rather than for all of
+them, which is why it costs nothing extra.
 
-Ask him whether this is wanted before spending a session on it. Anvil exists for
-3D printed parts and sheet metal is for a bender and a brake. He said "all of
-it", so it is on the list, but it is the one item on it that may not earn its
-keep.
+### What was learned building it
+
+- **The handedness cost more than the geometry.** Which way a positive angle
+  folds depends on whether the panel's frame is right handed, which is not
+  something to reason about at three in the morning. The triad is now built
+  once, the bend line is ordered when the bend is made so it always comes out
+  right handed, and the two remaining signs are *measured at runtime*
+  (`g.sense`, and the direction the bend section sweeps) rather than baked in.
+  Every number was right on the first run after that.
+- **Ids must come from the feature, never a counter.** The timeline replays from
+  scratch, so a counter renames every panel on every rebuild and Unfold loses
+  its grip the moment a dimension changes.
+- **`[]` is truthy** bit again, in `chainPath`'s entity filter: an empty "which
+  entities" list filtered every entity out and Contour Flange saw an empty
+  sketch. That is the third time this shape of bug has appeared.
+- **Counting a polygon's own corners is not a test of anything.** Fold refused
+  every fold because a rectangle cut across the middle has two corners either
+  side, and the check wanted three. The clip decides, not the count.
 
 ### Done when
 
-Version 2.1.0, and a flat pattern exports as DXF that measures correctly.
+Version 2.1.0, and a flat pattern exports as DXF that measures correctly. It
+does: the DXF is read back by Anvil's own DXF reader in the test suite, and the
+blank measures the legs plus the bend allowance to a hundredth.
 
 ---
 

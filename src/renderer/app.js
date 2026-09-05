@@ -27,6 +27,7 @@ import {
   uid
 } from './features.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
+import * as SM from './sheetmetal.js';
 import {
   newComponent,
   JOINT_TYPES,
@@ -426,9 +427,15 @@ function handleViewportDown(e) {
     const profile = wantsProfile ? pickProfile(e.clientX, e.clientY) : null;
     if (profile) return pickIntoEdit({ kind: 'profile', ...profile });
     const wantsEdges =
-      ['axis', 'path', 'rail', 'constructPath', 'jointAxis2', 'surfaceCurves'].includes(
-        armed
-      ) || String(armed).startsWith('set:');
+      [
+        'axis',
+        'path',
+        'rail',
+        'constructPath',
+        'jointAxis2',
+        'surfaceCurves',
+        'sheetEdges'
+      ].includes(armed) || String(armed).startsWith('set:');
     // A plane click has to be offered before the body raycast, or a plane
     // drawn behind the model can never be reached.
     if (['alignFrom', 'alignTo', 'silhouetteDir'].includes(armed)) {
@@ -1400,6 +1407,42 @@ async function runCommand(cmd) {
     case 'replaceFace':
       cmdReplaceFace();
       break;
+    case 'smRule':
+      cmdSheetRule();
+      break;
+    case 'baseFlange':
+      cmdBaseFlange();
+      break;
+    case 'flange':
+      cmdFlange();
+      break;
+    case 'contourFlange':
+      cmdContourFlange();
+      break;
+    case 'sheetFold':
+      cmdSheetFold();
+      break;
+    case 'unfold':
+      cmdUnfold(false);
+      break;
+    case 'refold':
+      cmdUnfold(true);
+      break;
+    case 'rip':
+      cmdRip();
+      break;
+    case 'cornerRelief':
+      cmdCornerRelief();
+      break;
+    case 'convertToSheetMetal':
+      cmdConvertToSheetMetal();
+      break;
+    case 'flatPattern':
+      cmdFlatPattern();
+      break;
+    case 'exportFlatDXF':
+      cmdExportFlatDXF();
+      break;
     case 'loft':
       startLoft();
       break;
@@ -1694,6 +1737,7 @@ function migrate(data) {
   doc.components = doc.components || [];
   doc.joints = doc.joints || [];
   doc.baseBodies = doc.baseBodies || [];
+  doc.sheetMetalRule = { ...SM.DEFAULT_RULE, ...(doc.sheetMetalRule || {}) };
   if (doc.captureHistory === undefined) doc.captureHistory = true;
   if (doc.rollback === undefined) doc.rollback = null;
   return doc;
@@ -7629,6 +7673,24 @@ function pickIntoEdit(hit) {
     const at = f.tools.indexOf(hit.bodyId);
     if (at >= 0) f.tools.splice(at, 1);
     else f.tools.push(hit.bodyId);
+  } else if (ed.pickInto === 'sheetEdges') {
+    if (hit.kind !== 'edge' || hit.edgeId === null || hit.edgeId === undefined) return true;
+    const rec = (state.records || []).find((r) => r.id === hit.bodyId);
+    const edge = rec?.topology?.edges[hit.edgeId];
+    if (!edge) return true;
+    f.edges = f.edges || [];
+    const ref = edgeReference(edge, rec.topology);
+    const at = f.edges.findIndex(
+      (e) => e.mid && ref.mid && Math.hypot(
+        e.mid[0] - ref.mid[0], e.mid[1] - ref.mid[1], e.mid[2] - ref.mid[2]
+      ) < 1e-6
+    );
+    if (at >= 0) f.edges.splice(at, 1);
+    else f.edges.push(ref);
+    // The part the edge belongs to is the part being worked on.
+    if (!Array.isArray(f.bodies) || !f.bodies.includes(hit.bodyId)) {
+      f.bodies = [hit.bodyId];
+    }
   } else if (ed.pickInto === 'surfaceCurves') {
     if (hit.kind !== 'edge' || hit.edgeId === null || hit.edgeId === undefined) return true;
     const rec = (state.records || []).find((r) => r.id === hit.bodyId);
@@ -8472,6 +8534,491 @@ function cmdIsoCurve() {
   setStatus(`${made} isoparametric curve${made === 1 ? '' : 's'}.`);
 }
 
+/* ---------------------------------------------------------------- */
+/* Sheet metal                                                       */
+/* ---------------------------------------------------------------- */
+
+/** Every sheet metal body in the model. */
+function sheetBodies() {
+  return (state.result?.bodies || []).filter((b) => b.sheetMetal);
+}
+
+/** Whichever sheet metal bodies are selected, or all of them. */
+function pickedSheetIds() {
+  const all = sheetBodies();
+  const chosen = all.filter((b) => state.selection.bodies.has(b.id));
+  return (chosen.length ? chosen : all).map((b) => b.id);
+}
+
+/**
+ * The rule every sheet metal feature in this document is made to.
+ *
+ * One rule per part, which is the useful nine tenths of Fusion's rule library
+ * and far less to keep straight. It is a document setting rather than a
+ * timeline feature, because changing it changes every bend at once and that is
+ * what it is for.
+ */
+function cmdSheetRule() {
+  if (state.sketcher.active) finishSketch();
+  const r = { ...SM.DEFAULT_RULE, ...(state.doc.sheetMetalRule || {}) };
+
+  showInspector(
+    'Sheet Metal Rule',
+    [
+      { key: 'thickness', label: 'Thickness', type: 'expr', value: r.thickness },
+      { key: 'bendRadius', label: 'Bend radius', type: 'expr', value: r.bendRadius },
+      { key: 'kFactor', label: 'K factor', type: 'expr', value: r.kFactor },
+      { key: 'gap', label: 'Rip and miter gap', type: 'expr', value: r.gap },
+      {
+        key: 'reliefShape',
+        label: 'Bend relief',
+        type: 'select',
+        value: r.reliefShape,
+        options: SM.RELIEF_SHAPES
+      },
+      { key: 'reliefWidth', label: 'Relief width', type: 'expr', value: r.reliefWidth },
+      { key: 'reliefDepth', label: 'Relief depth', type: 'expr', value: r.reliefDepth },
+      {
+        key: 'cornerShape',
+        label: 'Corner relief',
+        type: 'select',
+        value: r.cornerShape,
+        options: SM.CORNER_SHAPES
+      },
+      { key: 'cornerSize', label: 'Corner size', type: 'expr', value: r.cornerSize },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'A blank relief size means the thickness. The K factor is how far through the material the neutral axis sits, and it is what the flat length turns on.'
+      }
+    ],
+    (values) => {
+      pushUndo('sheet metal rule');
+      state.doc.sheetMetalRule = { ...r, ...values };
+      state.dirty = true;
+      rebuildAll();
+      setStatus(`Sheet metal rule: ${values.thickness} thick, ${values.bendRadius} radius.`);
+    }
+  );
+}
+
+/** A flat sheet from a closed profile, which every later panel hangs off. */
+function cmdBaseFlange() {
+  if (state.sketcher.active) finishSketch();
+  const sketchId = activeSketchId();
+  if (!sketchId && !state.selection.faces.size) {
+    setStatus('Draw a closed profile and select its sketch, or pick a planar face.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'baseFlange',
+    sketch: sketchId,
+    seeds: sketchId ? activeSeeds(sketchId) : null,
+    faces: []
+  };
+  openFeatureEditor(feature, 'Base Flange', baseFlangeFields());
+  if (!feature.seeds?.length) {
+    setEditPick('profiles');
+    setStatus('Click the profile to make a sheet from.');
+  }
+}
+
+/** A flange off one or more edges of a sheet metal part. */
+function cmdFlange() {
+  if (state.sketcher.active) finishSketch();
+  if (!sheetBodies().length) {
+    setStatus('Flange works on a sheet metal body. Make a base flange first.');
+    return;
+  }
+  const edges = [...selectedEdgeRefs().values()].flat();
+  const feature = {
+    id: uid('f'),
+    type: 'flange',
+    bodies: pickedSheetIds(),
+    edges,
+    angle: '90',
+    height: '20',
+    radius: '',
+    bendPosition: 'inside',
+    relief: true
+  };
+  openFeatureEditor(feature, 'Flange', flangeFields());
+  if (!edges.length) {
+    setEditPick('sheetEdges');
+    setStatus('Click the edges to put a flange on.');
+  }
+}
+
+/** A whole folded part from one open section, swept a width. */
+function cmdContourFlange() {
+  if (state.sketcher.active) finishSketch();
+  const sketchId = activeSketchId();
+  if (!sketchId) {
+    setStatus('Draw the part cross section as an open run of lines, then select that sketch.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'contourFlange',
+    sketch: sketchId,
+    entities: [],
+    width: '40',
+    radius: ''
+  };
+  openFeatureEditor(feature, 'Contour Flange', contourFlangeFields());
+}
+
+/** Fold a flat face along a sketched line. */
+function cmdSheetFold() {
+  if (state.sketcher.active) finishSketch();
+  if (!sheetBodies().length) {
+    setStatus('Fold works on a sheet metal body.');
+    return;
+  }
+  const sketchId = activeSketchId();
+  if (!sketchId) {
+    setStatus('Draw the fold line on the face, select that sketch, then fold.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'sheetFold',
+    bodies: pickedSheetIds(),
+    sketch: sketchId,
+    entities: [],
+    angle: '90',
+    radius: '',
+    flip: false,
+    bendLinePosition: 'center'
+  };
+  openFeatureEditor(feature, 'Fold', sheetFoldFields());
+}
+
+/** Flatten bends to work across them, and put them back afterwards. */
+function cmdUnfold(refold) {
+  if (state.sketcher.active) finishSketch();
+  if (!sheetBodies().length) {
+    setStatus(`${refold ? 'Refold' : 'Unfold'} works on a sheet metal body.`);
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: refold ? 'refold' : 'unfold',
+    bodies: pickedSheetIds(),
+    bends: ''
+  };
+  openFeatureEditor(feature, refold ? 'Refold' : 'Unfold', unfoldFields(feature));
+}
+
+/** Cut a part so it can be laid out flat. */
+function cmdRip() {
+  if (state.sketcher.active) finishSketch();
+  if (!sheetBodies().length) {
+    setStatus('Rip works on a sheet metal body.');
+    return;
+  }
+  const edges = [...selectedEdgeRefs().values()].flat();
+  const feature = {
+    id: uid('f'),
+    type: 'rip',
+    bodies: pickedSheetIds(),
+    edges,
+    gap: ''
+  };
+  openFeatureEditor(feature, 'Rip', ripFields());
+  if (!edges.length) {
+    setEditPick('sheetEdges');
+    setStatus('Click the edge to tear along.');
+  }
+}
+
+/** The notch where two bends meet at a corner. */
+function cmdCornerRelief() {
+  if (state.sketcher.active) finishSketch();
+  if (!sheetBodies().length) {
+    setStatus('Corner Relief works on a sheet metal body.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'cornerRelief',
+    bodies: pickedSheetIds()
+  };
+  openFeatureEditor(feature, 'Corner Relief', [
+    {
+      key: '__bodies',
+      label: 'Bodies',
+      type: 'pick',
+      pick: 'moveBodies',
+      summary: (f) => (f.bodies === 'all' ? 'every part' : countOf(f.bodies, 'part')),
+      clear: (f) => {
+        f.bodies = 'all';
+      }
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The shape and size come from the rule.'
+    }
+  ]);
+}
+
+/** Read an ordinary solid as a folded sheet. */
+function cmdConvertToSheetMetal() {
+  if (state.sketcher.active) finishSketch();
+  const solids = (state.result?.bodies || []).filter((b) => b.solid && !b.sheetMetal);
+  if (!solids.length) {
+    setStatus('Convert needs a solid body that is not already sheet metal.');
+    return;
+  }
+  const chosen = solids.filter((b) => state.selection.bodies.has(b.id));
+  const feature = {
+    id: uid('f'),
+    type: 'convertToSheetMetal',
+    bodies: (chosen.length ? chosen : solids).map((b) => b.id)
+  };
+  openFeatureEditor(feature, 'Convert To Sheet Metal', [
+    {
+      key: '__bodies',
+      label: 'Bodies',
+      type: 'pick',
+      pick: 'moveBodies',
+      summary: (f) => (f.bodies === 'all' ? 'every body' : countOf(f.bodies, 'body')),
+      clear: (f) => {
+        f.bodies = 'all';
+      }
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The thickness comes from the rule. A body that is not that thick is refused rather than quietly converted.'
+    }
+  ]);
+}
+
+/** The flat pattern, as a body of its own. */
+function cmdFlatPattern() {
+  if (state.sketcher.active) finishSketch();
+  const parts = sheetBodies();
+  if (!parts.length) {
+    setStatus('Flat Pattern works on a sheet metal body.');
+    return;
+  }
+  // Laid clear of the part it came from, which is where you want to look at it.
+  let far = 0;
+  for (const b of parts) {
+    try {
+      far = Math.max(far, K.boundingBox(b.solid).max[1]);
+    } catch {
+      /* an unmeasurable body just does not move the mark */
+    }
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'flatPattern',
+    bodies: pickedSheetIds(),
+    at: [0, far + 30, 0]
+  };
+  openFeatureEditor(feature, 'Flat Pattern', [
+    {
+      key: '__bodies',
+      label: 'Parts',
+      type: 'pick',
+      pick: 'moveBodies',
+      summary: (f) => (f.bodies === 'all' ? 'every part' : countOf(f.bodies, 'part')),
+      clear: (f) => {
+        f.bodies = 'all';
+      }
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'A separate body, not a view of the folded one. It is what a drawing and a DXF are made from.'
+    }
+  ]);
+}
+
+/**
+ * The flat, as a DXF a laser cutter will take.
+ *
+ * Cut geometry and bend lines go on their own layers, because they mean
+ * different things to whoever runs the machine: one is a path, the other is a
+ * mark for the brake.
+ */
+async function cmdExportFlatDXF() {
+  const flats = (state.result?.bodies || []).filter((b) => b.outline);
+  if (!flats.length) {
+    setStatus('Make a flat pattern first. That is what carries the outline.');
+    return;
+  }
+  const chosen = flats.filter((b) => state.selection.bodies.has(b.id));
+  const one = chosen[0] || flats[0];
+
+  const text = SM.flatToDXF(one.outline);
+  const base = (state.docPath ? state.docPath.split(/[\\/]/).pop() : 'Untitled').replace(
+    /\.anvil$/i,
+    ''
+  );
+  const res = await window.anvil.exportMesh(`${base} flat.dxf`, 'dxf', text);
+  if (res.ok) {
+    setStatus(`Exported ${res.path.split(/[\\/]/).pop()}`);
+    window.anvil.showItem(res.path);
+  } else if (res.error) {
+    setStatus(`Export failed: ${res.error}`);
+  }
+}
+
+/* -------- the fields those dialogs show -------- */
+
+function baseFlangeFields() {
+  return [
+    {
+      key: '__profiles',
+      label: 'Profile',
+      type: 'pick',
+      pick: 'profiles',
+      summary: (f) =>
+        f.seeds === null || f.seeds === undefined
+          ? 'the whole sketch'
+          : countOf(f.seeds, 'profile'),
+      clear: (f) => {
+        f.seeds = [];
+      }
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The thickness comes from the rule, so a base flange has no thickness of its own to set.'
+    }
+  ];
+}
+
+function sheetBodyField(label = 'Parts') {
+  return {
+    key: '__bodies',
+    label,
+    type: 'pick',
+    pick: 'moveBodies',
+    summary: (f) => (f.bodies === 'all' ? 'every part' : countOf(f.bodies, 'part')),
+    clear: (f) => {
+      f.bodies = 'all';
+    }
+  };
+}
+
+function flangeFields() {
+  return [
+    {
+      key: '__edges',
+      label: 'Edges',
+      type: 'pick',
+      pick: 'sheetEdges',
+      summary: (f) => countOf(f.edges, 'edge'),
+      clear: (f) => {
+        f.edges = [];
+      }
+    },
+    { key: 'height', label: 'Height', type: 'expr' },
+    { key: 'angle', label: 'Angle', type: 'expr' },
+    { key: 'radius', label: 'Bend radius', type: 'expr' },
+    {
+      key: 'bendPosition',
+      label: 'Bend position',
+      type: 'select',
+      options: SM.BEND_POSITIONS
+    },
+    { key: 'relief', label: 'Bend relief', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Bend radius blank means the rule. Bend position says what lines up with the edge you picked: the flange inside face, its outside face, the start of the bend, or the point the arc is tangent at.'
+    }
+  ];
+}
+
+function contourFlangeFields() {
+  return [
+    { key: 'width', label: 'Width', type: 'expr' },
+    { key: 'radius', label: 'Bend radius', type: 'expr' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The sketch is the part cross section, drawn as one open run of lines. Every leg becomes a panel and every corner a bend.'
+    }
+  ];
+}
+
+function sheetFoldFields() {
+  return [
+    sheetBodyField(),
+    { key: 'angle', label: 'Bend angle', type: 'expr' },
+    { key: 'radius', label: 'Bend radius', type: 'expr' },
+    { key: 'flip', label: 'Flip', type: 'bool' },
+    {
+      key: 'bendLinePosition',
+      label: 'Bend line position',
+      type: 'select',
+      options: SM.BEND_LINE_POSITIONS
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Centred on the line the part loses no stock overall: each half gives up half the bend allowance and the arc puts it back.'
+    }
+  ];
+}
+
+function unfoldFields(feature) {
+  const parts = sheetBodies().filter(
+    (b) => feature.bodies === 'all' || feature.bodies.includes(b.id)
+  );
+  const bends = parts.flatMap((b) => b.sheetMetal.bends.map((x) => x.id));
+  return [
+    sheetBodyField(),
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: bends.length
+        ? `${bends.length} bend${bends.length === 1 ? '' : 's'}, all of them unless some are named below.`
+        : 'This part has no bends yet.'
+    },
+    { key: 'bends', label: 'Only these bends', type: 'text' }
+  ];
+}
+
+function ripFields() {
+  return [
+    sheetBodyField(),
+    {
+      key: '__edges',
+      label: 'Edges to tear',
+      type: 'pick',
+      pick: 'sheetEdges',
+      summary: (f) => countOf(f.edges, 'edge'),
+      clear: (f) => {
+        f.edges = [];
+      }
+    },
+    { key: 'gap', label: 'Gap', type: 'expr' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'A gap blank means the rule. A shape that closes on itself has no flat until it is torn somewhere.'
+    }
+  ];
+}
+
 function describeFeature(feature) {
   const opOptions = [
     ['new', 'New body'],
@@ -8480,6 +9027,20 @@ function describeFeature(feature) {
     ['intersect', 'Intersect']
   ];
   switch (feature.type) {
+    case 'baseFlange':
+      return { title: 'Base Flange', fields: baseFlangeFields() };
+    case 'flange':
+      return { title: 'Flange', fields: flangeFields() };
+    case 'contourFlange':
+      return { title: 'Contour Flange', fields: contourFlangeFields() };
+    case 'sheetFold':
+      return { title: 'Fold', fields: sheetFoldFields() };
+    case 'unfold':
+      return { title: 'Unfold', fields: unfoldFields(feature) };
+    case 'refold':
+      return { title: 'Refold', fields: unfoldFields(feature) };
+    case 'rip':
+      return { title: 'Rip', fields: ripFields() };
     case 'surfaceExtrude':
       return { title: 'Extrude Surface', fields: surfaceExtrudeFields() };
     case 'surfaceRevolve':

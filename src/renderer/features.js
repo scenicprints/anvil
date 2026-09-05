@@ -42,6 +42,7 @@ import {
   resolveFaceRefs
 } from './edgefeature.js';
 import * as SH from './sheet.js';
+import * as SM from './sheetmetal.js';
 
 /* ------------------------------------------------------------------ */
 /* Document                                                            */
@@ -68,7 +69,10 @@ export function newDocument() {
     captureHistory: true,
     baseBodies: [],
     rollback: null,
-    bodyNames: {}
+    bodyNames: {},
+    // One sheet metal rule per document. Every part made here is made to it,
+    // and changing it changes every bend at once, which is what it is for.
+    sheetMetalRule: { ...SM.DEFAULT_RULE }
   };
 }
 
@@ -848,6 +852,46 @@ export function rebuild(doc, options = {}) {
 
         case 'replaceFace':
           doReplaceFace(feature, doc, scope, scopeObj, errors);
+          break;
+
+        case 'baseFlange':
+          doBaseFlange(feature, doc, scope, scopeObj, sketchRegions, errors);
+          break;
+
+        case 'flange':
+          doFlange(feature, scope, scopeObj, errors);
+          break;
+
+        case 'contourFlange':
+          doContourFlange(feature, doc, scope, scopeObj, errors);
+          break;
+
+        case 'sheetFold':
+          doSheetFold(feature, doc, scope, scopeObj, errors);
+          break;
+
+        case 'unfold':
+          doUnfold(feature, scope, scopeObj, errors, false);
+          break;
+
+        case 'refold':
+          doUnfold(feature, scope, scopeObj, errors, true);
+          break;
+
+        case 'rip':
+          doRip(feature, scope, scopeObj, errors);
+          break;
+
+        case 'cornerRelief':
+          doCornerRelief(feature, scope, scopeObj, errors);
+          break;
+
+        case 'convertToSheetMetal':
+          doConvertToSheetMetal(feature, scope, scopeObj, errors);
+          break;
+
+        case 'flatPattern':
+          doFlatPattern(feature, scope, scopeObj, errors);
           break;
 
         default:
@@ -5100,6 +5144,758 @@ export function rebuild(doc, options = {}) {
     return solid;
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Sheet metal                                                       */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * The rule in force, with every expression already worked out.
+   *
+   * One rule per document, which is the useful nine tenths of Fusion's rule
+   * library. Every field is an expression like any other, so a thickness can be
+   * driven by a parameter and every part made to it follows.
+   */
+  function sheetRule(scope) {
+    const r = { ...SM.DEFAULT_RULE, ...(doc.sheetMetalRule || {}) };
+    const num = (v, d) => (v === '' || v === null || v === undefined ? d : safeEval(v, scope, d));
+    return {
+      name: r.name,
+      thickness: Math.max(1e-4, num(r.thickness, 1.5)),
+      bendRadius: Math.max(0, num(r.bendRadius, 1.5)),
+      kFactor: Math.min(0.5, Math.max(0, num(r.kFactor, 0.44))),
+      gap: Math.max(0, num(r.gap, 0.2)),
+      reliefShape: r.reliefShape || 'round',
+      reliefWidth: num(r.reliefWidth, 0),
+      reliefDepth: num(r.reliefDepth, 0),
+      cornerShape: r.cornerShape || 'round',
+      cornerSize: num(r.cornerSize, 0)
+    };
+  }
+
+  /** Every sheet metal body a feature was pointed at. */
+  function pickSheetMetal(feature) {
+    const wanted =
+      feature.bodies && feature.bodies !== 'all' ? feature.bodies : null;
+    return bodies.filter(
+      (b) => b.sheetMetal && (!wanted || wanted.includes(b.id))
+    );
+  }
+
+  /**
+   * Build a part's solid, cut its bend reliefs, and put it in the model.
+   *
+   * Reliefs are cut rather than modelled into the panel outline, because a
+   * relief is a notch taken out of the material after the fact and that is what
+   * it has to look like on the flat as well as on the folded part.
+   */
+  function materialiseSheetPart(feature, part, rule, ks, existing, errs) {
+    let solid;
+    try {
+      solid = SM.buildPart(part, ks, {
+        thickness: rule.thickness,
+        kFactor: rule.kFactor
+      });
+    } catch (err) {
+      errs.push({ feature: feature.id, message: `Sheet metal: ${err.message}` });
+      return null;
+    }
+    if (!solid || K.isEmpty(solid)) {
+      errs.push({ feature: feature.id, message: 'That sheet metal part came to nothing' });
+      return null;
+    }
+    solid = cutReliefs(part, rule, solid, ks);
+
+    if (existing) {
+      replaceBody(bodies, existing, { solid, sheetMetal: part });
+      return existing;
+    }
+    const key = `${feature.id}:${bodies.length}`;
+    const body = {
+      id: key,
+      name: doc.bodyNames?.[key] || `Sheet ${bodies.length + 1}`,
+      solid,
+      sheetMetal: part,
+      createdBy: feature.id,
+      component: feature.component || null
+    };
+    bodies.push(body);
+    return body;
+  }
+
+  /** Take the relief notches out of the folded part. */
+  function cutReliefs(part, rule, solid, ks) {
+    const frames = SM.resolveFrames(part, rule.thickness, rule.kFactor, {});
+    let out = solid;
+    for (const bend of part.bends) {
+      const pf = frames.get(bend.from);
+      if (!pf) continue;
+      const cuts = SM.reliefCuts(part, bend, rule.thickness, rule);
+      for (const poly of cuts) {
+        if (poly.length < 3) continue;
+        try {
+          // Through the material and a little past it, so the cut is clean at
+          // both faces rather than leaving a film of a few microns.
+          const prism = K.extrudeContours(
+            [poly],
+            { height: rule.thickness + 0.02 },
+            ks
+          );
+          const placed = K.transform(
+            prism,
+            planeMatrix({
+              origin: sketchToWorld(pf, 0, 0, -0.01).toArray(),
+              x: pf.x,
+              y: pf.y,
+              n: pf.n
+            }).elements,
+            ks
+          );
+          out = K.difference(out, placed, ks);
+        } catch {
+          /* a relief that will not build is not worth losing the part over */
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The panel edge a picked model edge belongs to.
+   *
+   * A flange is taken off an edge of the folded part, but it has to be recorded
+   * against the flat panel that edge belongs to, in that panel's own
+   * coordinates. So every panel's boundary is walked in world space and the one
+   * that lands on the picked edge is the answer.
+   */
+  function panelEdgeAt(part, frames, thickness, points) {
+    if (!points || points.length < 2) return null;
+    const mid = [
+      (points[0][0] + points[points.length - 1][0]) / 2,
+      (points[0][1] + points[points.length - 1][1]) / 2,
+      (points[0][2] + points[points.length - 1][2]) / 2
+    ];
+    let best = null;
+    for (const panel of part.panels) {
+      const f = frames.get(panel.id);
+      if (!f) continue;
+      const c = panel.contour;
+      for (let i = 0; i < c.length; i++) {
+        const a = c[i];
+        const b = c[(i + 1) % c.length];
+        for (const w of [0, thickness]) {
+          const A = SM.panelPointToWorld(f, a[0], a[1], w);
+          const B = SM.panelPointToWorld(f, b[0], b[1], w);
+          const m = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2];
+          const d = Math.hypot(m[0] - mid[0], m[1] - mid[1], m[2] - mid[2]);
+          if (!best || d < best.d) best = { d, panel, a, b };
+        }
+      }
+    }
+    return best && best.d < 1 ? best : null;
+  }
+
+  /**
+   * Start a sheet metal part from a closed profile.
+   *
+   * Fusion's base flange: a flat sheet of the rule's thickness, in the plane
+   * the profile was drawn on, and the root everything later hangs off.
+   */
+  function doBaseFlange(feature, doc, scope, ks, regionsById, errs) {
+    const rule = sheetRule(scope);
+    const { contours, plane } = extrudeProfiles(feature, doc, scope, regionsById);
+    if (!contours.length) throw new Error('Select a closed profile to make a sheet from');
+
+    const part = SM.newPart(rule);
+    let made = 0;
+    for (const region of groupRings(contours)) {
+      SM.addBasePanel(
+        part,
+        region.outer,
+        region.holes,
+        plane,
+        `${feature.id}:p${made}`
+      );
+      made++;
+      // One base panel per feature. A second profile is a second base flange,
+      // which is a different part, not a second root of this one.
+      break;
+    }
+    if (!made) throw new Error('Base flange found no closed profile');
+    materialiseSheetPart(feature, part, rule, ks, null, errs);
+  }
+
+  /** A flange off one or more edges of a sheet metal part. */
+  function doFlange(feature, scope, ks, errs) {
+    const rule = sheetRule(scope);
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error('Flange works on a sheet metal body');
+
+    const angle = (safeEval(feature.angle, scope, 90) * Math.PI) / 180;
+    const height = safeEval(feature.height, scope, 20);
+    const radius = feature.radius ? safeEval(feature.radius, scope, rule.bendRadius) : rule.bendRadius;
+    if (!(height > 1e-6)) throw new Error('A flange of no height is nothing');
+
+    for (const body of targets) {
+      const part = SM.clonePart(body.sheetMetal);
+      const frames = SM.resolveFrames(part, rule.thickness, rule.kFactor, {});
+      let n = 0;
+
+      const mesh = meshOf(body);
+      let topo;
+      try {
+        topo = buildTopology(mesh);
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Flange: ${err.message}` });
+        continue;
+      }
+
+      for (const ref of feature.edges || []) {
+        const [edge] = resolveEdgeRefs(topo, [ref]);
+        if (!edge) {
+          errs.push({ feature: feature.id, message: 'Flange lost the edge it was on' });
+          continue;
+        }
+        const found = panelEdgeAt(part, frames, rule.thickness, edge.points);
+        if (!found) {
+          errs.push({
+            feature: feature.id,
+            message: 'That edge is not the boundary of a flat face, so no flange can grow from it'
+          });
+          continue;
+        }
+
+        // Where the bend sits relative to the edge that was picked. Each of
+        // these is a real position of the arc, named for what lines up with the
+        // edge: the flange's inner face, its outer face, the start of the bend,
+        // or the point the arc is tangent at.
+        const back =
+          feature.bendPosition === 'outside'
+            ? radius + rule.thickness
+            : feature.bendPosition === 'inside'
+              ? radius
+              : feature.bendPosition === 'tangent'
+                ? radius * Math.tan(Math.min(Math.abs(angle), Math.PI / 2) / 2)
+                : 0;
+
+        const line = SM.orientBendLine(found.panel.contour, { a: found.a, b: found.b });
+        const shifted = shiftLineInto(found.panel.contour, line, back);
+
+        const res = SM.addFlangePanel(part, found.panel.id, shifted, {
+          angle,
+          radius,
+          height,
+          panelId: `${feature.id}:p${n}`,
+          bendId: `${feature.id}:b${n}`,
+          relief: feature.relief !== false
+        });
+        if (res) n++;
+      }
+      if (!n) continue;
+      materialiseSheetPart(feature, part, rule, ks, body, errs);
+    }
+  }
+
+  /** Move a bend line back into the panel, square to itself. */
+  function shiftLineInto(contour, line, distance) {
+    if (!(Math.abs(distance) > 1e-9)) return line;
+    const dx = line.b[0] - line.a[0];
+    const dy = line.b[1] - line.a[1];
+    const l = Math.hypot(dx, dy) || 1;
+    // The panel is on the side the outward normal points away from.
+    const into = [dy / l, -dx / l];
+    const c = [0, 0];
+    for (const p of contour) {
+      c[0] += p[0] / contour.length;
+      c[1] += p[1] / contour.length;
+    }
+    const sign =
+      (c[0] - line.a[0]) * into[0] + (c[1] - line.a[1]) * into[1] > 0 ? 1 : -1;
+    return {
+      a: [line.a[0] + into[0] * sign * distance, line.a[1] + into[1] * sign * distance],
+      b: [line.b[0] + into[0] * sign * distance, line.b[1] + into[1] * sign * distance]
+    };
+  }
+
+  /**
+   * A whole folded part from one open section, swept a width.
+   *
+   * Every straight run of the section is a panel and every corner between two
+   * of them is a bend, which is exactly the model this file already keeps. So a
+   * contour flange is not a special case: it is the general case, built in one
+   * go from a drawing of the part's cross section.
+   */
+  function doContourFlange(feature, doc, scope, ks, errs) {
+    const rule = sheetRule(scope);
+    const sk = doc.sketches[feature.sketch];
+    if (!sk) throw new Error('Contour flange has no sketch');
+    solveSketch(sk, { maxIterations: 40 });
+    const plane = sketchPlanes[sk.id] || resolvePlane(sk.plane, scope, builtConstruction);
+
+    // An empty list means nothing was picked, so the whole sketch is the
+    // section. Passing it straight through would filter every entity out,
+    // because an empty array is truthy and chainPath believes it.
+    const chain = chainPath(sk, {
+      entities: feature.entities?.length ? feature.entities : undefined
+    });
+    if (!chain || chain.points.length < 2) {
+      throw new Error('Contour flange needs one connected run of lines');
+    }
+    if (chain.closed) {
+      throw new Error('Contour flange takes an open section. A closed one is a base flange.');
+    }
+
+    const width = safeEval(feature.width, scope, 40);
+    if (!(width > 1e-6)) throw new Error('A contour flange of no width is nothing');
+    const radius = feature.radius ? safeEval(feature.radius, scope, rule.bendRadius) : rule.bendRadius;
+
+    // The section, thinned to its corners: a run of straight legs.
+    const pts = [];
+    for (const p of chain.points) {
+      const last = pts[pts.length - 1];
+      if (!last || Math.hypot(last.x - p.x, last.y - p.y) > 1e-7) pts.push(p);
+    }
+    const legs = [];
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x;
+      const dy = pts[i].y - pts[i - 1].y;
+      const l = Math.hypot(dx, dy);
+      if (l > 1e-7) legs.push({ from: pts[i - 1], to: pts[i], dir: [dx / l, dy / l], length: l });
+    }
+    if (!legs.length) throw new Error('That section has no length to it');
+
+    // The first leg becomes the base panel. Its own frame runs along the leg,
+    // across the width, and out of the section, which is the material's normal.
+    const part = SM.newPart(rule);
+    const start = sketchToWorld(plane, legs[0].from.x, legs[0].from.y, 0);
+    const along = [
+      plane.x[0] * legs[0].dir[0] + plane.y[0] * legs[0].dir[1],
+      plane.x[1] * legs[0].dir[0] + plane.y[1] * legs[0].dir[1],
+      plane.x[2] * legs[0].dir[0] + plane.y[2] * legs[0].dir[1]
+    ];
+    const wide = [plane.n[0], plane.n[1], plane.n[2]];
+    const face = [
+      along[1] * wide[2] - along[2] * wide[1],
+      along[2] * wide[0] - along[0] * wide[2],
+      along[0] * wide[1] - along[1] * wide[0]
+    ];
+    const baseFrame = {
+      origin: [start.x, start.y, start.z],
+      x: along,
+      y: wide,
+      n: face
+    };
+
+    SM.addBasePanel(
+      part,
+      [[0, 0], [legs[0].length, 0], [legs[0].length, width], [0, width]],
+      [],
+      baseFrame,
+      `${feature.id}:p0`
+    );
+
+    let parentId = `${feature.id}:p0`;
+    let reach = legs[0].length;
+    for (let i = 1; i < legs.length; i++) {
+      // How far the section turns at this corner, about the width direction.
+      const a = legs[i - 1].dir;
+      const b = legs[i].dir;
+      const turn = Math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]);
+      if (Math.abs(turn) < 1e-6) continue;
+
+      const res = SM.addFlangePanel(
+        part,
+        parentId,
+        { a: [reach, 0], b: [reach, width] },
+        {
+          angle: turn,
+          radius,
+          height: legs[i].length,
+          panelId: `${feature.id}:p${i}`,
+          bendId: `${feature.id}:b${i}`,
+          relief: false
+        }
+      );
+      if (!res) break;
+      parentId = res.panel.id;
+      reach = legs[i].length;
+    }
+
+    materialiseSheetPart(feature, part, rule, ks, null, errs);
+  }
+
+  /**
+   * Fold a flat face along a sketched line.
+   *
+   * The side that stays keeps the panel and its frame; the side that moves
+   * becomes a panel of its own, joined by a bend. Which side moves is the
+   * stationary side turned round, so picking it is the whole of the input.
+   */
+  function doSheetFold(feature, doc, scope, ks, errs) {
+    const rule = sheetRule(scope);
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error('Fold works on a sheet metal body');
+
+    const sk = doc.sketches[feature.sketch];
+    if (!sk) throw new Error('Fold needs a sketch line to fold along');
+    solveSketch(sk, { maxIterations: 40 });
+    const plane = sketchPlanes[sk.id] || resolvePlane(sk.plane, scope, builtConstruction);
+
+    const lines = sk.entities.filter(
+      (e) => e.type === 'line' && !e.construction &&
+        (!feature.entities?.length || feature.entities.includes(e.id))
+    );
+    if (!lines.length) throw new Error('Fold needs a straight sketch line');
+
+    const angle = (safeEval(feature.angle, scope, 90) * Math.PI) / 180;
+    const radius = feature.radius ? safeEval(feature.radius, scope, rule.bendRadius) : rule.bendRadius;
+
+    for (const body of targets) {
+      const part = SM.clonePart(body.sheetMetal);
+      const frames = SM.resolveFrames(part, rule.thickness, rule.kFactor, {});
+      let n = 0;
+
+      for (const ent of lines) {
+        const p0 = sk.points[ent.p[0]];
+        const p1 = sk.points[ent.p[1]];
+        const w0 = sketchToWorld(plane, p0.x, p0.y, 0);
+        const w1 = sketchToWorld(plane, p1.x, p1.y, 0);
+
+        // Which panel the line crosses, and where it lies in that panel.
+        const hit = panelUnderLine(part, frames, [w0.x, w0.y, w0.z], [w1.x, w1.y, w1.z]);
+        if (!hit) {
+          errs.push({
+            feature: feature.id,
+            message: 'That line does not cross a flat face of this part'
+          });
+          continue;
+        }
+        const res = SM.foldPanel(part, hit.panel.id, hit.line, {
+          angle,
+          radius,
+          thickness: rule.thickness,
+          k: rule.kFactor,
+          flip: !!feature.flip,
+          bendLinePosition: feature.bendLinePosition || 'center',
+          panelId: `${feature.id}:p${n}`,
+          bendId: `${feature.id}:b${n}`
+        });
+        if (res) n++;
+      }
+      if (!n) continue;
+      materialiseSheetPart(feature, part, rule, ks, body, errs);
+    }
+  }
+
+  /** Which panel a world-space line lies on, and where in its own frame. */
+  function panelUnderLine(part, frames, a, b) {
+    let best = null;
+    for (const panel of part.panels) {
+      const f = frames.get(panel.id);
+      if (!f) continue;
+      const toLocal = (p) => {
+        const d = [p[0] - f.origin[0], p[1] - f.origin[1], p[2] - f.origin[2]];
+        return {
+          u: d[0] * f.x[0] + d[1] * f.x[1] + d[2] * f.x[2],
+          v: d[0] * f.y[0] + d[1] * f.y[1] + d[2] * f.y[2],
+          w: d[0] * f.n[0] + d[1] * f.n[1] + d[2] * f.n[2]
+        };
+      };
+      const la = toLocal(a);
+      const lb = toLocal(b);
+      const off = Math.max(Math.abs(la.w), Math.abs(lb.w));
+      if (!best || off < best.off) {
+        best = { off, panel, line: { a: [la.u, la.v], b: [lb.u, lb.v] } };
+      }
+    }
+    return best && best.off < 5 ? best : null;
+  }
+
+  /**
+   * Flatten some or all of a part's bends, without making a new body.
+   *
+   * Unfold is a working state, not a result: it is how a hole gets drilled
+   * across a bend. The flat pattern is the separate thing, and it has its own
+   * body and its own place in the browser.
+   */
+  function doUnfold(feature, scope, ks, errs, refold) {
+    const rule = sheetRule(scope);
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error(`${refold ? 'Refold' : 'Unfold'} works on a sheet metal body`);
+
+    for (const body of targets) {
+      const part = SM.clonePart(body.sheetMetal);
+      // Typed rather than picked, because a bend only gets a name once it
+      // exists and the list has to survive a rebuild that renames nothing.
+      const named = Array.isArray(feature.bends)
+        ? feature.bends
+        : String(feature.bends ?? '')
+            .split(/[\s,]+/)
+            .filter((t) => t !== '');
+      const wanted = named.length ? named : null;
+      let n = 0;
+      for (const bend of part.bends) {
+        if (wanted && !wanted.includes(bend.id)) continue;
+        bend.unfolded = !refold;
+        n++;
+      }
+      if (!n) {
+        errs.push({ feature: feature.id, message: 'There are no bends to work on here' });
+        continue;
+      }
+      materialiseSheetPart(feature, part, rule, ks, body, errs);
+    }
+  }
+
+  /**
+   * Cut a part so it can be unfolded.
+   *
+   * A shape that closes on itself has no flat, because there is no way to lay
+   * it out without tearing it somewhere. Rip is choosing where that tear goes.
+   */
+  function doRip(feature, scope, ks, errs) {
+    const rule = sheetRule(scope);
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error('Rip works on a sheet metal body');
+    const gap = feature.gap ? safeEval(feature.gap, scope, rule.gap) : rule.gap;
+
+    for (const body of targets) {
+      const mesh = meshOf(body);
+      let topo;
+      try {
+        topo = buildTopology(mesh);
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Rip: ${err.message}` });
+        continue;
+      }
+      let solid = body.solid;
+      let n = 0;
+      for (const ref of feature.edges || []) {
+        const [edge] = resolveEdgeRefs(topo, [ref]);
+        if (!edge || edge.points.length < 2) continue;
+        const a = edge.points[0];
+        const b = edge.points[edge.points.length - 1];
+        const dir = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const l = Math.hypot(dir[0], dir[1], dir[2]);
+        if (!(l > 1e-6)) continue;
+        // A slot of the rule's gap, run along the edge and through the sheet.
+        const cutter = K.box([gap, l + gap, rule.thickness * 4], true, ks);
+        const basis = basisFor([dir[0] / l, dir[1] / l, dir[2] / l]);
+        const m = new THREE.Matrix4();
+        const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+        m.set(
+          basis.x[0], basis.n[0], basis.y[0], mid[0],
+          basis.x[1], basis.n[1], basis.y[1], mid[1],
+          basis.x[2], basis.n[2], basis.y[2], mid[2],
+          0, 0, 0, 1
+        );
+        solid = K.difference(solid, K.transform(cutter, m.elements, ks), ks);
+        n++;
+      }
+      if (!n) {
+        errs.push({ feature: feature.id, message: 'Rip needs an edge to tear along' });
+        continue;
+      }
+      replaceBody(bodies, body, { solid });
+    }
+  }
+
+  /**
+   * The relief where two bends meet at a corner.
+   *
+   * Two flanges off adjoining edges collide at the corner between them, and
+   * something has to give. The shape is the rule's, and it is cut through the
+   * material at the point the two bend lines cross.
+   */
+  function doCornerRelief(feature, scope, ks, errs) {
+    const rule = sheetRule(scope);
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error('Corner Relief works on a sheet metal body');
+    if (rule.cornerShape === 'none') {
+      errs.push({ feature: feature.id, message: 'The rule has corner relief turned off' });
+      return;
+    }
+    const size = rule.cornerSize > 0 ? rule.cornerSize : rule.thickness * 2;
+
+    for (const body of targets) {
+      const part = body.sheetMetal;
+      const frames = SM.resolveFrames(part, rule.thickness, rule.kFactor, {});
+      let solid = body.solid;
+      let n = 0;
+
+      // Every pair of bends leaving the same panel that meet within the panel.
+      for (const panel of part.panels) {
+        const outgoing = SM.bendsFrom(part, panel.id);
+        const f = frames.get(panel.id);
+        if (!f || outgoing.length < 2) continue;
+        for (let i = 0; i < outgoing.length; i++) {
+          for (let j = i + 1; j < outgoing.length; j++) {
+            const at = lineCross(outgoing[i], outgoing[j]);
+            if (!at) continue;
+            const poly =
+              rule.cornerShape === 'square'
+                ? squareAt(at, size)
+                : circleAt(at, size / 2);
+            try {
+              const prism = K.extrudeContours(
+                [poly],
+                { height: rule.thickness + 0.02 },
+                ks
+              );
+              const placed = K.transform(
+                prism,
+                planeMatrix({
+                  origin: sketchToWorld(f, 0, 0, -0.01).toArray(),
+                  x: f.x,
+                  y: f.y,
+                  n: f.n
+                }).elements,
+                ks
+              );
+              solid = K.difference(solid, placed, ks);
+              n++;
+            } catch {
+              /* a relief that will not build is not worth losing the part */
+            }
+          }
+        }
+      }
+      if (!n) {
+        errs.push({
+          feature: feature.id,
+          message: 'No two bends meet at a corner on this part'
+        });
+        continue;
+      }
+      replaceBody(bodies, body, { solid });
+    }
+  }
+
+  /** Where two bend lines cross, in the panel they both leave. */
+  function lineCross(p, q) {
+    const r = [p.b[0] - p.a[0], p.b[1] - p.a[1]];
+    const s = [q.b[0] - q.a[0], q.b[1] - q.a[1]];
+    const denom = r[0] * s[1] - r[1] * s[0];
+    if (Math.abs(denom) < 1e-9) return null;
+    const t = ((q.a[0] - p.a[0]) * s[1] - (q.a[1] - p.a[1]) * s[0]) / denom;
+    return [p.a[0] + r[0] * t, p.a[1] + r[1] * t];
+  }
+
+  function squareAt(c, size) {
+    const h = size / 2;
+    return [
+      [c[0] - h, c[1] - h],
+      [c[0] + h, c[1] - h],
+      [c[0] + h, c[1] + h],
+      [c[0] - h, c[1] + h]
+    ];
+  }
+
+  function circleAt(c, r) {
+    const n = Math.max(12, K.circularSegments(r));
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      out.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]);
+    }
+    return out;
+  }
+
+  /**
+   * Read an ordinary solid as a folded sheet.
+   *
+   * What can be recovered is the flat faces and the bends between them, which
+   * the topology already works out. What cannot be guessed is the thickness, so
+   * the rule supplies it and a body that is not that thick is refused rather
+   * than quietly converted into something a brake cannot make.
+   */
+  function doConvertToSheetMetal(feature, scope, ks, errs) {
+    const rule = sheetRule(scope);
+    const targets = pickBodies(feature, bodies);
+    if (!targets.length) throw new Error('Convert needs a solid body');
+
+    for (const body of targets) {
+      if (body.sheetMetal) continue;
+      let topo;
+      try {
+        topo = buildTopology(meshOf(body));
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Convert: ${err.message}` });
+        continue;
+      }
+      const read = SM.readSheetMetal(meshOf(body), topo, rule.thickness);
+      if (!read) {
+        errs.push({
+          feature: feature.id,
+          message: `Nothing in that body is ${rule.thickness} thick, which is what the rule says sheet is. Change the rule or the body.`
+        });
+        continue;
+      }
+      // The body keeps its shape; what it gains is a rule and the faces read as
+      // panels, which is what every later sheet metal command needs from it.
+      replaceBody(bodies, body, {
+        sheetMetal: {
+          rule,
+          panels: [],
+          bends: [],
+          baseId: null,
+          converted: read
+        }
+      });
+    }
+  }
+
+  /**
+   * The flat pattern, as a body of its own.
+   *
+   * Not a view of the folded part and not a state of it: a separate body with
+   * its own place in the browser, which is what a drawing and a DXF are made
+   * from. Fusion draws the same line and for the same reason.
+   */
+  function doFlatPattern(feature, scope, ks, errs) {
+    const rule = sheetRule(scope);
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error('Flat Pattern works on a sheet metal body');
+
+    for (const body of targets) {
+      const part = body.sheetMetal;
+      if (!part.panels.length) {
+        errs.push({
+          feature: feature.id,
+          message: 'That part has no panels to lay out. A converted body has to be given its bends first.'
+        });
+        continue;
+      }
+      let solid;
+      try {
+        solid = SM.buildPart(part, ks, {
+          thickness: rule.thickness,
+          kFactor: rule.kFactor,
+          flat: true
+        });
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Flat pattern: ${err.message}` });
+        continue;
+      }
+      if (!solid || K.isEmpty(solid)) continue;
+
+      // Laid where it was asked for, so the flat does not sit inside the part
+      // it came from.
+      const at = feature.at ? feature.at : [0, 0, 0];
+      solid = K.translate(solid, at, ks);
+
+      const key = `${feature.id}:${bodies.length}`;
+      bodies.push({
+        id: key,
+        name: doc.bodyNames?.[key] || `${body.name} flat`,
+        solid,
+        flatOf: body.id,
+        outline: SM.flatOutline(part, rule.thickness, rule.kFactor),
+        createdBy: feature.id,
+        component: feature.component || null
+      });
+    }
+  }
+
   function pickBodies(feature, bodies, opts = {}) {
     // Solid features must never be handed a sheet. Surface features say so.
     const kind = opts.sheets === true
@@ -5180,6 +5976,16 @@ function normalizeVec(v) {
 
 export const FEATURE_LABELS = {
   sketch: 'Sketch',
+  baseFlange: 'Base Flange',
+  flange: 'Flange',
+  contourFlange: 'Contour Flange',
+  sheetFold: 'Fold',
+  unfold: 'Unfold',
+  refold: 'Refold',
+  rip: 'Rip',
+  cornerRelief: 'Corner Relief',
+  convertToSheetMetal: 'Convert To Sheet Metal',
+  flatPattern: 'Flat Pattern',
   surfaceExtrude: 'Extrude Surface',
   surfaceRevolve: 'Revolve Surface',
   surfaceSweep: 'Sweep Surface',

@@ -64,6 +64,7 @@ import {
 } from '../src/renderer/features.js';
 import { toBinarySTL, buildGeometry, buildEdges } from '../src/renderer/meshutil.js';
 import * as SH from '../src/renderer/sheet.js';
+import * as SM from '../src/renderer/sheetmetal.js';
 import { screenUpFor, rollTheta, ISO_VIEW } from '../src/renderer/viewport.js';
 import { resolveDimensionExprs } from '../src/renderer/features.js';
 
@@ -5870,6 +5871,321 @@ async function run() {
       rim.every((e) => e.faceB === -1),
       'each with nothing on the far side'
     );
+  });
+
+  /* -------- batch 8: sheet metal -------- */
+
+  const SM_T = 2;
+  const SM_R = 2;
+  const SM_K = 0.44;
+  const SM_XY = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+
+  /** A plate with one flange folded up off its far edge. */
+  function bracketPart(angleDeg = 90, height = 20) {
+    const part = SM.newPart({});
+    SM.addBasePanel(part, [[0, 0], [60, 0], [60, 40], [0, 40]], [], SM_XY, 'p0');
+    SM.addFlangePanel(
+      part,
+      'p0',
+      { a: [60, 0], b: [60, 40] },
+      {
+        angle: (angleDeg * Math.PI) / 180,
+        radius: SM_R,
+        height,
+        panelId: 'p1',
+        bendId: 'b0',
+        relief: false
+      }
+    );
+    return part;
+  }
+
+  test('sheet metal: the bend allowance is the neutral axis arc', () => {
+    // A quarter turn of a 2 mm radius in 2 mm stock at K 0.44.
+    const want = (Math.PI / 2) * (2 + 0.44 * 2);
+    near(SM.bendAllowance(Math.PI / 2, 2, 2, 0.44), want, 1e-12, 'a right angle');
+    near(SM.bendAllowance(Math.PI, 2, 2, 0.44), 2 * want, 1e-12, 'twice for twice the turn');
+    // A sharper radius eats less material, which is the whole reason it matters.
+    assert(
+      SM.bendAllowance(Math.PI / 2, 1, 2, 0.44) < SM.bendAllowance(Math.PI / 2, 3, 2, 0.44),
+      'a tighter radius takes less flat'
+    );
+    // K is what the number turns on, so it has to reach the answer.
+    assert(
+      SM.bendAllowance(Math.PI / 2, 2, 2, 0.5) > SM.bendAllowance(Math.PI / 2, 2, 2, 0.3),
+      'and the K factor moves it'
+    );
+  });
+
+  test('sheet metal: bend deduction agrees with the allowance', () => {
+    // The two are the same fact from either end: the deduction is what the
+    // folded legs are short by once the allowance is taken out.
+    const a = Math.PI / 2;
+    const setback = (SM_R + SM_T) * Math.tan(a / 2);
+    near(
+      SM.bendDeduction(a, SM_R, SM_T, SM_K),
+      2 * setback - SM.bendAllowance(a, SM_R, SM_T, SM_K),
+      1e-12,
+      'two setbacks less the allowance'
+    );
+  });
+
+  test('sheet metal: a folded bracket measures what it should', () => {
+    const part = bracketPart();
+    const scope = new K.Scope();
+    const solid = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+    assert(solid, 'it built');
+    assert(K.status(solid) === 'NoError', `a real solid, got ${K.status(solid)}`);
+    assert(solid.genus() === 0, 'and a plain one');
+
+    // Plate, plus a quarter annulus of the bend, plus the flange.
+    const plate = 60 * 40 * SM_T;
+    const arc = (Math.PI / 4) * ((SM_R + SM_T) ** 2 - SM_R ** 2) * 40;
+    const flange = 20 * 40 * SM_T;
+    near(solid.volume(), plate + arc + flange, 2, 'plate plus bend plus flange');
+
+    // The flange folds up, and its outside face lands a radius and a thickness
+    // past the edge it came off: 60 plus 2 plus 2.
+    const bb = solid.boundingBox();
+    near(bb.max[0], 64, 0.01, 'the flange stands just past the plate');
+    near(bb.max[1], 40, 0.01, 'and is as wide as the edge it grew from');
+    // Bend centre at 4 up, then 20 of flange from the end of the arc.
+    near(bb.max[2], 24, 0.01, 'and reaches the flange height above the bend');
+    near(bb.min[2], 0, 0.01, 'with the plate still on the plane it was drawn on');
+    scope.dispose();
+  });
+
+  test('sheet metal: a negative angle folds the other way', () => {
+    const part = bracketPart(-90);
+    const scope = new K.Scope();
+    const solid = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+    // The bend centre sits a radius below the plate, and the flange runs its
+    // full height on from the end of the arc, so the reach is 2 plus 20 and
+    // not 20. It is the mirror of the fold upward, which reaches 4 plus 20.
+    const bb = solid.boundingBox();
+    near(bb.min[2], -22, 0.05, 'the flange hangs below the plate');
+    near(bb.max[2], 2, 0.01, 'and the plate is still where it was');
+    scope.dispose();
+  });
+
+  test('sheet metal: the flat is the legs plus the allowance, and no more', () => {
+    const part = bracketPart();
+    const scope = new K.Scope();
+    const flat = SM.buildPart(part, scope, {
+      thickness: SM_T,
+      kFactor: SM_K,
+      flat: true
+    });
+    assert(flat, 'it laid out');
+    const ba = SM.bendAllowance(Math.PI / 2, SM_R, SM_T, SM_K);
+    near(flat.volume(), (60 + ba + 20) * 40 * SM_T, 0.01, 'one flat sheet');
+
+    const bb = flat.boundingBox();
+    near(bb.max[0] - bb.min[0], 60 + ba + 20, 0.01, 'as long as the stock has to be');
+    near(bb.max[2] - bb.min[2], SM_T, 1e-6, 'and one thickness, since it is flat');
+    scope.dispose();
+  });
+
+  test('sheet metal: unfolding one bend is the flat, folding it back is not', () => {
+    const part = bracketPart();
+    const scope = new K.Scope();
+    const folded = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+    const tall = folded.boundingBox().max[2];
+
+    part.bends[0].unfolded = true;
+    const open = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+    const flat = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K, flat: true });
+    near(open.volume(), flat.volume(), 0.01, 'an unfolded bend is the flat');
+    near(open.boundingBox().max[2], SM_T, 1e-6, 'and it lies down');
+
+    part.bends[0].unfolded = false;
+    const again = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+    near(again.boundingBox().max[2], tall, 1e-6, 'refolding puts it back exactly');
+    scope.dispose();
+  });
+
+  test('sheet metal: a contour section folds into a channel', () => {
+    // Three legs, two right angles: a channel, which is the shape a contour
+    // flange is for.
+    const part = SM.newPart({});
+    SM.addBasePanel(part, [[0, 0], [30, 0], [30, 50], [0, 50]], [], SM_XY, 'p0');
+    SM.addFlangePanel(part, 'p0', { a: [30, 0], b: [30, 50] }, {
+      angle: Math.PI / 2, radius: SM_R, height: 25,
+      panelId: 'p1', bendId: 'b0', relief: false
+    });
+    const scope = new K.Scope();
+    const solid = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+    assert(K.status(solid) === 'NoError', 'a real solid');
+    // Both legs and the bend between them, all 50 wide.
+    const arc = (Math.PI / 4) * ((SM_R + SM_T) ** 2 - SM_R ** 2) * 50;
+    near(solid.volume(), 30 * 50 * SM_T + arc + 25 * 50 * SM_T, 2, 'two legs and a bend');
+    scope.dispose();
+  });
+
+  test('sheet metal: a fold splits a panel and turns half of it', () => {
+    const part = SM.newPart({});
+    SM.addBasePanel(part, [[0, 0], [80, 0], [80, 40], [0, 40]], [], SM_XY, 'p0');
+    const made = SM.foldPanel(part, 'p0', { a: [50, 0], b: [50, 40] }, {
+      angle: Math.PI / 2,
+      radius: SM_R,
+      thickness: SM_T,
+      k: SM_K,
+      flip: false,
+      bendLinePosition: 'center',
+      panelId: 'p1',
+      bendId: 'b0'
+    });
+    assert(made, 'it folded');
+    assert(part.panels.length === 2, 'into two panels');
+
+    const scope = new K.Scope();
+    const flat = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K, flat: true });
+    // Centred on the line, the flat is the same 80 long it started as: the
+    // allowance replaces exactly the material the bend was centred over.
+    near(flat.boundingBox().max[0] - flat.boundingBox().min[0], 80, 0.01, 'no stock gained or lost');
+
+    const folded = SM.buildPart(part, scope, { thickness: SM_T, kFactor: SM_K });
+    assert(folded.boundingBox().max[2] > 20, 'and the far half stands up');
+    scope.dispose();
+  });
+
+  test('sheet metal: the flat outline carries the cut and the bend lines', () => {
+    const part = bracketPart();
+    const outline = SM.flatOutline(part, SM_T, SM_K);
+    assert(outline.panels.length === 2, 'both panels');
+    assert(outline.bendLines.length === 2, 'and both edges of the one bend zone');
+
+    const xs = outline.panels.flat().map((p) => p[0]);
+    const ba = SM.bendAllowance(Math.PI / 2, SM_R, SM_T, SM_K);
+    near(Math.max(...xs), 60 + ba + 20, 0.01, 'as long as the stock');
+
+    // The bend zone is exactly the allowance wide, and starts at the plate.
+    const bx = outline.bendLines.map((l) => l[0][0]).sort((a, b) => a - b);
+    near(bx[0], 60, 0.01, 'the bend starts where the plate ends');
+    near(bx[1], 60 + ba, 0.01, 'and ends an allowance later');
+  });
+
+  test('sheet metal: the DXF reads back through the app own DXF reader', () => {
+    // The strongest check available: written by one half of the app and parsed
+    // by the other, so a DXF that is wrong in a way a machine would notice is
+    // wrong here too.
+    const part = bracketPart();
+    const outline = SM.flatOutline(part, SM_T, SM_K);
+    const text = SM.flatToDXF(outline);
+    const back = parseDXF(text).entities;
+
+    const polys = back.filter((e) => e.kind === 'poly');
+    assert(polys.length >= 3, `the cuts and the bend lines came back, got ${polys.length}`);
+    const closed = polys.filter((e) => e.closed);
+    assert(closed.length === 2, `two closed cut outlines, got ${closed.length}`);
+
+    const xs = closed.flatMap((e) => e.points.map((q) => q.x));
+    const ba = SM.bendAllowance(Math.PI / 2, SM_R, SM_T, SM_K);
+    near(Math.min(...xs), 0, 0.01, 'and it measures from where it should');
+    near(Math.max(...xs), 60 + ba + 20, 0.01, 'to the full length of the stock');
+
+    const ys = closed.flatMap((e) => e.points.map((q) => q.y));
+    near(Math.max(...ys) - Math.min(...ys), 40, 0.01, 'and is the right width');
+  });
+
+  test('sheet metal: relief notches are cut where a flange is narrower', () => {
+    const part = SM.newPart({});
+    SM.addBasePanel(part, [[0, 0], [60, 0], [60, 40], [0, 40]], [], SM_XY, 'p0');
+    // A flange over the middle 20 of a 40 wide edge, so both ends need relief.
+    SM.addFlangePanel(part, 'p0', { a: [60, 0], b: [60, 40] }, {
+      angle: Math.PI / 2, radius: SM_R, height: 15,
+      v0: 10, v1: 30,
+      panelId: 'p1', bendId: 'b0', relief: true
+    });
+    const rule = {
+      reliefShape: 'square',
+      reliefWidth: SM_T,
+      reliefDepth: SM_T + SM_R
+    };
+    const cuts = SM.reliefCuts(part, part.bends[0], SM_T, rule);
+    assert(cuts.length === 2, `a notch at each end, got ${cuts.length}`);
+    for (const poly of cuts) assert(poly.length >= 4, 'each with a real outline');
+
+    // A flange that spans the whole edge needs none.
+    const full = SM.newPart({});
+    SM.addBasePanel(full, [[0, 0], [60, 0], [60, 40], [0, 40]], [], SM_XY, 'q0');
+    SM.addFlangePanel(full, 'q0', { a: [60, 0], b: [60, 40] }, {
+      angle: Math.PI / 2, radius: SM_R, height: 15,
+      panelId: 'q1', bendId: 'c0', relief: true
+    });
+    assert(SM.reliefCuts(full, full.bends[0], SM_T, rule).length === 0, 'and none when it does not');
+  });
+
+  test('sheet metal: reading a solid as sheet needs it to be that thick', () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '60', depth: '40', height: '2', centered: true })];
+    const out = rebuild(doc);
+    const mesh = K.meshData(out.bodies[0].solid);
+    const topo = buildTopology(mesh);
+
+    const right = SM.readSheetMetal(mesh, topo, 2);
+    assert(right, 'a 2 mm plate reads as 2 mm sheet');
+    assert(right.pairs.length >= 1, 'with a pair of faces one thickness apart');
+
+    // The same body is not 5 mm sheet, and saying so is the whole point.
+    assert(SM.readSheetMetal(mesh, topo, 5) === null, 'and is not 5 mm sheet');
+  });
+
+  test('sheet metal: through the timeline, a base flange and a flange', () => {
+    const doc = newDocument();
+    doc.sheetMetalRule = { thickness: '2', bendRadius: '2', kFactor: '0.44' };
+    const sk = newSketch('XY', 'Plate');
+    sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+    sk.entities = [
+      { id: 1, type: 'line', p: [0, 1] },
+      { id: 2, type: 'line', p: [1, 2] },
+      { id: 3, type: 'line', p: [2, 3] },
+      { id: 4, type: 'line', p: [3, 0] }
+    ];
+    sk.nextEntityId = 5;
+    doc.sketches[sk.id] = sk;
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] }
+    ];
+    const out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies.length === 1, `one body, got ${out.bodies.length}`);
+    const body = out.bodies[0];
+    assert(body.sheetMetal, 'and it knows it is sheet metal');
+    near(body.solid.volume(), 60 * 40 * 2, 1, 'a plate of the rule thickness');
+    assert(body.sheetMetal.panels.length === 1, 'with one panel so far');
+  });
+
+  test('sheet metal: a flat pattern is its own body, laid flat', () => {
+    const doc = newDocument();
+    doc.sheetMetalRule = { thickness: '2', bendRadius: '2', kFactor: '0.44' };
+    const sk = newSketch('XY', 'Plate');
+    sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+    sk.entities = [
+      { id: 1, type: 'line', p: [0, 1] },
+      { id: 2, type: 'line', p: [1, 2] },
+      { id: 3, type: 'line', p: [2, 3] },
+      { id: 4, type: 'line', p: [3, 0] }
+    ];
+    sk.nextEntityId = 5;
+    doc.sketches[sk.id] = sk;
+
+    const baseId = uid('f');
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: baseId, type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] },
+      { id: uid('f'), type: 'flatPattern', bodies: 'all', at: [0, 80, 0] }
+    ];
+    const out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies.length === 2, `the part and its flat, got ${out.bodies.length}`);
+
+    const flat = out.bodies.find((b) => b.flatOf);
+    assert(flat, 'the flat knows which part it came from');
+    assert(flat.outline, 'and carries the outline the DXF is written from');
+    // Moved clear of the part, which is the whole reason it takes a position.
+    near(flat.solid.boundingBox().min[1], 80, 0.01, 'laid out where it was asked for');
   });
 
   /* -------- report -------- */

@@ -51,6 +51,7 @@
           <button class="tab active" data-tab="solid">Solid</button>
           <button class="tab" data-tab="sketch">Sketch</button>
           <button class="tab" data-tab="surface">Surface</button>
+          <button class="tab" data-tab="sheet">Sheet Metal</button>
           <button class="tab" data-tab="view">View</button>
         </div>
 
@@ -271,6 +272,49 @@
               <span class="glabel">Select</span>
               <button data-cmd="selectAllEdges" class="big"><span class="ico">&#9707;</span><span class="lbl">All Edges</span></button>
               <button data-cmd="showAll" class="big"><span class="ico">&#9673;</span><span class="lbl">Show All</span></button>
+            </div>
+          </div>
+
+          <!-- SHEET METAL -->
+          <div class="ribbon-panel" data-panel="sheet">
+            <div class="group">
+              <span class="glabel">Rule</span>
+              <button data-cmd="smRule" class="big" title="Thickness, bend radius and K factor for the whole document">
+                <span class="ico">&#9707;</span><span class="lbl">Rule</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Create</span>
+              <button data-cmd="baseFlange" class="big" title="A flat sheet from a closed profile">
+                <span class="ico">&#9645;</span><span class="lbl">Base Flange</span></button>
+              <button data-cmd="flange" class="big" title="A flange off an edge">
+                <span class="ico">&#8735;</span><span class="lbl">Flange</span></button>
+              <button data-cmd="contourFlange" class="big" title="A whole part from its cross section">
+                <span class="ico">&#8767;</span><span class="lbl">Contour Flange</span></button>
+              <button data-cmd="sheetFold" class="big" title="Fold a face along a sketched line">
+                <span class="ico">&#8626;</span><span class="lbl">Fold</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Modify</span>
+              <button data-cmd="unfold" class="big" title="Flatten bends to work across them">
+                <span class="ico">&#8598;</span><span class="lbl">Unfold</span></button>
+              <button data-cmd="refold" class="big" title="Put them back">
+                <span class="ico">&#8600;</span><span class="lbl">Refold</span></button>
+              <button data-cmd="rip" class="big" title="Tear a closed shape so it can lie flat">
+                <span class="ico">&#9986;</span><span class="lbl">Rip</span></button>
+              <button data-cmd="cornerRelief" class="big" title="The notch where two bends meet">
+                <span class="ico">&#9700;</span><span class="lbl">Corner Relief</span></button>
+              <button data-cmd="convertToSheetMetal" class="big" title="Read a solid as folded sheet">
+                <span class="ico">&#8644;</span><span class="lbl">Convert</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Flat</span>
+              <button data-cmd="flatPattern" class="big" title="The flat, as a body of its own">
+                <span class="ico">&#9636;</span><span class="lbl">Flat Pattern</span></button>
+              <button data-cmd="exportFlatDXF" class="big" title="The flat as a DXF, cut and bend lines on their own layers">
+                <span class="ico">&#8615;</span><span class="lbl">Export DXF</span></button>
             </div>
           </div>
 

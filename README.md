@@ -546,6 +546,46 @@ one body and partly the other, and the edges between those parts are the answer.
 the pieces that landed rather than jumping the gap. **Isoparametric Curve**
 reads the lines of constant u or v off a surface built here.
 
+**Sheet metal.** A part that is a folded flat sheet, and the flat it came from.
+The flat pattern is a second parallel model rather than a view of the first: a
+bend knows its own unfolded length from the K factor, so the same feature list
+builds either the folded part or the flat one depending only on whether each
+bend is folded. Everything else follows from that.
+
+A part is a tree of flat **panels** joined by **bends**. A panel is a contour in
+its own frame with the material one thickness deep; a bend stores the line it
+folds about in its parent's frame, and the child's frame is that parent's frame
+rotated about the bend axis. Lay the child in the same plane instead, pushed out
+by the bend allowance, and you have the flat. Nothing else changes between them,
+which is why Unfold and Flat Pattern are the same arithmetic.
+
+One **rule** per document: thickness, bend radius, K factor, the rip and miter
+gap, and the shape and size of bend and corner relief. Every field is an
+expression like any other, so a thickness can be driven by a parameter and every
+part made to it follows.
+
+**Base Flange** starts a part from a closed profile. **Flange** grows one off an
+edge; its bend position says what lines up with the edge you picked, and the
+four choices mean exactly this here: **Inside**, the flange's inner face;
+**Outside**, its outer face; **Adjacent**, the start of the bend; **Tangent**,
+the point the arc is tangent at. **Contour Flange** takes the part's cross
+section as one open run of lines and makes the whole thing at once, every leg a
+panel and every corner a bend. **Fold** splits a flat face along a sketched line
+and turns one half; centred on that line the part loses no stock overall,
+because each half gives up half the allowance and the arc puts it back.
+
+**Unfold** and **Refold** flatten bends to work across them and put them back:
+a working state, not a result. **Flat Pattern** is the result, and it is a body
+of its own with its own place in the browser, because that is what a drawing and
+a **DXF** are made from. The DXF is written as R12 with the cut geometry and the
+bend lines on separate layers, since one is a path and the other is a mark for
+the brake. **Rip** tears a shape that closes on itself so it can lie flat,
+**Corner Relief** cuts the notch where two bends meet, and **Convert To Sheet
+Metal** reads an ordinary solid as folded sheet: the flat faces and the bends
+between them are recovered from the geometry, and a body that is not the rule's
+thickness is refused rather than quietly converted into something a brake cannot
+make.
+
 ---
 
 ## The window
@@ -650,6 +690,7 @@ src/renderer/
   edgefeature.js       Fillet, chamfer, face prisms, persistent references
   meshbuild.js         Loft, sweep, helix and variable blend construction
   sheet.js             Surfaces: open meshes, and everything done to them
+  sheetmetal.js        Panels, bends, the flat pattern and its DXF
   construction.js      Planes, axes and points that exist to be referenced
   assembly.js          Components and joint kinematics
   features.js          Document model, planes, and the parametric rebuild
@@ -702,6 +743,17 @@ A surface cuts a solid by being stretched past it and given the thickness of the
 whole model, which turns it into a lump the size of a half space with that
 surface as its face, after which an ordinary boolean does the rest. That is what
 Boundary Fill, Replace Face and Split Face by a surface all stand on.
+
+**A bend is one number.** The bend allowance, the neutral axis arc length, is
+the whole of what the flat pattern turns on: it is how much flat stock a bend
+eats. Folded and flat are the same walk over the same tree, differing only in
+what a bend does to its child, so there is no second model to keep in step and
+nothing that can drift.
+
+Folded and flat do not have the same volume, and should not. The neutral axis
+model conserves length along one surface inside the material, not volume, so the
+arc of a bend holds a little more material than the flat strip it replaces. That
+is the same arithmetic every brake in the world is set by.
 
 **Curve quality** is set in one place and shared by the sketch tessellator and
 the kernel. If they disagree, every boolean between a sketch curve and a
@@ -765,9 +817,17 @@ Stack, Display Component Colors and Find Similar Components are not modelling
 analyses at all.
 
 **Modelling gaps that remain:** chord-length and rule fillets (constant and
-variable radius work), sheet metal, the Mesh tab, the Form workspace, and
-Fusion's compute options for patterns that hit different geometry. Silhouette
-Split works only where the parting line is flat.
+variable radius work), the Mesh tab, the Form workspace, and Fusion's compute
+options for patterns that hit different geometry. Silhouette Split works only
+where the parting line is flat.
+
+**Where the sheet metal tools stop.** A rule is a document setting rather than a
+library of named rules. Convert To Sheet Metal recovers the flat faces and the
+bends of an existing solid, but a converted body has no panel tree until it is
+given one, so it cannot be laid out flat straight away. A miter between two
+flanges is not cut automatically; the gap is in the rule and Rip is how you take
+it. Corner relief is cut where two bend lines cross, which is the two-bend case;
+Fusion also has a three-bend one.
 
 **Where the surface tools stop.** Trim cuts a surface with another surface, and
 a surface cuts a solid by being stretched past it and given the thickness of the
