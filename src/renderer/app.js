@@ -4774,13 +4774,46 @@ function showMarkingMenu(e) {
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
 
-  setTimeout(() => {
-    window.addEventListener('pointerdown', closeMarkingMenu, { once: true });
-  }, 0);
+  armMenuClose(menu);
 }
+
+let menuCloser = null;
 
 function closeMarkingMenu() {
   document.getElementById('markmenu')?.remove();
+  if (menuCloser) {
+    window.removeEventListener('pointerdown', menuCloser, true);
+    menuCloser = null;
+  }
+}
+
+/**
+ * Close a menu when the next press lands outside it.
+ *
+ * Not on the next press anywhere, which is what this used to do. A real mouse
+ * fires pointerdown before click, so pressing an item tore the menu out of the
+ * document before the click could reach the item being pressed, and every menu
+ * in the application did nothing at all: the dropdowns on every tab and the
+ * right click menu alike. Only the press that lands outside closes it now.
+ *
+ * The reason this survived a suite of tests that drive the real interface is
+ * that `element.click()` dispatches a click and no pointer events at all, so
+ * the demos took a path no mouse can take. They press properly now.
+ */
+function armMenuClose(menu) {
+  const onDown = (e) => {
+    // `contains` throws on anything that is not a node, and a listener that
+    // throws never gets to close the menu, which leaves it stuck open over
+    // everything else.
+    if (e.target instanceof Node && menu.contains(e.target)) return;
+    closeMarkingMenu();
+  };
+  menuCloser = onDown;
+  // After the click that opened it has finished, or that same click closes it.
+  // Capturing, so a handler that swallows pointerdown cannot leave it stuck open.
+  setTimeout(() => {
+    if (menuCloser === onDown) window.addEventListener('pointerdown', onDown, true);
+  }, 0);
 }
 
 /**
@@ -4950,9 +4983,7 @@ function showRibbonMenu(name, anchor) {
   menu.style.left = `${Math.min(r.left, window.innerWidth - box.width - 8)}px`;
   menu.style.top = `${Math.min(r.bottom, window.innerHeight - box.height - 8)}px`;
 
-  setTimeout(() => {
-    window.addEventListener('pointerdown', closeMarkingMenu, { once: true });
-  }, 0);
+  armMenuClose(menu);
 }
 
 /* ------------------------------------------------------------------ */

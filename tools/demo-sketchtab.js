@@ -38,12 +38,31 @@ document.querySelector('[data-tab="sketch"]').click();
 await wait(150);
 cold.sketchActive = !!dev.state.sketcher.active;
 
-// Through the dropdown, which is the path that used to dead end hardest:
-// every button on the tab said "start a sketch first" and did nothing.
-document.querySelector('[data-panel="sketch"] [data-menu="rectangle"]').click();
-await wait(150);
-document.getElementById('markmenu')?.querySelector('button')?.click();
-await wait(250);
+// Pressed the way a mouse presses. `element.click()` sends a click and no
+// pointer events, which is a path no mouse can take: it was how a menu that
+// tore itself out of the document on pointerdown, before the click could reach
+// the item being pressed, looked like it worked for as long as it did.
+const press = async (el) => {
+  const r = el.getBoundingClientRect();
+  const at = {
+    clientX: r.left + r.width / 2,
+    clientY: r.top + r.height / 2,
+    pointerId: 1,
+    bubbles: true,
+    cancelable: true
+  };
+  el.dispatchEvent(new PointerEvent('pointerdown', { ...at, button: 0, buttons: 1 }));
+  await wait(30);
+  el.dispatchEvent(new PointerEvent('pointerup', { ...at, button: 0, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent('click', { ...at, button: 0 }));
+  await wait(150);
+};
+
+await press(document.querySelector('[data-panel="sketch"] [data-menu="rectangle"]'));
+cold.menuOpened = !!document.getElementById('markmenu');
+await press(document.getElementById('markmenu').querySelector('button'));
+cold.menuClosed = !document.getElementById('markmenu');
+await wait(200);
 cold.asked = document.getElementById('status')?.textContent;
 cold.remembered = dev.state.pendingTool;
 

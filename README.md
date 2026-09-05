@@ -957,7 +957,10 @@ a rigid group and a motion link. `demo-inspect.js` shells a box, weighs it, chec
 through its wall, colours its draft and cuts it open, `demo-project.js` draws a
 tangent arc, projects a face both linked and as a
 copy, and sections a body, checking that the linked ones move when the model
-does, and `demo-picking.js` checks the things a volume cannot see:
+does, `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
+click, rather than the bare `click()` every other demo uses, because that is a
+path no mouse can take and it hid a menu that shut itself before the press could
+land. And `demo-picking.js` checks the things a volume cannot see:
 that clicking a profile twice lets it go, that a picked profile looks picked,
 and that the callout says what the dialog wants.
 
