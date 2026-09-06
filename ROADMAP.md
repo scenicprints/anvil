@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.6.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
+Current version: **2.7.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
 
 ---
 
@@ -988,6 +988,39 @@ obvious." All three were fair.
   hidden when something is built on it; undoing that something left it hidden,
   so its profiles could not be clicked again. Anything derived from the document
   but stored beside it has to be re-derived when the document goes back.
+
+---
+
+## The restyle, first pass, shipped in v2.7.0
+
+He said it looked like it was developed on Windows 95, and he was right. What
+was actually doing it, in order of how much each mattered:
+
+1. **Arial.** `--font` asked for Helvetica first, which on Windows resolves to
+   Arial. Asking for the system text face instead is the single largest change
+   in the whole pass and it is one line.
+2. **A border round every control.** Buttons were filled and outlined at 1px
+   with square corners. They are quiet until hovered now.
+3. **One grey everywhere**, model included: the body was within a shade of the
+   ground it stood on. Surfaces step now, the ground is cooler than the chrome
+   and carries a gradient, and the body is the one warm thing on screen.
+4. **No elevation.** Menus and callouts were hairline boxes, so they read as
+   part of the page rather than in front of it.
+5. **No type hierarchy.** Group labels were barely legible; tabs, labels and
+   headings now have weights that separate them.
+
+Chrome grew eighteen pixels in the first cut and six were given back. The rest
+buys real comfort in the top bar, and the ribbon is a row shorter than it was.
+
+### Still to do on the look
+
+- **The icons.** Sixty-odd Unicode glyphs of wildly different weights and
+  widths, which is the largest remaining thing that dates it. They are
+  normalised to one size and colour now, which helps and is not the answer. A
+  real drawn set is its own piece of work and wants his eye on it.
+- **Dark mode.** `theme/style.dark.css` still has not tracked any of this.
+- **Discoverability**, which he put third: hover previews, a command search,
+  better empty states.
 
 ---
 

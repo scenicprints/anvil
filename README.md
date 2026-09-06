@@ -731,11 +731,27 @@ rather than handing the kernel something that looks right and is not watertight.
 ## The window
 
 The window is drawn the way Braun drew an instrument in Dieter Rams' years
-there. A warm off-white ground, hairline rules rather than boxes, no shadow, no
-gloss, nothing rounded, Helvetica, and one accent colour, Braun's vermilion,
-spent only on the thing that is active right now: the tool in your hand, the row
-you have selected, the single action a dialog is asking for. Everything else is
-grey so the model is the only thing in the window with a voice.
+there: restraint, no gloss, nothing decorative, and one accent colour, Braun's
+vermilion, spent only on the thing that is active right now — the tool in your
+hand, the row you have selected, the single action a dialog is asking for.
+
+The first reading of that took "plain" to mean flat and grey, and the result
+looked like a toolkit from 1995 rather than a quiet instrument. A Braun panel
+was never one grey laid on another. It had real material contrast, generous
+air, and crisp type. So three things changed and the discipline did not.
+
+**Surfaces step.** The chrome is near white, the viewport is a cooler ground
+beneath it, and the body is the one warm thing on the screen. It used to be
+within a shade of what it stood on.
+
+**Nothing has a box drawn round it.** A border on every button is most of what
+1995 looked like. Controls are quiet until pointed at. What genuinely floats
+above the page — a menu, a callout, a value box — carries a soft shadow, which
+is not decoration but the only honest way to say a thing is in front.
+
+**It asks for the system's own text face.** This asked for Helvetica, which on
+Windows means Arial, and Arial at eleven pixels dates an application faster than
+any other single choice.
 
 The viewport is a light drafting ground rather than a dark one, which is the
 honest reading of the period and also lets sketch geometry go back to the

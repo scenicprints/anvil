@@ -1,15 +1,23 @@
 /* Anvil.
 
-   The shell is drawn the way Braun drew an instrument in Rams' years there: a
-   warm off-white ground, hairline rules instead of boxes, no shadow, no gloss,
-   nothing rounded, and one accent colour that is spent only on the thing you
-   are doing right now. Everything else is grey, so the model is the only thing
-   in the window with a voice.
+   Drawn the way Braun drew an instrument in Rams' years there: restraint, one
+   accent spent only on what you are doing now, and nothing decorative. What
+   that reading got wrong the first time was to take "plain" for "flat and
+   grey", and the result read as a 1995 toolkit rather than as a quiet
+   instrument. A Braun panel was never one grey on another: it had real
+   material contrast, generous air, and crisp type.
 
-   The viewport is a light drafting ground rather than a dark one. That is the
-   honest reading of the period, and it is also why sketch geometry can go back
-   to the ordinary CAD convention: settled geometry is near black, and anything
-   still free to move is blue.
+   So the discipline stays and three things change. Surfaces step: the chrome is
+   near white, the viewport is a cooler ground beneath it, and the model sits on
+   that ground as the one warm thing on screen. Controls have no boxes drawn
+   round them, because a border on every button is what 1995 looked like; they
+   are quiet until pointed at. And anything that floats above the page carries a
+   soft shadow, which is not decoration but the only honest way to say a thing
+   is in front.
+
+   Type is the other half of it. This asked for Helvetica and got Arial, which
+   is the single most dated thing a Windows application can do. It asks for the
+   system's own text face now.
 
    Sizing is on a four pixel rhythm and stays compact, because a modeller lives
    or dies on how much of the window is viewport rather than chrome.
@@ -17,21 +25,33 @@
    The dark shell this replaced is kept at theme/style.dark.css. */
 
 :root {
-  /* Ground. Braun's cream-grey, and the greys stepped off it. */
-  --paper: #eceae4;
-  --paper-2: #e4e1da;
-  --paper-3: #dbd7ce;
-  --paper-4: #cfcbc1;
-  --ground: #c6c3bc;
+  /* Surfaces, lightest at the top of the window and stepping down into the
+     viewport, so the chrome reads as a panel laid over a ground rather than as
+     one continuous sheet of grey. */
+  --paper: #f6f5f2;
+  --paper-2: #efeeea;
+  --paper-3: #e6e4de;
+  --paper-4: #dbd8d1;
+  --ground: #b9bcc0;
 
-  /* Rules. Hairlines, never boxes. */
-  --rule: #c8c4ba;
-  --rule-2: #ada89c;
+  /* Rules. Hairlines, and lighter than they were: at the old weight every
+     panel was outlined, which is the look of a window from 1995. */
+  --rule: #dedbd4;
+  --rule-2: #c3bfb6;
 
   /* Ink. */
-  --ink: #23221d;
-  --ink-2: #5d5a52;
-  --ink-3: #8d8980;
+  --ink: #1c1b18;
+  --ink-2: #56534c;
+  --ink-3: #8b877e;
+
+  /* Corners. Small enough to stay an instrument, large enough not to look
+     like a dialog box drawn with a 1px pen. */
+  --r: 6px;
+  --r-sm: 4px;
+
+  /* Depth, for the things that genuinely float. */
+  --lift: 0 1px 2px rgba(28, 27, 24, 0.06), 0 8px 24px rgba(28, 27, 24, 0.1);
+  --lift-sm: 0 1px 2px rgba(28, 27, 24, 0.08);
 
   /* The one accent: Braun vermilion. Reserved for the active tool, the
      selection, and the single most important action on screen. */
@@ -44,8 +64,13 @@
   --warn: #b07a10;
   --err: #a92f22;
 
-  --font: "Helvetica Neue", Helvetica, Arial, "Segoe UI", sans-serif;
-  --mono: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  /* The system's own text face first. Asking for Helvetica on Windows gets
+     Arial, and Arial at eleven pixels is what makes an application look its
+     age more than any other single choice. */
+  --font: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, -apple-system,
+    "Helvetica Neue", sans-serif;
+  --mono: "Cascadia Mono", "SF Mono", Consolas, "Roboto Mono", ui-monospace,
+    monospace;
 
   /* Backwards names, so nothing that still asks for them breaks. */
   --bg: var(--paper);
@@ -82,55 +107,73 @@ body {
   user-select: none;
 }
 
+/* No box drawn round every control. A button is quiet until it is pointed at,
+   which is both the calmer reading and the one that does not look like a
+   toolbar from thirty years ago. */
 button {
   font-family: inherit;
   font-size: 12px;
-  color: var(--text);
-  background: var(--bg-3);
-  border: 1px solid var(--line);
-  border-radius: 0;
-  padding: 4px 9px;
+  font-weight: 450;
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 4px 10px;
   cursor: pointer;
   white-space: nowrap;
+  transition: background 90ms ease, color 90ms ease;
 }
 button:hover {
   background: var(--paper-3);
-  border-color: var(--rule-2);
+  color: var(--ink);
 }
 button:active {
   background: var(--paper-4);
 }
 button.accent {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--on-accent);
+  font-weight: 500;
 }
 button.accent:hover {
   background: var(--accent-2);
+  color: var(--on-accent);
 }
 button.on {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+button.on:hover {
+  background: var(--accent-2);
   color: var(--on-accent);
 }
 button:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: default;
+}
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 input[type="text"],
 input[type="number"] {
-  background: #f7f6f3;
-  border: 1px solid var(--rule);
+  background: #ffffff;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-sm);
   color: var(--ink);
-  padding: 4px 6px;
+  padding: 5px 8px;
   font-family: var(--mono);
   font-size: 12px;
   width: 100%;
+  transition: border-color 90ms ease, box-shadow 90ms ease;
 }
 input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(216, 75, 30, 0.14);
 }
 input[type="checkbox"] {
   accent-color: var(--accent);
@@ -139,13 +182,18 @@ input[type="checkbox"] {
   margin: 0;
 }
 select {
-  background: #f7f6f3;
-  border: 1px solid var(--line);
+  background: #ffffff;
+  border: 1px solid var(--rule-2);
   color: var(--text);
-  border-radius: 0;
-  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  padding: 5px 8px;
   font-size: 12px;
   width: 100%;
+}
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(216, 75, 30, 0.14);
 }
 
 #app {
@@ -159,21 +207,23 @@ select {
 #topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 10px;
-  height: 34px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--line);
+  gap: 16px;
+  padding: 0 12px;
+  height: 38px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
   flex: none;
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-weight: 500;
-  letter-spacing: 1.6px;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 1.8px;
   text-transform: lowercase;
   color: var(--ink);
+  padding-right: 2px;
 }
 .filegroup {
   display: flex;
@@ -182,9 +232,9 @@ select {
 }
 .sep {
   width: 1px;
-  height: 18px;
-  background: var(--line);
-  margin: 0 4px;
+  height: 16px;
+  background: var(--rule);
+  margin: 0 6px;
 }
 .spacer {
   flex: 1;
@@ -198,26 +248,28 @@ select {
 
 #ribbon {
   flex: none;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
 }
 .tabs {
   display: flex;
-  gap: 0;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--line);
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--rule);
 }
 .tab {
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
-  padding: 5px 14px;
-  color: var(--text-dim);
+  padding: 7px 14px 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
 }
 .tab:hover {
   background: none;
-  color: var(--text);
+  color: var(--ink-2);
 }
 .tab.active {
   color: var(--ink);
@@ -230,8 +282,8 @@ select {
 .ribbon-panel {
   display: none;
   gap: 0;
-  padding: 5px 8px 6px;
-  min-height: 62px;
+  padding: 6px 8px 7px;
+  min-height: 64px;
 }
 .ribbon-panel.active {
   align-items: stretch;
@@ -244,9 +296,9 @@ select {
   flex-wrap: wrap;
   align-content: flex-start;
   align-items: flex-start;
-  gap: 3px;
-  padding: 0 9px 14px;
-  border-right: 1px solid var(--line);
+  gap: 1px;
+  padding: 0 8px 14px;
+  border-right: 1px solid var(--rule);
   position: relative;
   /* When this falls behind the number of buttons in a group, that group takes
      a third row and the viewport loses fifty pixels of height. Past a point
@@ -260,10 +312,11 @@ select {
 .glabel {
   position: absolute;
   bottom: 0;
-  left: 9px;
-  font-size: 9px;
+  left: 8px;
+  font-size: 9.5px;
+  font-weight: 600;
   color: var(--ink-3);
-  letter-spacing: 1.1px;
+  letter-spacing: 1.2px;
   text-transform: uppercase;
 }
 button.big {
@@ -279,15 +332,17 @@ button.big {
   /* Wide enough for a one word name to stay on one line, capped so a two word
      one folds rather than stretching the group across the ribbon. */
   width: auto;
-  min-width: 60px;
-  max-width: 86px;
+  min-width: 58px;
+  max-width: 84px;
   min-height: 50px;
-  padding: 3px 3px;
+  padding: 4px 2px 3px;
   font-size: 10.5px;
-  line-height: 1.15;
+  font-weight: 450;
+  line-height: 1.2;
   text-align: center;
   background: none;
   border-color: transparent;
+  border-radius: var(--r);
 }
 /* The label is its own element so a two word name wraps inside the button
    instead of running out over the one beside it. */
@@ -308,16 +363,29 @@ button.big.accent {
   color: var(--on-accent);
 }
 button.big:hover {
-  background: var(--bg-3);
-  border-color: var(--line);
+  background: var(--paper-3);
+  border-color: transparent;
 }
 button.big.on {
   background: var(--accent);
-  border-color: var(--accent-2);
+  border-color: transparent;
 }
+/* One weight and one size for every glyph, and a step quieter than the label
+   under it, so thirty of them in a row read as a row rather than as noise. */
 .ico {
-  font-size: 16px;
-  line-height: 18px;
+  font-size: 17px;
+  line-height: 21px;
+  color: var(--ink-2);
+  opacity: 0.9;
+}
+button.big:hover .ico {
+  color: var(--ink);
+  opacity: 1;
+}
+button.big.on .ico,
+button.big.accent .ico {
+  color: var(--on-accent);
+  opacity: 1;
 }
 .cgrid {
   display: grid;
@@ -354,10 +422,10 @@ button.big.on {
 }
 
 #browser {
-  width: 220px;
+  width: 228px;
   flex: none;
-  background: var(--bg-2);
-  border-right: 1px solid var(--line);
+  background: var(--paper);
+  border-right: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -365,12 +433,13 @@ button.big.on {
 .panel-head {
   display: flex;
   align-items: center;
-  padding: 6px 9px;
-  font-size: 9px;
+  padding: 9px 12px 8px;
+  font-size: 9.5px;
+  font-weight: 600;
   letter-spacing: 1.4px;
   text-transform: uppercase;
   color: var(--ink-3);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--rule);
   flex: none;
 }
 .panel-head .x {
@@ -389,8 +458,10 @@ button.big.on {
 .node {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
+  gap: 6px;
+  margin: 0 6px;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
   cursor: pointer;
   white-space: nowrap;
   font-size: 12px;
@@ -402,7 +473,7 @@ button.big.on {
   text-overflow: ellipsis;
 }
 .node:hover {
-  background: var(--bg-3);
+  background: var(--paper-3);
 }
 .node.sel {
   background: var(--accent);
@@ -427,7 +498,7 @@ button.big.on {
   opacity: 1;
 }
 .node.child {
-  padding-left: 24px;
+  padding-left: 22px;
 }
 .node.group-head {
   color: var(--text-dim);
@@ -439,11 +510,14 @@ button.big.on {
   margin-left: 4px;
 }
 
+/* The ground the model stands on. Cooler than the chrome, so the panels read
+   as laid over it rather than continuous with it, and lighter at the top than
+   at the bottom, which is the difference between a room and a wall. */
 #viewwrap {
   flex: 1;
   position: relative;
   min-width: 0;
-  background: var(--ground);
+  background: linear-gradient(#d3d6da 0%, #c2c6cb 46%, #aeb2b8 100%);
 }
 #view {
   display: block;
@@ -492,11 +566,12 @@ button.big.on {
 .sk-entry-field {
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: #fbfaf7;
+  gap: 5px;
+  background: #ffffff;
   border: 1px solid var(--rule-2);
-  border-radius: 0;
-  padding: 1px 4px;
+  border-radius: var(--r-sm);
+  box-shadow: var(--lift-sm);
+  padding: 2px 6px;
 }
 .sk-entry-field span {
   font-size: 10px;
@@ -596,31 +671,32 @@ button.big.on {
 
 #viewhint {
   position: absolute;
-  left: 10px;
-  bottom: 10px;
+  left: 12px;
+  bottom: 12px;
   font-size: 11.5px;
-  color: var(--text-dim);
-  background: rgba(252, 251, 248, 0.86);
-  padding: 3px 8px;
-  border-radius: 0;
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.82);
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
   pointer-events: none;
 }
 #snaphint {
   position: absolute;
   font-size: 10.5px;
+  font-weight: 500;
   color: var(--accent);
-  background: rgba(252, 251, 248, 0.9);
-  padding: 1px 5px;
-  border-radius: 0;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
   pointer-events: none;
   display: none;
 }
 
 #inspector {
-  width: 250px;
+  width: 264px;
   flex: none;
-  background: var(--bg-2);
-  border-left: 1px solid var(--line);
+  background: var(--paper);
+  border-left: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -631,14 +707,14 @@ button.big.on {
 #inspectorBody {
   flex: 1;
   overflow: auto;
-  padding: 9px;
+  padding: 12px;
 }
 #inspectorActions {
   flex: none;
   display: flex;
-  gap: 6px;
-  padding: 8px 9px;
-  border-top: 1px solid var(--line);
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--rule);
 }
 #inspectorActions button {
   flex: 1;
@@ -728,13 +804,13 @@ table.params .v {
 
 #timelinebar {
   flex: none;
-  height: 40px;
-  background: var(--bg-2);
-  border-top: 1px solid var(--line);
+  height: 42px;
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 0 6px;
+  padding: 0 8px;
 }
 .tl-btn {
   padding: 3px 7px;
@@ -756,9 +832,9 @@ table.params .v {
   flex: none;
   width: 34px;
   height: 30px;
-  border: 1px solid var(--line);
-  border-radius: 0;
-  background: var(--bg-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: var(--paper-3);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -768,12 +844,12 @@ table.params .v {
   position: relative;
 }
 .tl-item:hover {
-  border-color: var(--line-2);
-  background: var(--bg-4);
+  border-color: transparent;
+  background: var(--paper-4);
 }
 .tl-item.sel {
   border-color: var(--accent);
-  background: var(--paper-3);
+  background: var(--paper-2);
 }
 .tl-item.rolled {
   opacity: 0.35;
@@ -804,8 +880,8 @@ table.params .v {
 #statusbar {
   flex: none;
   height: 22px;
-  background: var(--bg-2);
-  border-top: 1px solid var(--line);
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -898,25 +974,28 @@ table.params .v {
 
 /* ---------------- marking menu ---------------- */
 
+/* A menu is in front of the window, and a shadow is the only honest way to
+   say so. Drawn as a hairline box it read as part of the page. */
 #markmenu {
   position: fixed;
   z-index: 60;
-  background: var(--bg-2);
-  border: 1px solid var(--line-2);
-  border-radius: 0;
-  padding: 3px;
-  min-width: 132px;
-  box-shadow: none;
+  background: #ffffff;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: 4px;
+  min-width: 148px;
+  box-shadow: var(--lift);
   display: flex;
   flex-direction: column;
 }
 #markmenu button {
   background: none;
   border: none;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   text-align: left;
-  padding: 4px 10px;
+  padding: 6px 10px;
   font-size: 12px;
+  color: var(--ink);
 }
 #markmenu button:hover:not(:disabled) {
   background: var(--accent);
@@ -971,10 +1050,12 @@ table.params .v {
   z-index: 40;
   min-width: 152px;
   max-width: 232px;
-  background: var(--paper);
-  border: 1px solid var(--rule-2);
+  background: #ffffff;
+  border: 1px solid var(--rule);
   border-left: 2px solid var(--accent);
-  padding: 5px 9px 6px;
+  border-radius: var(--r-sm);
+  box-shadow: var(--lift);
+  padding: 7px 11px 8px;
   font-size: 11.5px;
   line-height: 1.35;
   pointer-events: none;

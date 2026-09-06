@@ -12,6 +12,10 @@ import { buildGeometry, buildEdges } from './meshutil.js';
 
 // Surfaces are drawn in a warmer tone than solids, so which is which reads at
 // a glance rather than needing the browser to be checked.
+/* The body. Warm and light against a cool ground, which is the whole of why
+   it is this colour: it is the one thing in the window that should be looked
+   at, and it used to be within a shade of what it stood on. */
+const SOLID_COLOUR = 0xece7dc;
 const SHEET_COLOUR = 0xd9c187;
 
 // A form is neither solid nor surface while it is being shaped, and it reads as
@@ -74,16 +78,20 @@ export class Viewport {
     this.canvas = canvas;
     this.overlay = overlay;
 
+    // Transparent, so the ground can be a gradient laid on in CSS rather than
+    // one flat colour. A single grey filling most of the window is the flattest
+    // a modelling view can look, and the gradient costs nothing to draw.
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
-      alpha: false,
+      alpha: true,
       preserveDrawingBuffer: true
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     // A light drafting ground. Shaded solids read as objects sitting on paper,
     // and the feature edges can be near black, which is how a part is drawn.
-    this.renderer.setClearColor(0xbcb9b2, 1);
+    // Nothing of its own: #viewwrap carries the ground.
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.sortObjects = true;
     this.renderer.localClippingEnabled = true;
 
@@ -235,8 +243,8 @@ export class Viewport {
       l.renderOrder = -1;
       return l;
     };
-    this.grid.add(mkLines(minor, 0xaeaba3, 0.4));
-    this.grid.add(mkLines(major, 0x99968e, 0.55));
+    this.grid.add(mkLines(minor, 0xa7abb1, 0.34));
+    this.grid.add(mkLines(major, 0x8f939a, 0.5));
   }
 
   /* ---------------------------------------------------------------- */
@@ -667,7 +675,7 @@ export class Viewport {
         // A pale warm grey, brighter than the ground it sits on, with no
         // metal in it. The shape is the subject, not the finish.
         const mat = new THREE.MeshStandardMaterial({
-          color: rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : 0xe0dcd2,
+          color: rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : SOLID_COLOUR,
           metalness: 0.0,
           roughness: 0.62,
           flatShading: false,
@@ -765,7 +773,7 @@ export class Viewport {
           entry.overlay.geometry = geom2;
         } else {
           const mat2 = new THREE.MeshStandardMaterial({
-            color: 0xe0dcd2,
+            color: SOLID_COLOUR,
             metalness: 0,
             roughness: 0.6,
             transparent: true,
