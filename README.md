@@ -754,8 +754,12 @@ the height of the window.
 way round is what makes a dark theme read as a black bar stuck to the top of a
 grey window, and it is the mistake the first dark cut made.
 
-**The view cube says where you are standing**, not only what you could look at:
-the corner you are viewing from is shaded.
+**The view cube points at twenty six views, not six.** Press the middle of a
+face for that face, out towards a border for the edge the two faces share, out
+towards a corner for the corner. What is shaded is whatever the pointer is
+over, so it says what a press would land on. It briefly shaded the corner
+nearest the camera instead, which is useless: that corner is whichever one
+faces you, so it never appears to move however you turn.
 
 **It asks for the system's own text face.** This asked for Helvetica, which on
 Windows means Arial, and Arial at eleven pixels dates an application faster than

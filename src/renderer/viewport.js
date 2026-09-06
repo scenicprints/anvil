@@ -29,6 +29,16 @@ const UP = new THREE.Vector3(0, 0, 1);
  * the middle button pans, shift plus middle orbits, and the right button opens
  * a context menu rather than moving the camera.
  */
+/* How big the view cube is drawn, and the half width of the box inside it. One
+   number, because the picking and the drawing have to agree about where it is
+   or you aim at one thing and hit another. */
+const CUBE_PX = 132;
+const CUBE_HALF = 0.7;
+/* How far out along a face a press has to land before it counts as the edge or
+   the corner rather than the face. The middle of a face is the face; the outer
+   fifth of it, on each axis, is what it borders. */
+const CUBE_EDGE_BAND = 0.6;
+
 // How far a press on the view cube may travel and still count as a click on a
 // face rather than the start of an orbit.
 const CUBE_CLICK_SLOP = 4;
@@ -284,9 +294,10 @@ export class Viewport {
       group.add(mesh);
     }
 
-    const boxGeo = new THREE.BoxGeometry(1.4, 1.4, 1.4);
+    const boxGeo = new THREE.BoxGeometry(CUBE_HALF * 2, CUBE_HALF * 2, CUBE_HALF * 2);
     const boxMat = new THREE.MeshBasicMaterial({ color: 0xd8d4cb });
-    group.add(new THREE.Mesh(boxGeo, boxMat));
+    this.cubeBox = new THREE.Mesh(boxGeo, boxMat);
+    group.add(this.cubeBox);
 
     const edgeGeo = new THREE.EdgesGeometry(boxGeo);
     group.add(
@@ -296,71 +307,101 @@ export class Viewport {
       )
     );
 
-    // The corner you are looking from, shaded. A cube of six labels tells you
-    // what you could look at and nothing about where you are; this is the bit
-    // that says which of the eight corners you are standing in.
-    const cornerGeo = new THREE.BufferGeometry();
-    cornerGeo.setAttribute(
-      'position',
-      new THREE.BufferAttribute(new Float32Array(9), 3)
-    );
-    this.cubeCorner = new THREE.Mesh(
-      cornerGeo,
-      new THREE.MeshBasicMaterial({
-        color: 0x5d5a53,
-        side: THREE.DoubleSide,
-        // Drawn over the box rather than depth tested against it. The facet
-        // hugs a corner where three faces meet, and at that seam a depth test
-        // is a coin toss taken per pixel.
-        depthTest: false,
-        transparent: true,
-        opacity: 0.95
-      })
-    );
-    this.cubeCorner.renderOrder = 4;
-    group.add(this.cubeCorner);
+    // What the pointer is over, shaded. This used to mark the corner nearest
+    // the camera, which was no use at all: that corner is whichever one faces
+    // you, so it never appears to move however you turn. What is worth showing
+    // is what a press would land on.
+    this.cubeHighlight = new THREE.Group();
+    this.cubeHighlight.renderOrder = 4;
+    this.cubeHighlightKey = '';
+    group.add(this.cubeHighlight);
 
     this.cubeGroup = group;
     this.cubeScene.add(group);
   }
 
   /**
-   * Move the shaded facet to whichever corner of the cube faces the camera.
+   * Which part of the cube a point on its surface belongs to.
    *
-   * Which octant that is, is just the sign of the view direction in the cube's
-   * own frame. The facet is the triangle cutting across the three edges that
-   * meet there, pushed a hair outside the face so it does not fight the box
-   * for the same pixels.
+   * The middle of a face is that face. Out towards one border it is the edge
+   * the two faces share, and out towards a corner it is the corner, which is
+   * how a cube offers twenty six views rather than six. Written as the sign of
+   * each coordinate that has run far enough out, so one test gives all three.
    */
-  _placeCubeCorner() {
-    if (!this.cubeCorner) return;
-    const dir = new THREE.Vector3()
-      .subVectors(this.camera.position, this.target)
-      .normalize();
-    const s = [
-      dir.x >= 0 ? 1 : -1,
-      dir.y >= 0 ? 1 : -1,
-      dir.z >= 0 ? 1 : -1
-    ];
-    const h = 0.7;
-    const t = 0.5;
-    // Lifted off the corner along its own diagonal, so it clears all three
-    // faces at once rather than fighting them for the same pixels.
-    const lift = 0.06;
-    const pos = this.cubeCorner.geometry.attributes.position;
-    const corner = [s[0] * h, s[1] * h, s[2] * h];
-    for (let axis = 0; axis < 3; axis++) {
-      const p = [...corner];
-      p[axis] -= s[axis] * t;
-      pos.setXYZ(
-        axis,
-        p[0] + s[0] * lift,
-        p[1] + s[1] * lift,
-        p[2] + s[2] * lift
-      );
+  _cubeRegion(local) {
+    const c = [local.x, local.y, local.z];
+    const band = CUBE_HALF * CUBE_EDGE_BAND;
+    const region = c.map((v) => (Math.abs(v) > band ? Math.sign(v) : 0));
+    if (region.some(Boolean)) return region;
+    // Dead centre of a face, which the band test cannot see because the two
+    // in-plane coordinates are both small. The face is the axis it lies on.
+    let big = 0;
+    for (let i = 1; i < 3; i++) if (Math.abs(c[i]) > Math.abs(c[big])) big = i;
+    region[big] = Math.sign(c[big]) || 1;
+    return region;
+  }
+
+  /**
+   * Shade the face, edge or corner the pointer is over.
+   *
+   * One patch per face involved: a whole face for a face, a band along each of
+   * two faces for an edge, a small square on each of three for a corner. The
+   * patches sit a hair proud of the box, and are drawn without a depth test
+   * because at an edge or a corner the surfaces meet and a depth test there is
+   * a coin toss taken per pixel.
+   */
+  _setCubeHighlight(region) {
+    const key = region ? region.join(',') : '';
+    if (key === this.cubeHighlightKey) return;
+    this.cubeHighlightKey = key;
+
+    for (const m of [...this.cubeHighlight.children]) {
+      m.geometry.dispose();
+      this.cubeHighlight.remove(m);
     }
-    pos.needsUpdate = true;
-    this.cubeCorner.geometry.computeBoundingSphere();
+    if (!region) {
+      this.invalidate();
+      return;
+    }
+
+    const h = CUBE_HALF;
+    const band = h * CUBE_EDGE_BAND;
+    const lift = 0.012;
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xe2551f,
+      transparent: true,
+      opacity: 0.55,
+      depthTest: false,
+      side: THREE.DoubleSide
+    });
+
+    for (let a = 0; a < 3; a++) {
+      if (!region[a]) continue;
+      const b = (a + 1) % 3;
+      const c = (a + 2) % 3;
+      const span = (i) =>
+        region[i] ? [region[i] * band, region[i] * h].sort((x, y) => x - y) : [-h, h];
+      const [b0, b1] = span(b);
+      const [c0, c1] = span(c);
+      const at = (bv, cv) => {
+        const p = [0, 0, 0];
+        p[a] = region[a] * (h + lift);
+        p[b] = bv;
+        p[c] = cv;
+        return p;
+      };
+      const q = [at(b0, c0), at(b1, c0), at(b1, c1), at(b0, c1)];
+      const verts = new Float32Array([
+        ...q[0], ...q[1], ...q[2],
+        ...q[0], ...q[2], ...q[3]
+      ]);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = 4;
+      this.cubeHighlight.add(mesh);
+    }
+    this.invalidate();
   }
 
   _labelTexture(text) {
@@ -441,6 +482,8 @@ export class Viewport {
       }
 
       if (!this.nav.mode) {
+        // Say what a press would land on before it is made.
+        this.hoverViewCube(e.clientX, e.clientY);
         if (this.onPointerMove) this.onPointerMove(e);
         return;
       }
@@ -1378,7 +1421,7 @@ export class Viewport {
 
   pickViewCube(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
-    const size = 96;
+    const size = CUBE_PX;
     const x = clientX - rect.left;
     const y = clientY - rect.top;
     const cx = rect.width - size - 12;
@@ -1391,11 +1434,20 @@ export class Viewport {
     );
     const rc = new THREE.Raycaster();
     rc.setFromCamera(ndc, this.cubeCamera);
-    const hits = rc.intersectObjects(this.cubeGroup.children, false);
-    for (const h of hits) {
-      if (h.object.userData.viewDir) return h.object.userData.viewDir;
-    }
-    return 'inside';
+    const hits = rc.intersectObject(this.cubeBox, false);
+    if (!hits.length) return 'inside';
+    // Where on the cube's own surface the press landed. The cube is turned by
+    // the inverse of the camera, so a direction in its frame is a direction in
+    // the model's, and the region is the view to snap to.
+    const local = this.cubeGroup.worldToLocal(hits[0].point.clone());
+    return this._cubeRegion(local);
+  }
+
+  /** Shade whatever the pointer is over, or nothing when it has left. */
+  hoverViewCube(clientX, clientY) {
+    const dir = this.pickViewCube(clientX, clientY);
+    this._setCubeHighlight(Array.isArray(dir) ? dir : null);
+    return Array.isArray(dir);
   }
 
   /* ---------------------------------------------------------------- */
@@ -1435,10 +1487,9 @@ export class Viewport {
     this.renderer.render(this.scene, this.camera);
 
     // View cube, drawn over the top right corner.
-    const size = 96;
+    const size = CUBE_PX;
     const pad = 12;
     this.cubeGroup.quaternion.copy(this.camera.quaternion).invert();
-    this._placeCubeCorner();
     this.cubeCamera.position.set(0, 0, 6);
     this.cubeCamera.lookAt(0, 0, 0);
     this.renderer.setScissorTest(true);
