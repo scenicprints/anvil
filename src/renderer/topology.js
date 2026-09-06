@@ -317,7 +317,6 @@ export function buildTopology(mesh, opts = {}) {
       if (Math.abs(dot(n, axis)) > 0.08) return null;
     }
 
-    // Centre: the average of the face's points, projected onto the axis line.
     const pts = [];
     for (let i = 0; i < members.length; i += stride) {
       const t = members[i];
@@ -329,29 +328,60 @@ export function buildTopology(mesh, opts = {}) {
     for (const p of pts) mean = add(mean, p);
     mean = scale(mean, 1 / pts.length);
 
-    // Move the centre off the surface and onto the axis using the normals:
-    // each point sits one radius out along its own normal.
-    let radius = 0;
-    for (let i = 0; i < members.length; i += stride) {
-      const t = members[i];
-      const p = P(weld[tris[t * 3]]);
+    // The centre, by fitting a circle to the points seen down the axis.
+    //
+    // Averaging the points and calling that the centre only works for a face
+    // that goes all the way round: on a whole bore the average does land on the
+    // axis, and on anything less than that it lands somewhere out on the
+    // surface. A fillet is a quarter of a cylinder, so every fillet in the
+    // application failed this test and came back as an unrecognised curve. The
+    // algebraic circle fit below does not care how much of the arc it is given.
+    const b = basisFor(axis);
+    const flatOf = (p) => {
       const rel = sub(p, mean);
-      const flat = sub(rel, scale(axis, dot(rel, axis)));
-      radius += len(flat);
+      return [dot(rel, b.x), dot(rel, b.y)];
+    };
+
+    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0, sz = 0;
+    for (const p of pts) {
+      const [x, y] = flatOf(p);
+      const z = x * x + y * y;
+      sx += x; sy += y; sz += z;
+      sxx += x * x; syy += y * y; sxy += x * y;
+      sxz += x * z; syz += y * z;
     }
-    radius /= Math.max(1, Math.ceil(members.length / stride));
+    const n = pts.length;
+    // Solve the normal equations for the centre of the circle through them.
+    const a11 = 2 * (sxx - (sx * sx) / n);
+    const a12 = 2 * (sxy - (sx * sy) / n);
+    const a22 = 2 * (syy - (sy * sy) / n);
+    const b1 = sxz - (sx * sz) / n;
+    const b2 = syz - (sy * sz) / n;
+    const det = a11 * a22 - a12 * a12;
+    if (Math.abs(det) < 1e-12) return null;
+    const cx = (b1 * a22 - b2 * a12) / det;
+    const cy = (a11 * b2 - a12 * b1) / det;
+
+    const origin = add(mean, add(scale(b.x, cx), scale(b.y, cy)));
+
+    let radius = 0;
+    for (const p of pts) {
+      const rel = sub(p, origin);
+      radius += len(sub(rel, scale(axis, dot(rel, axis))));
+    }
+    radius /= pts.length;
     if (!(radius > 1e-6)) return null;
 
     // Check the fit before believing it.
     let worst = 0;
     for (const p of pts) {
-      const rel = sub(p, mean);
+      const rel = sub(p, origin);
       const flat = sub(rel, scale(axis, dot(rel, axis)));
       worst = Math.max(worst, Math.abs(len(flat) - radius));
     }
     if (worst > Math.max(0.05, radius * 0.05)) return null;
 
-    return { origin: mean, dir: axis, radius };
+    return { origin, dir: axis, radius };
   }
 
   /** Which feature and face a triangle came from, as one comparable string. */

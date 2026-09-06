@@ -624,6 +624,30 @@ inserted mesh is held apart from the solids until you ask for it to cross over,
 which keeps a two million triangle scan out of the kernel until that is what you
 want, and Convert Mesh is where it crosses.
 
+**Recognise** reads a body back as features, whatever it arrived as. This is
+where the mesh kernel stops being a compromise and starts being an advantage.
+A boundary representation package treats an imported mesh as a foreign object it
+has to convert before it can do anything real, and a converted one is still a
+shape with no features in it. Here the question is not whether a mesh can be
+converted, it is what the thing actually is, and that can be measured.
+
+A **hole** is a cylindrical face whose surface faces its own axis. A **boss** is
+the same face with the surface facing away, which is the only difference between
+a bore and a peg and is the whole of how they are told apart. A **fillet** is a
+cylindrical face that runs into both its neighbours without a crease, which is
+what being a blend means. Nothing here guesses at what a shape probably is.
+
+What comes back is grouped by size, because a part has four M3 clearance holes
+rather than four unrelated faces, and changing all the 3.2s at once is the thing
+you actually want. Each row selects what it names, so a bore can then be filled,
+offset or measured like any other face. It works the same on a body that was
+built here and on one that arrived as triangles with no history at all: export a
+drilled plate to STL, read it back, and it is still four holes in two sizes.
+
+Where blends run into each other there is no flat between them, so they are one
+continuous surface and are reported as one. Claiming twelve fillets on a fully
+rounded box would mean inventing boundaries the geometry does not have.
+
 **Insert Mesh** reads STL, binary or ASCII, OBJ, and 3MF. The 3MF is unzipped
 with the browser's own inflate rather than a bundled one, since a 3MF is a zip of
 XML and `DecompressionStream` is already here. **Tessellate** goes the other way,
@@ -955,7 +979,7 @@ model file can never execute anything.
 npm test
 ```
 
-338 tests in a hidden window, checking measured quantities: volumes against
+344 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -985,7 +1009,9 @@ a rigid group and a motion link. `demo-inspect.js` shells a box, weighs it, chec
 through its wall, colours its draft and cuts it open, `demo-project.js` draws a
 tangent arc, projects a face both linked and as a
 copy, and sections a body, checking that the linked ones move when the model
-does, `demo-pull.js` clicks a face, drags the arrow that appears, checks the body grew
+does, `demo-recognise.js` drills a plate, reads it back as four holes in two sizes,
+clicks a size to select it, then exports the same body to STL and reads it again
+with no history at all to check it says the same thing. `demo-pull.js` clicks a face, drags the arrow that appears, checks the body grew
 while the drag was happening, types an exact size over what was dragged to, and
 does the same to a sketch profile. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
 click, rather than the bare `click()` every other demo uses, because that is a

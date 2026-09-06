@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.8.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
+Current version: **2.9.0**. 344 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
 
 ---
 
@@ -1066,23 +1066,90 @@ versions, and half a theme is worse than none.
 
 ---
 
-## Deliberately not planned
+## Where the work goes next, decided 2026-09-06
 
-These are each their own application rather than a missing button, and the
-README already says so. They are listed here so it is a decision on the record
-rather than an omission.
+He audited Anvil against Fusion's own help and ruled on the workspaces. Three
+stay out. Four come in. And he named the thing he wants that Fusion does badly.
+
+### Still deliberately not planned
 
 | | Why not |
 |---|---|
 | Drawings | A drafting application. Weeks of work, and a slicer never sees a drawing. |
 | CAM and toolpaths | A post-processor per machine, plus a simulation. He does not own a mill. |
-| Simulation (FEA) | A solver and a mesher, each a project of its own. |
-| Generative design | Needs a compute farm. |
-| Render | Anvil renders flat with feature edges on purpose. A photoreal renderer is a different program. |
 | PCB and Electronics | Unrelated to the reason this exists. |
-| Cloud, hubs, collaboration | Anvil is offline on purpose. This is the point of it, not a gap in it. |
+| Cloud, hubs, collaboration | Anvil is offline on purpose. This is the point of it, not a gap in it. He has not asked for it; do not start it on a guess. |
 
-If he asks for any of these, say what it would actually cost before starting.
+### Now in scope, on his instruction
+
+- **Render.** Not the flat shading with feature edges that the viewport draws on
+  purpose, which stays. A separate photoreal path: materials, lighting, and an
+  image you can show someone.
+- **Animation.** Exploded views and assembly motion. The assembly solver and the
+  joint limits already exist, so what is missing is the timeline and the
+  exploding, not the kinematics.
+- **Simulation.** FEA. A mesher and a solver, each a project of its own. Say
+  what it costs before starting it.
+- **Generative design.** Fusion needs a compute farm for this. On one machine it
+  has to be a smaller thing honestly named: a shape optimiser on a coarse voxel
+  field, not a cloud farm in miniature.
+
+### Import, which is the one he called out
+
+> "Fusion 360 can only import the mesh, I think we can do much much better."
+
+He is right about the gap and right that this is where Anvil has an unfair
+advantage. Fusion's kernel is a boundary representation, so a mesh arriving
+from outside is a second class object it has to convert before it can do
+anything real with it. **Anvil's kernel is already a mesh kernel.** An imported
+mesh is not a foreign body here; it is the same kind of thing every feature
+already operates on.
+
+So the goal is not "read more file formats". It is: **an imported model should
+arrive as something you can edit, not as a bag of triangles.**
+
+1. **Recognise features on any body, imported or not.** The topology already
+   finds planar faces and fits cylinders. Build on that to find holes with an
+   axis, a diameter, a depth and whether they go through; constant radius
+   fillets; and the flats worth calling faces. Then let them be acted on:
+   change every 5 mm hole to 5.2, take a fillet off, fill a bore. That is the
+   thing Fusion cannot do to an imported mesh, and it is reachable from where
+   the code already is.
+2. **Then read the formats that carry more than triangles.** 3MF already
+   carries colour and an assembly tree that is currently thrown away. STEP is
+   the real prize and the real cost: a parser plus surface evaluation for
+   planes, cylinders, cones, tori and B-splines. Do not start it until the
+   recognition work above has proved itself, because recognition is what makes
+   an imported body useful whatever it arrived as.
+
+Order: recognition first, because it pays off on every body in the application
+rather than only on newly imported ones.
+
+### Recognition, first slice, shipped in v2.9.0
+
+`src/renderer/recognise.js`, and a **Recognise** command on the Mesh tab. Holes
+with a diameter, an axis, a depth and through or blind; fillets with a radius
+and a length; both grouped by size, and each group selects what it names.
+Measured on a plate of four bores in two sizes, and again on the same plate
+after an STL round trip, where it reads identically.
+
+**It found a real bug in `fitCylinder` on the way.** The centre of a fitted
+cylinder was the average of the face's points. That lands on the axis only for a
+face that goes all the way round, so bores fitted and fillets did not: a fillet
+is a quarter of a cylinder and its average sits out on the surface. Every fillet
+in the application had been coming back as an unrecognised curve. It is an
+algebraic circle fit now, which does not care how much of the arc it is given.
+
+### Still to do here
+
+- **Act on what was found**, not only select it: change every 5 mm hole to 5.2,
+  take a fillet off, fill a bore. The recognition carries the axis and the depth
+  precisely so a feature can be built on it without re-deriving anything.
+- **Blend shells.** Fillets that run together are one surface. Splitting one
+  into its constituent blends needs more than a cylinder fit.
+- **Then the formats.** 3MF already carries colour and an assembly tree that is
+  currently thrown away. STEP after that, and not before recognition has proved
+  itself.
 
 ---
 

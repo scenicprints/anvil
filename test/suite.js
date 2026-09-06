@@ -77,6 +77,7 @@ import {
   buildGeometry,
   buildEdges
 } from '../src/renderer/meshutil.js';
+import * as RC from '../src/renderer/recognise.js';
 import * as SH from '../src/renderer/sheet.js';
 import * as SM from '../src/renderer/sheetmetal.js';
 import * as MT from '../src/renderer/meshtools.js';
@@ -6428,6 +6429,186 @@ async function run() {
     });
     return part;
   }
+
+  /* -------- recognition -------- */
+
+  /** A plate with holes drilled through it, at two sizes. */
+  function drilledPlate(holes) {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '80', depth: '60', height: '10' })];
+    for (const h of holes) {
+      doc.features.push({
+        ...prim('cylinder', { diameter: String(h.d), height: '40', x: String(h.x), y: String(h.y) }),
+        op: 'cut',
+        targets: 'all'
+      });
+    }
+    return doc;
+  }
+
+  test('recognise: finds every hole and measures it', () => {
+    // Four bores through a plate, two at six and two at ten. Nothing about the
+    // model says "hole": they are the shape left behind by a cut.
+    const doc = drilledPlate([
+      { d: 6, x: -25, y: -15 },
+      { d: 6, x: 25, y: -15 },
+      { d: 10, x: -25, y: 15 },
+      { d: 10, x: 25, y: 15 }
+    ]);
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+    const mesh = K.meshData(res.bodies[0].solid);
+    const found = RC.recognise(mesh, buildTopology(mesh));
+
+    assert(found.counts.holes === 4, `four holes, got ${found.counts.holes}`);
+    assert(found.counts.through === 4, `all four go through, got ${found.counts.through}`);
+
+    // Two sizes, two of each, measured rather than assumed.
+    assert(found.holeSizes.length === 2, `two sizes, got ${found.holeSizes.length}`);
+    near(found.holeSizes[0].size, 6, 0.15, 'the small ones');
+    near(found.holeSizes[1].size, 10, 0.2, 'the large ones');
+    assert(found.holeSizes[0].items.length === 2, 'two of the small');
+    assert(found.holeSizes[1].items.length === 2, 'two of the large');
+
+    // Each runs the full thickness of the plate, along Z.
+    for (const h of found.holes) {
+      near(h.depth, 10, 0.2, 'through the ten of plate');
+      near(Math.abs(h.axis[2]), 1, 1e-6, 'and along Z');
+    }
+    res.dispose();
+  });
+
+  test('recognise: a blind hole is not a through one', () => {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '60', depth: '60', height: '20' }),
+      // Down from the top face, stopping short of the bottom.
+      { ...prim('cylinder', { diameter: '8', height: '12', z: '4' }), op: 'cut', targets: 'all' }
+    ];
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+    const mesh = K.meshData(res.bodies[0].solid);
+    const found = RC.recognise(mesh, buildTopology(mesh));
+
+    assert(found.counts.holes === 1, `one hole, got ${found.counts.holes}`);
+    assert(found.counts.through === 0, 'and it does not go through');
+    near(found.holes[0].diameter, 8, 0.15, 'eight across');
+    // The plate runs z = -10 to 10 and the cut runs -2 to 10, so the bore is
+    // twelve deep and stops eight short of the far face.
+    near(found.holes[0].depth, 12, 0.3, 'twelve deep');
+    res.dispose();
+  });
+
+  test('recognise: a peg is not a hole', () => {
+    // The same cylinder, joined instead of cut. Every measurement is identical
+    // except which way the surface faces, which is the whole test.
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '60', depth: '60', height: '10' }),
+      { ...prim('cylinder', { diameter: '8', height: '30', z: '15' }), op: 'join', targets: 'all' }
+    ];
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+    const mesh = K.meshData(res.bodies[0].solid);
+    const topo = buildTopology(mesh);
+    const found = RC.recognise(mesh, topo);
+
+    assert(found.counts.holes === 0, `a boss is not a hole, got ${found.counts.holes}`);
+    // But it is there, as a cylinder the topology fitted.
+    assert(
+      topo.faces.some((f) => f.cylinder && Math.abs(f.cylinder.radius - 4) < 0.2),
+      'the peg is still found as a cylinder'
+    );
+    res.dispose();
+  });
+
+  test('recognise: tells a fillet from a wall', () => {
+    // The four upright edges rounded, which leaves four separate strips: the
+    // flats above and below keep them apart. A blend that runs into another
+    // blend is one continuous surface and is dealt with below.
+    const first = rebuild(boxDoc(40, 40, 40)).bodies[0];
+    const uprights = buildTopology(K.meshData(first.solid))
+      .edges.filter((e) => e.kind === 'line' && e.convex && Math.abs(e.dir[2]) > 0.99)
+      .map((e) => edgeReference(e));
+
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: uprights, radius: '4' }]
+    });
+    const res = rebuild(doc);
+    assert(res.bodies.length === 1, JSON.stringify(res.errors));
+    const mesh = K.meshData(res.bodies[0].solid);
+    const found = RC.recognise(mesh, buildTopology(mesh));
+
+    assert(found.fillets.length === 4, `four fillets, got ${found.fillets.length}`);
+    for (const f of found.fillets) {
+      assert(f.convex, 'rounding an outside edge is a convex blend');
+      near(f.radius, 4, 0.05, 'measured at the radius it was given');
+      near(f.length, 40, 0.5, 'and running the height of the box');
+    }
+    assert(found.filletSizes.length === 1, 'all one size');
+    // None of them is a hole, which is the same sign read the other way.
+    assert(found.holes.length === 0, `and none is a bore, got ${found.holes.length}`);
+
+    // A plain box has none, which is what makes the test above mean anything.
+    const plain = rebuild(boxDoc(40, 40, 40));
+    const plainMesh = K.meshData(plain.bodies[0].solid);
+    const none = RC.recognise(plainMesh, buildTopology(plainMesh));
+    assert(none.fillets.length === 0, `a box has no fillets, got ${none.fillets.length}`);
+    res.dispose();
+    plain.dispose();
+  });
+
+  test('recognise: blends that run together are one surface, and it says so', () => {
+    // Rounding every edge of a box leaves no flat between one blend and the
+    // next, so they are a single continuous surface rather than twelve
+    // fillets. Reporting one curved face here is the honest answer; claiming
+    // twelve would mean inventing boundaries the geometry does not have.
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({
+      id: uid('f'), type: 'fillet', bodies: 'all', sets: [{ edges: [], radius: '4' }]
+    });
+    const res = rebuild(doc);
+    const mesh = K.meshData(res.bodies[0].solid);
+    const topo = buildTopology(mesh);
+    assert(topo.faces.length === 7, `six flats and one blend shell, got ${topo.faces.length}`);
+    const found = RC.recognise(mesh, topo);
+    assert(found.fillets.length === 0, 'and not one of them fits a cylinder on its own');
+    res.dispose();
+  });
+
+  test('recognise: works the same on a body that arrived as a mesh', () => {
+    // The point of the exercise. A model that came in from outside has no
+    // history and no features, and it still reads as four holes in a plate.
+    const doc = drilledPlate([
+      { d: 6, x: -20, y: 0 },
+      { d: 6, x: 20, y: 0 },
+      { d: 12, x: 0, y: 20 },
+      { d: 12, x: 0, y: -20 }
+    ]);
+    const solid = rebuild(doc);
+    const asBuilt = RC.recognise(
+      K.meshData(solid.bodies[0].solid),
+      buildTopology(K.meshData(solid.bodies[0].solid))
+    );
+
+    // Round trip it through STL, which keeps nothing but triangles.
+    const stl = toBinarySTL([K.meshData(solid.bodies[0].solid)]);
+    const back = parseSTL(stl);
+    const imported = RC.recognise(back, buildTopology(back));
+
+    assert(
+      imported.counts.holes === asBuilt.counts.holes,
+      `the same holes after a round trip: ${imported.counts.holes} against ${asBuilt.counts.holes}`
+    );
+    assert(imported.holeSizes.length === 2, `two sizes, got ${imported.holeSizes.length}`);
+    near(imported.holeSizes[0].size, 6, 0.2, 'still six');
+    near(imported.holeSizes[1].size, 12, 0.3, 'still twelve');
+    solid.dispose();
+  });
 
   /* -------- rebuild cache -------- */
 

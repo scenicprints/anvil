@@ -36,6 +36,7 @@ import {
   RebuildCache,
   uid
 } from './features.js';
+import { recognise } from './recognise.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
 import * as SM from './sheetmetal.js';
 import * as FM from './form.js';
@@ -1647,6 +1648,9 @@ async function runCommand(cmd) {
       break;
     case 'releaseFaceGroups':
       cmdFaceGroupEdit('release');
+      break;
+    case 'recognise':
+      cmdRecognise();
       break;
     case 'faceGroups':
       cmdFaceGroups();
@@ -10463,6 +10467,96 @@ function cmdConvertMesh() {
       text: 'A mesh has to be closed to be a solid. One that is not is refused and told why, rather than handed over and quietly wrong.'
     }
   ], { repair: true });
+}
+
+/**
+ * Read a body back as features, whatever it arrived as.
+ *
+ * A model that came in from outside has no history: no extrude that made it, no
+ * hole feature to point at. Fusion's answer is that an imported mesh stays a
+ * mesh until you convert it, and a converted one is still a shape with no
+ * features in it. Anvil's kernel is a mesh kernel, so the question here is not
+ * whether it can be converted but what it is, and that can be measured: a
+ * cylindrical face whose surface faces its own axis is a bore, and one that
+ * meets both neighbours without a crease is a blend.
+ *
+ * What comes back is a reading, and it says which. Nothing is changed on the
+ * model by looking at it.
+ */
+function cmdRecognise() {
+  if (state.sketcher.active) finishSketch();
+  const chosen = (state.result?.bodies || []).filter((b) =>
+    state.selection.bodies.size ? state.selection.bodies.has(b.id) : true
+  );
+  const body = chosen.length === 1 ? chosen[0] : null;
+  if (!body) {
+    setStatus(
+      chosen.length ? 'Select one body to read.' : 'There is nothing to read yet.'
+    );
+    return;
+  }
+  const record = (state.records || []).find((r) => r.id === body.id);
+  if (!record?.topology) {
+    setStatus('That body has no readable faces.');
+    return;
+  }
+
+  const found = recognise(record.mesh, record.topology);
+  const c = found.counts;
+  const fields = [];
+
+  const say = (text) => fields.push({ key: `__n${fields.length}`, label: '', type: 'note', text });
+
+  say(
+    `${c.faces} faces: ${c.flats} flat, ${c.curved} curved. ` +
+      `${c.holes} hole${c.holes === 1 ? '' : 's'}, ${c.fillets} fillet${c.fillets === 1 ? '' : 's'}.`
+  );
+
+  if (!found.holes.length) say('No bores found. A hole is a cylindrical face whose surface faces its own axis.');
+  for (const g of found.holeSizes) {
+    const through = g.items.filter((h) => h.through).length;
+    const deepest = Math.max(...g.items.map((h) => h.depth));
+    fields.push({
+      key: `__hole${g.size}`,
+      label:
+        `${g.items.length} \u00d7 \u2300${fmtLengthBare(g.size)} ` +
+        `${through === g.items.length ? 'through' : through ? `${through} through` : 'blind'}` +
+        `, to ${fmtLength(deepest)}`,
+      type: 'action',
+      run: () => {
+        state.selection.faces.clear();
+        state.selection.edges.clear();
+        for (const h of g.items) state.selection.faces.add(`${body.id}:${h.face}`);
+        refreshHighlight();
+        refreshPullHandle();
+        setStatus(`${g.items.length} bores of ${fmtLength(g.size)} selected.`);
+      }
+    });
+  }
+
+  for (const g of found.filletSizes) {
+    fields.push({
+      key: `__fillet${g.size}`,
+      label: `${g.items.length} \u00d7 R${fmtLengthBare(g.size)} ${g.items[0].convex ? 'round' : 'inside'}`,
+      type: 'action',
+      run: () => {
+        state.selection.faces.clear();
+        state.selection.edges.clear();
+        for (const f of g.items) state.selection.faces.add(`${body.id}:${f.face}`);
+        refreshHighlight();
+        refreshPullHandle();
+        setStatus(`${g.items.length} fillets of ${fmtLength(g.size)} selected.`);
+      }
+    });
+  }
+
+  say(
+    'Each row selects what it names, so it can be filled, offset or measured ' +
+      'like anything else. Blends that run into each other are one surface and ' +
+      'are not counted as separate fillets.'
+  );
+
+  showInspector(`Recognise \u2014 ${body.name}`, fields, () => {});
 }
 
 function cmdFaceGroups() {
