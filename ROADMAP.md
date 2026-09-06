@@ -971,7 +971,23 @@ obvious." All three were fair.
   agreed it was fine.
 - **`openFeatureEditor` turns the camera** to show the depth of a new feature.
   Right when a dialog opens, wrong when a drag is in hand, because it moves the
-  thing being aimed at out from under the pointer.
+  thing being aimed at out from under the pointer. Right again at the moment of
+  the press, before anything has moved, which is where it ended up.
+- **An extrude has no negative length.** It is a length one way and a `flip`
+  that turns it round; `direction` is one / two / symmetric. Inventing
+  `side1`/`side2` gave two values that both fell through to the same branch, so
+  it could only ever be dragged outward, which is exactly what he reported.
+- **Where the pointer's ray comes nearest the axis is the wrong measure** for a
+  handle. It is exact, and it runs away to infinity as the axis turns to face
+  the camera. Measuring along the axis as it appears on screen has no such
+  singularity.
+- **A rebuild takes the handle away**, so the drag has to be recorded before the
+  dialog that rebuilds is opened, or the arrow vanishes under the pointer that
+  just grabbed it.
+- **Undo restored the document and not the interface around it.** A sketch is
+  hidden when something is built on it; undoing that something left it hidden,
+  so its profiles could not be clicked again. Anything derived from the document
+  but stored beside it has to be re-derived when the document goes back.
 
 ---
 

@@ -1018,6 +1018,19 @@ throws the whole thing away. A sketch profile does the same and extrudes
 instead: one gesture, two features, because a face and a profile want different
 things done to them but the same thing said.
 
+It pulls both ways. A face offset carries its sign and cuts in when it is
+negative; an extrude has no sign at all, being a length one way and a flag that
+turns it round, and getting that wrong is how the first version could only ever
+be dragged outward.
+
+Straight after finishing a sketch you are looking square at the plane, so the
+arrow points at your eye: no length on screen to drag along, and what it builds
+grows towards you invisibly. Grabbing it turns the view first, the same few
+degrees the Extrude dialog has always turned for the same reason, before the
+drag rather than during it so nothing moves under the pointer. Where an axis is
+still nearly end on, a drag upward grows it at the rate a pixel is worth where
+the thing being pulled sits.
+
 What is being dragged is the real feature, not a preview of one. The arrow
 writes into the distance the dialog holds and the model rebuilds each frame, so
 what is on screen while pulling is what will be there when you let go. That is

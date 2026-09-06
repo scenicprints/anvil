@@ -725,6 +725,16 @@ function applySnapshot(snapshot) {
   const wasSketching = state.sketcher.active ? state.sketcher.sketch.id : null;
   exitSketch();
   state.doc = JSON.parse(snapshot);
+
+  // A sketch is put away because something was built on it. Undo can take that
+  // something away again, and then hiding it is a leftover from a state that no
+  // longer exists: the sketch goes back to being the thing you draw on, and
+  // until this it stayed invisible and its profiles could not be clicked.
+  for (const id of [...state.hiddenSketches]) {
+    const built = state.doc.features.some((f) => f.type !== 'sketch' && f.sketch === id);
+    if (!built) state.hiddenSketches.delete(id);
+  }
+
   clearGeometrySelection(false);
   state.selection.features.clear();
   state.editing = null;
@@ -7344,7 +7354,13 @@ function pullPointerDown(e) {
 
   const target = state.pullHandle;
   const frame = target.frame;
-  const start = closestOnLine(state.vp.pointerRay(e.clientX, e.clientY), frame.origin, frame.z);
+  // Straight after finishing a sketch you are looking square at the plane, so
+  // the arrow points at your eye: it has no length on screen to drag along and
+  // what it builds grows towards you, invisibly. Turn first, the same few
+  // degrees the Extrude dialog turns for the same reason. Before the drag
+  // rather than during it, so nothing moves under the pointer.
+  turnToSeeAxis(frame.z);
+  const start = { x: e.clientX, y: e.clientY };
 
   const feature =
     target.kind === 'face'
@@ -7361,12 +7377,20 @@ function pullPointerDown(e) {
           sketch: target.pick.sketch,
           seeds: [target.pick.seed],
           distance: '0',
-          direction: 'side1',
+          // An extrude goes one way and is turned round by `flip`. It has no
+          // "other side" setting: `two` means both at once, with a length each.
+          direction: 'one',
+          flip: false,
           op: state.result?.bodies.length ? 'join' : 'new',
           targets: 'all',
           taper: '0',
           extent: 'distance'
         };
+
+  // Recorded before the dialog opens, not after. Opening it rebuilds, and a
+  // rebuild takes the handle away again unless it can see that a drag has hold
+  // of it, which left the arrow vanishing under the pointer that grabbed it.
+  state.pullDrag = { target, frame, start, feature, moved: false, typed: false };
 
   // The feature goes in straight away and is driven by the drag, so what you
   // see while pulling is the real rebuild rather than a preview that might
@@ -7379,7 +7403,6 @@ function pullPointerDown(e) {
     { keepView: true, keepFocus: true }
   );
 
-  state.pullDrag = { target, frame, start, feature, moved: false, typed: false };
   showPullValue(e);
   try {
     state.vp.canvas.setPointerCapture(e.pointerId);
@@ -7394,8 +7417,7 @@ function pullPointerMove(e) {
   const d = state.pullDrag;
   if (!d) return false;
   if (!d.typed) {
-    const now = closestOnLine(state.vp.pointerRay(e.clientX, e.clientY), d.frame.origin, d.frame.z);
-    setPullDistance(now - d.start);
+    setPullDistance(axisDragAmount(d.frame, e.clientX - d.start.x, e.clientY - d.start.y));
     d.moved = true;
   }
   movePullValue(e);
@@ -7428,17 +7450,54 @@ function pullPointerUp(e) {
   return true;
 }
 
+/**
+ * How far along the frame's axis a pointer has dragged, measured on screen.
+ *
+ * The exact answer is where the pointer's ray comes nearest the axis, which is
+ * what the form manipulator uses and what this used first. It is the wrong
+ * measure here. As the axis turns to face the camera, that nearest point runs
+ * away to infinity, so a face seen close to end on jumped by tens of
+ * millimetres for a pixel of movement, and pulling it gently was impossible.
+ *
+ * Measuring along the axis as it appears on screen has no such singularity: a
+ * drag of so many pixels along the arrow is that fraction of the arrow's
+ * length. Where the axis is so close to end on that it has almost no length on
+ * screen there is no honest answer at all, and it returns nothing rather than a
+ * wild one. The value box is sitting right there to be typed into.
+ */
+function axisDragAmount(frame, dx, dy) {
+  const reference = state.vp.pixelSize() * 95;
+  const a = state.vp.worldToScreen(frame.origin[0], frame.origin[1], frame.origin[2]);
+  const b = state.vp.worldToScreen(
+    frame.origin[0] + frame.z[0] * reference,
+    frame.origin[1] + frame.z[1] * reference,
+    frame.origin[2] + frame.z[2] * reference
+  );
+  if (!a || !b || a.behind || b.behind) return 0;
+
+  const ax = b.clientX - a.clientX;
+  const ay = b.clientY - a.clientY;
+  const len2 = ax * ax + ay * ay;
+
+  // Still end on, so the axis has no direction on screen to follow. Dragging up
+  // grows it, at the rate a pixel is worth where the thing being pulled sits,
+  // so moving the pointer an inch moves the face an inch as it looks.
+  if (len2 < 625) return -dy * state.vp.pixelSize();
+
+  return ((dx * ax + dy * ay) / len2) * reference;
+}
+
 /** Set the distance the drag has reached, live, in the dialog and the model. */
 function setPullDistance(mm) {
   const d = state.pullDrag;
   if (!d) return;
   const rounded = Math.abs(mm) < 1e-9 ? 0 : Number(mm.toFixed(4));
   d.feature.distance = String(rounded);
-  // A face offset carries its sign; an extrude reads the direction separately,
-  // so a pull the other way flips that rather than going negative.
+  // A face offset carries its sign, and cuts in when it is negative. An
+  // extrude has no sign: it is a length one way, turned round by `flip`.
   if (d.feature.type === 'extrude') {
     d.feature.distance = String(Math.abs(rounded));
-    d.feature.direction = rounded < 0 ? 'side2' : 'side1';
+    d.feature.flip = rounded < 0;
   }
   // The same number the dialog's own field shows. A feature stores what the
   // expression evaluates to, with no unit conversion in between, so converting
@@ -7795,6 +7854,27 @@ function turnToSeeDepth(feature) {
   if (Math.abs(view.dot(n)) < Math.cos((10 * Math.PI) / 180)) return;
   if (state.editing) state.editing._turned = true;
   state.vp.setView(ISO_VIEW);
+}
+
+/**
+ * Turn the view when an axis points along it, so there is something to see.
+ *
+ * Same judgement as `turnToSeeDepth` and the same ten degrees, but asked about
+ * a direction rather than about a feature, because a face being pulled has no
+ * sketch to ask about.
+ */
+function turnToSeeAxis(axis) {
+  const n = new THREE.Vector3(axis[0], axis[1], axis[2]).normalize();
+  const view = new THREE.Vector3()
+    .subVectors(state.vp.camera.position, state.vp.target)
+    .normalize();
+  if (Math.abs(view.dot(n)) < Math.cos((10 * Math.PI) / 180)) return false;
+  // At once, not eased into. The press has already happened and the drag is
+  // about to be measured against where the arrow lies on screen, so a camera
+  // still gliding into place would measure the drag against a view that is no
+  // longer there by the time the pointer moves.
+  state.vp.setView(ISO_VIEW, false);
+  return true;
 }
 
 /**
@@ -8529,6 +8609,7 @@ function scheduleRebuild() {
 
 function commitEdit() {
   if (!state.editing) return;
+  hidePullValue();
   state.hoverProfile = null;
   restorePlanes();
   const { preEdit, title, feature } = state.editing;
@@ -8550,6 +8631,8 @@ function commitEdit() {
 
 function cancelEdit() {
   if (!state.editing) return;
+  // The pull box belongs to the edit that opened it, however that edit ends.
+  hidePullValue();
   state.hoverProfile = null;
   restorePlanes();
   const { feature, isNew } = state.editing;
