@@ -196,6 +196,7 @@ async function boot() {
   state.sketcher.onSelectionChanged = () => updateHints();
 
   wireUI();
+  buildToolbars();
   wireKeys();
 
   rebuildAll();
@@ -1073,6 +1074,8 @@ function wireUI() {
     return Number.isFinite(n) && n > 0.05 && n < 0.95 ? Math.round(n * 1000) / 1000 : null;
   });
 
+  $('#cmdopen')?.addEventListener('click', () => openCommandSearch());
+
   document.querySelectorAll('[data-menu]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1240,10 +1243,30 @@ function syncToolButtons() {
     const names = b.dataset.tools.split(',');
     b.classList.toggle('on', !!active && names.includes(active));
   });
+
+  // With the commands folded into flyouts, the tool in your hand would
+  // otherwise be invisible: it is lit inside a panel nobody is looking at. The
+  // group that holds it says so, and says which one.
+  for (const group of document.querySelectorAll('.group')) {
+    const lit = group.querySelector('button.on');
+    group.classList.toggle('has-on', !!lit);
+    const name = group.querySelector('.grp-name');
+    if (!name) continue;
+    const label = lit?.querySelector('.lbl')?.textContent?.trim();
+    name.textContent = label && lit.dataset.tool ? label : group.dataset.name || name.textContent;
+  }
 }
 
 function wireKeys() {
   window.addEventListener('keydown', (e) => {
+    // Search reaches everything and so it answers from everywhere, including
+    // from inside a field, which is the one shortcut that has to.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      openCommandSearch();
+      return;
+    }
+
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
       if (e.key === 'Escape') document.activeElement.blur();
@@ -4974,6 +4997,272 @@ const RIBBON_MENUS = {
     ['patternFeature', 'Feature Pattern']
   ]
 };
+
+/* ------------------------------------------------------------------ */
+/* The toolbar                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fold each ribbon group into a flyout, and the ribbon into one slim bar.
+ *
+ * Thirty labelled buttons laid out in two rows is the shape of a toolbar from
+ * the nineties, and no amount of repainting changes that. What it costs is a
+ * hundred pixels of viewport and the ability to find anything: every command on
+ * the tab shouts at the same volume, so none of them are legible as a group.
+ *
+ * So a group becomes what it always was in the markup, a named set, and the bar
+ * shows the names. The commands themselves are untouched and stay exactly where
+ * they were in the document, which is what lets everything that points at them
+ * by `data-cmd` carry on working.
+ */
+/** How many of a group's commands stay out on the bar as bare icons. */
+const PINNED_PER_GROUP = 5;
+
+function buildToolbars() {
+  for (const panel of document.querySelectorAll('.ribbon-panel')) {
+    for (const group of panel.querySelectorAll('.group')) {
+      if (group.dataset.folded) continue;
+      const label = group.querySelector('.glabel');
+      const name = label?.textContent?.trim() || 'More';
+
+      const pop = document.createElement('div');
+      pop.className = 'grp-pop';
+      // Everything but the name goes inside, in the order it was written.
+      for (const child of [...group.children]) {
+        if (child === label) continue;
+        pop.appendChild(child);
+      }
+
+      // The first few commands stay out on the bar as bare icons, the way a
+      // modelling toolbar does it, and the group's name under them opens the
+      // rest. What is used constantly is one click, everything is two, and the
+      // bar is one row rather than three.
+      const pinned = document.createElement('div');
+      pinned.className = 'grp-pinned';
+      const candidates = [...pop.querySelectorAll(':scope > button')].filter(
+        (b) => b.classList.contains('big')
+      );
+      for (const b of candidates.slice(0, PINNED_PER_GROUP)) {
+        const shortcut = document.createElement('button');
+        shortcut.className = 'pin';
+        shortcut.type = 'button';
+        shortcut.title = b.title || b.querySelector('.lbl')?.textContent?.trim() || '';
+        shortcut.innerHTML = b.querySelector('.ico')?.outerHTML || '';
+        // Points at the real button rather than copying what it does, so a
+        // command has one definition and one place it is wired up.
+        shortcut.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closeGroups();
+          b.click();
+        });
+        shortcut.dataset.pinFor = b.dataset.cmd || b.dataset.tool || b.dataset.menu || '';
+        pinned.appendChild(shortcut);
+      }
+
+      const trigger = document.createElement('button');
+      trigger.className = 'grp-trigger';
+      trigger.type = 'button';
+      trigger.innerHTML = `<span class="grp-name"></span><span class="grp-caret">\u25be</span>`;
+      trigger.querySelector('.grp-name').textContent = name;
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleGroup(group);
+      });
+
+      if (label) label.remove();
+      group.appendChild(pinned);
+      group.appendChild(trigger);
+      group.appendChild(pop);
+      group.dataset.folded = '1';
+      group.dataset.name = name;
+    }
+  }
+
+  // A command inside a flyout closes it, the way a menu item closes a menu.
+  // A dropdown inside one does not, or its own list would have nothing to
+  // hang off.
+  document.addEventListener('click', (e) => {
+    const inPop = e.target.closest?.('.grp-pop');
+    if (!inPop) return;
+    if (e.target.closest('[data-menu]')) return;
+    closeGroups();
+  });
+
+  window.addEventListener('pointerdown', (e) => {
+    if (e.target instanceof Node && e.target.closest?.('.group')) return;
+    closeGroups();
+  }, true);
+}
+
+function toggleGroup(group) {
+  const open = group.classList.contains('open');
+  closeGroups();
+  if (!open) {
+    group.classList.add('open');
+    // Kept inside the window rather than hanging off the right of it.
+    const pop = group.querySelector('.grp-pop');
+    if (pop) {
+      pop.style.left = '0px';
+      const r = pop.getBoundingClientRect();
+      const over = r.right - (window.innerWidth - 8);
+      if (over > 0) pop.style.left = `${-over}px`;
+    }
+  }
+}
+
+function closeGroups() {
+  for (const g of document.querySelectorAll('.group.open')) g.classList.remove('open');
+}
+
+/* ------------------------------------------------------------------ */
+/* Command search                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every command in the application, by name.
+ *
+ * Folding the groups away makes the toolbar quiet and makes a command one click
+ * further off. This is the other half of that bargain, and the half that
+ * actually makes a large application usable: if you know what it is called you
+ * never have to know where it lives.
+ */
+function allCommands() {
+  const out = [];
+  const seen = new Set();
+  for (const panel of document.querySelectorAll('.ribbon-panel')) {
+    const tab = panel.dataset.panel;
+    for (const btn of panel.querySelectorAll('button[data-cmd], button[data-tool]')) {
+      const name = btn.querySelector('.lbl')?.textContent?.trim() || btn.textContent.trim();
+      const key = `${btn.dataset.cmd || ''}|${btn.dataset.tool || ''}`;
+      if (!name || seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        name,
+        tab,
+        group: btn.closest('.group')?.dataset.name || '',
+        cmd: btn.dataset.cmd || null,
+        tool: btn.dataset.tool || null,
+        title: btn.title || ''
+      });
+    }
+  }
+  // The named lists behind the dropdowns are commands too, and they are the
+  // ones hardest to find by pointing. Where they live is read off the button
+  // that opens them, so it reads as a place rather than as the key the list
+  // happens to be stored under.
+  for (const [menu, items] of Object.entries(RIBBON_MENUS)) {
+    const opener = document.querySelector(`[data-menu="${menu}"]`);
+    const where = opener?.querySelector('.lbl')?.textContent?.replace(/\s*▾\s*$/, '').trim();
+    for (const [cmd, name] of items) {
+      const key = `${cmd}|`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        name,
+        tab: opener?.closest('.ribbon-panel')?.dataset.panel || '',
+        group: where || opener?.closest('.group')?.dataset.name || '',
+        cmd: cmd.startsWith('tool:') ? null : cmd,
+        tool: cmd.startsWith('tool:') ? cmd.slice(5) : null,
+        title: ''
+      });
+    }
+  }
+  return out;
+}
+
+function openCommandSearch() {
+  closeCommandSearch();
+  closeGroups();
+
+  const wrap = document.createElement('div');
+  wrap.id = 'cmdsearch';
+  const box = document.createElement('div');
+  box.className = 'cmd-box';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Search commands';
+  input.spellcheck = false;
+  const list = document.createElement('div');
+  list.className = 'cmd-list';
+  box.appendChild(input);
+  box.appendChild(list);
+  wrap.appendChild(box);
+  document.body.appendChild(wrap);
+
+  const all = allCommands();
+  let shown = [];
+  let at = 0;
+
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    shown = (q
+      ? all
+          .map((c) => ({ c, i: c.name.toLowerCase().indexOf(q) }))
+          .filter((x) => x.i >= 0)
+          // A match at the start of the name beats one in the middle of it.
+          .sort((a, b) => a.i - b.i || a.c.name.length - b.c.name.length)
+          .map((x) => x.c)
+      : all
+    ).slice(0, 40);
+    at = Math.min(at, Math.max(0, shown.length - 1));
+    list.innerHTML = '';
+    shown.forEach((c, i) => {
+      const row = document.createElement('button');
+      row.className = 'cmd-row' + (i === at ? ' at' : '');
+      const nm = document.createElement('span');
+      nm.className = 'cmd-name';
+      nm.textContent = c.name;
+      const where = document.createElement('span');
+      where.className = 'cmd-where';
+      where.textContent = [c.tab, c.group].filter(Boolean).join(' \u203a ');
+      row.appendChild(nm);
+      row.appendChild(where);
+      row.addEventListener('click', () => run(c));
+      list.appendChild(row);
+    });
+  };
+
+  const run = (c) => {
+    closeCommandSearch();
+    if (!c) return;
+    if (c.tool) reachForTool(c.tool);
+    else if (c.cmd) runCommand(c.cmd);
+  };
+
+  input.addEventListener('input', () => {
+    at = 0;
+    draw();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      at = Math.min(at + 1, shown.length - 1);
+      draw();
+      list.children[at]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      at = Math.max(at - 1, 0);
+      draw();
+      list.children[at]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      run(shown[at]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCommandSearch();
+    }
+  });
+  wrap.addEventListener('pointerdown', (e) => {
+    if (e.target === wrap) closeCommandSearch();
+  });
+
+  draw();
+  input.focus();
+}
+
+function closeCommandSearch() {
+  document.getElementById('cmdsearch')?.remove();
+}
 
 function showRibbonMenu(name, anchor) {
   closeMarkingMenu();

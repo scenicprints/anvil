@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.7.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
+Current version: **2.8.0**. 338 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
 
 ---
 
@@ -1021,6 +1021,48 @@ buys real comfort in the top bar, and the ribbon is a row shorter than it was.
 - **Dark mode.** `theme/style.dark.css` still has not tracked any of this.
 - **Discoverability**, which he put third: hover previews, a command search,
   better empty states.
+
+---
+
+## The rehaul, shipped in v2.8.0
+
+The first pass repainted and he said, correctly, that it looked like nothing had
+changed. The paint was not the problem: thirty labelled buttons in two rows is
+the shape of a toolbar from the nineties, and no palette fixes a shape. He
+pointed at Fusion's dark UI and named what he wanted from it.
+
+- **Dark**, with the chrome lighter than the viewport. The first dark cut had
+  that the wrong way round and read as a black bar on a grey window.
+- **One toolbar row.** Each group is its most used commands as bare icons with
+  the group name beneath, and the name opens the rest. Ribbon went from about
+  250 pixels to 69.
+- **Ctrl K searches every command**, which is what makes folding them away
+  affordable rather than merely tidier.
+- **The browser floats** over the model instead of walling a column off it.
+- **The view cube shades the corner you are looking from.**
+
+`theme/style.dark.css` is gone. It had not tracked the reskin for three
+versions, and half a theme is worse than none.
+
+### What was learned
+
+- **An unclosed block comment is silent.** `/*` with no `*/` at the top of the
+  stylesheet swallowed the whole `:root` block; the file still parsed, most
+  rules still applied, and the only symptom was that every custom property
+  resolved to nothing. Two screenshots went by before it was measured rather
+  than looked at. `getComputedStyle` said it in one run.
+- **Repainting is not redesigning.** Told the look was dated, the cheap reading
+  is the palette. The expensive and correct one is the layout.
+- **A facet on a corner where three faces meet cannot be depth tested.** It is
+  a coin toss per pixel. Draw it over the top with a render order.
+
+### Still to do on the look
+
+- **The icons.** Sixty-odd Unicode glyphs of very different weights, which is
+  now the largest remaining thing that dates it. A drawn set is its own piece
+  of work and wants his eye on the direction first.
+- **Discoverability**, which he ranked third: hover previews, better empty
+  states, and putting the shortcut for a command on its row in search.
 
 ---
 

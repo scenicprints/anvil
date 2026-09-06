@@ -730,24 +730,32 @@ rather than handing the kernel something that looks right and is not watertight.
 
 ## The window
 
-The window is drawn the way Braun drew an instrument in Dieter Rams' years
-there: restraint, no gloss, nothing decorative, and one accent colour, Braun's
-vermilion, spent only on the thing that is active right now — the tool in your
-hand, the row you have selected, the single action a dialog is asking for.
+The window is dark, the way a modelling application is dark: the chrome recedes
+so the model is the only lit thing in it. The discipline is still Dieter Rams'
+at Braun, and one accent, Braun's vermilion, is still spent only on what is
+active right now.
 
-The first reading of that took "plain" to mean flat and grey, and the result
-looked like a toolkit from 1995 rather than a quiet instrument. A Braun panel
-was never one grey laid on another. It had real material contrast, generous
-air, and crisp type. So three things changed and the discipline did not.
+It took three passes to get there and the first two were wrong in the same way.
+Drawn light and flat, it read as a toolkit from 1995, because a Braun panel was
+never one grey laid on another: it had material contrast, air, and crisp type.
+Repainting could not fix that, because the shape was the problem.
 
-**Surfaces step.** The chrome is near white, the viewport is a cooler ground
-beneath it, and the body is the one warm thing on the screen. It used to be
-within a shade of what it stood on.
+**The toolbar is one row.** Each group shows its most used commands as bare
+icons with the group's name beneath them, and that name opens the rest. Thirty
+labelled buttons in two rows was the shape of the thing that looked dated, and
+it cost a hundred pixels of viewport. What is reached for constantly is one
+click, everything is two, and **Ctrl K** searches every command in the
+application by name, which is what makes folding them away affordable.
 
-**Nothing has a box drawn round it.** A border on every button is most of what
-1995 looked like. Controls are quiet until pointed at. What genuinely floats
-above the page — a menu, a callout, a value box — carries a soft shadow, which
-is not decoration but the only honest way to say a thing is in front.
+**The browser floats.** A document with four things in it does not need a panel
+the height of the window.
+
+**The chrome is lighter than the room it looks into.** Getting that the wrong
+way round is what makes a dark theme read as a black bar stuck to the top of a
+grey window, and it is the mistake the first dark cut made.
+
+**The view cube says where you are standing**, not only what you could look at:
+the corner you are viewing from is shaded.
 
 **It asks for the system's own text face.** This asked for Helvetica, which on
 Windows means Arial, and Arial at eleven pixels dates an application faster than

@@ -243,8 +243,10 @@ export class Viewport {
       l.renderOrder = -1;
       return l;
     };
-    this.grid.add(mkLines(minor, 0xa7abb1, 0.34));
-    this.grid.add(mkLines(major, 0x8f939a, 0.5));
+    // Lighter than the ground rather than darker, which is how a rule reads on
+    // a dark surface.
+    this.grid.add(mkLines(minor, 0x555c67, 0.45));
+    this.grid.add(mkLines(major, 0x6d7681, 0.6));
   }
 
   /* ---------------------------------------------------------------- */
@@ -283,19 +285,82 @@ export class Viewport {
     }
 
     const boxGeo = new THREE.BoxGeometry(1.4, 1.4, 1.4);
-    const boxMat = new THREE.MeshBasicMaterial({ color: 0xe4e1da });
+    const boxMat = new THREE.MeshBasicMaterial({ color: 0xd8d4cb });
     group.add(new THREE.Mesh(boxGeo, boxMat));
 
     const edgeGeo = new THREE.EdgesGeometry(boxGeo);
     group.add(
       new THREE.LineSegments(
         edgeGeo,
-        new THREE.LineBasicMaterial({ color: 0x8d8980 })
+        new THREE.LineBasicMaterial({ color: 0x7d7a73 })
       )
     );
 
+    // The corner you are looking from, shaded. A cube of six labels tells you
+    // what you could look at and nothing about where you are; this is the bit
+    // that says which of the eight corners you are standing in.
+    const cornerGeo = new THREE.BufferGeometry();
+    cornerGeo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(9), 3)
+    );
+    this.cubeCorner = new THREE.Mesh(
+      cornerGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x5d5a53,
+        side: THREE.DoubleSide,
+        // Drawn over the box rather than depth tested against it. The facet
+        // hugs a corner where three faces meet, and at that seam a depth test
+        // is a coin toss taken per pixel.
+        depthTest: false,
+        transparent: true,
+        opacity: 0.95
+      })
+    );
+    this.cubeCorner.renderOrder = 4;
+    group.add(this.cubeCorner);
+
     this.cubeGroup = group;
     this.cubeScene.add(group);
+  }
+
+  /**
+   * Move the shaded facet to whichever corner of the cube faces the camera.
+   *
+   * Which octant that is, is just the sign of the view direction in the cube's
+   * own frame. The facet is the triangle cutting across the three edges that
+   * meet there, pushed a hair outside the face so it does not fight the box
+   * for the same pixels.
+   */
+  _placeCubeCorner() {
+    if (!this.cubeCorner) return;
+    const dir = new THREE.Vector3()
+      .subVectors(this.camera.position, this.target)
+      .normalize();
+    const s = [
+      dir.x >= 0 ? 1 : -1,
+      dir.y >= 0 ? 1 : -1,
+      dir.z >= 0 ? 1 : -1
+    ];
+    const h = 0.7;
+    const t = 0.5;
+    // Lifted off the corner along its own diagonal, so it clears all three
+    // faces at once rather than fighting them for the same pixels.
+    const lift = 0.06;
+    const pos = this.cubeCorner.geometry.attributes.position;
+    const corner = [s[0] * h, s[1] * h, s[2] * h];
+    for (let axis = 0; axis < 3; axis++) {
+      const p = [...corner];
+      p[axis] -= s[axis] * t;
+      pos.setXYZ(
+        axis,
+        p[0] + s[0] * lift,
+        p[1] + s[1] * lift,
+        p[2] + s[2] * lift
+      );
+    }
+    pos.needsUpdate = true;
+    this.cubeCorner.geometry.computeBoundingSphere();
   }
 
   _labelTexture(text) {
@@ -686,9 +751,9 @@ export class Viewport {
         mesh.userData.pickable = 'body';
 
         const lineMat = new THREE.LineBasicMaterial({
-          color: 0x2a2822,
+          color: 0x14161a,
           transparent: true,
-          opacity: 0.92
+          opacity: 0.85
         });
         const lines = new THREE.LineSegments(edgeGeom, lineMat);
         lines.renderOrder = 2;
@@ -1373,6 +1438,7 @@ export class Viewport {
     const size = 96;
     const pad = 12;
     this.cubeGroup.quaternion.copy(this.camera.quaternion).invert();
+    this._placeCubeCorner();
     this.cubeCamera.position.set(0, 0, 6);
     this.cubeCamera.lookAt(0, 0, 0);
     this.renderer.setScissorTest(true);

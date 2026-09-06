@@ -19,12 +19,21 @@ const ribbon = document.getElementById('ribbon');
 const panel = document.querySelector('[data-panel="sketch"]');
 const groups = [...panel.querySelectorAll('.group')];
 
-// A group whose buttons run onto a third row costs the viewport fifty pixels.
+// The ribbon is one row of named flyouts now, so what matters is not how many
+// rows a group takes but that every group is reachable and that the bar has
+// stayed slim. A flyout that runs off the right of the window is the failure
+// this watches for.
 const rows = groups.map((g) => {
-  const tops = new Set(
-    [...g.querySelectorAll('button')].map((b) => Math.round(b.getBoundingClientRect().top))
-  );
-  return { label: g.querySelector('.glabel')?.textContent, rows: tops.size };
+  g.querySelector('.grp-trigger')?.click();
+  const pop = g.querySelector('.grp-pop');
+  const r = pop?.getBoundingClientRect();
+  const out = {
+    label: g.dataset.name,
+    commands: g.querySelectorAll('.grp-pop button').length,
+    onScreen: !!r && r.left >= 0 && r.right <= window.innerWidth + 1
+  };
+  g.classList.remove('open');
+  return out;
 });
 
 dev.state.sketcher.setTool('ellipse');

@@ -1,72 +1,68 @@
 /* Anvil.
 
-   Drawn the way Braun drew an instrument in Rams' years there: restraint, one
-   accent spent only on what you are doing now, and nothing decorative. What
-   that reading got wrong the first time was to take "plain" for "flat and
-   grey", and the result read as a 1995 toolkit rather than as a quiet
-   instrument. A Braun panel was never one grey on another: it had real
-   material contrast, generous air, and crisp type.
+   Dark, the way a modelling application is dark: the chrome recedes so the
+   model is the only lit thing in the window. The panels are one grey, the
+   things that float above them are a step lighter, and the accent is spent
+   only on what is active right now.
 
-   So the discipline stays and three things change. Surfaces step: the chrome is
-   near white, the viewport is a cooler ground beneath it, and the model sits on
-   that ground as the one warm thing on screen. Controls have no boxes drawn
-   round them, because a border on every button is what 1995 looked like; they
-   are quiet until pointed at. And anything that floats above the page carries a
-   soft shadow, which is not decoration but the only honest way to say a thing
-   is in front.
-
-   Type is the other half of it. This asked for Helvetica and got Arial, which
-   is the single most dated thing a Windows application can do. It asks for the
-   system's own text face now.
+   The discipline is still Rams'. What changed is the reading of it. Twice this
+   was drawn light and flat, and twice it read as a toolkit from 1995, because
+   a Braun panel was never one grey laid on another: it had material contrast,
+   air, and crisp type. Dark gives that contrast for free, and it is what every
+   application this one sits beside now uses.
 
    Sizing is on a four pixel rhythm and stays compact, because a modeller lives
-   or dies on how much of the window is viewport rather than chrome.
+   or dies on how much of the window is viewport rather than chrome. The
+   browser floats over the viewport rather than walling a column off it.
 
-   The dark shell this replaced is kept at theme/style.dark.css. */
+   There is no light theme kept beside this one. Half a theme that has not
+   tracked the other is worse than either, which is what the old one had
+   become. */
 
 :root {
-  /* Surfaces, lightest at the top of the window and stepping down into the
-     viewport, so the chrome reads as a panel laid over a ground rather than as
-     one continuous sheet of grey. */
-  --paper: #f6f5f2;
-  --paper-2: #efeeea;
-  --paper-3: #e6e4de;
-  --paper-4: #dbd8d1;
-  --ground: #b9bcc0;
+  /* The chrome is lighter than the room it looks into, not darker. Getting
+     that the wrong way round is what makes a dark theme read as a black bar
+     stuck to the top of a grey window. */
+  --paper: #333941;
+  --paper-2: #3b424b;
+  --paper-3: #464e59;
+  --paper-4: #525b68;
+  --float: #3b424b;
+  --ground: #23262b;
 
-  /* Rules. Hairlines, and lighter than they were: at the old weight every
-     panel was outlined, which is the look of a window from 1995. */
-  --rule: #dedbd4;
-  --rule-2: #c3bfb6;
+  /* Rules, barely there. On dark a hairline wants to be lighter than the
+     surface, not darker, or it reads as a crack. */
+  --rule: #252a31;
+  --rule-2: #59616e;
 
   /* Ink. */
-  --ink: #1c1b18;
-  --ink-2: #56534c;
-  --ink-3: #8b877e;
+  --ink: #f0f2f5;
+  --ink-2: #bcc3cc;
+  --ink-3: #8d95a1;
 
-  /* Corners. Small enough to stay an instrument, large enough not to look
-     like a dialog box drawn with a 1px pen. */
+  /* Corners. */
   --r: 6px;
   --r-sm: 4px;
 
-  /* Depth, for the things that genuinely float. */
-  --lift: 0 1px 2px rgba(28, 27, 24, 0.06), 0 8px 24px rgba(28, 27, 24, 0.1);
-  --lift-sm: 0 1px 2px rgba(28, 27, 24, 0.08);
+  /* Depth. Darker rather than softer, which is how shadow works on a dark
+     ground: a lit edge above and a shadow below. */
+  --lift: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 10px 30px rgba(0, 0, 0, 0.45);
+  --lift-sm: 0 2px 6px rgba(0, 0, 0, 0.3);
 
-  /* The one accent: Braun vermilion. Reserved for the active tool, the
-     selection, and the single most important action on screen. */
-  --accent: #d84b1e;
-  --accent-2: #b83d16;
+  /* The one accent: Braun vermilion, which carries on dark better than it
+     ever did on cream. */
+  --accent: #e2551f;
+  --accent-2: #c2461a;
   --on-accent: #fdfcfa;
 
   /* Signals, kept muted so they read as information and not decoration. */
-  --signal: #3d7a44;
-  --warn: #b07a10;
-  --err: #a92f22;
+  --signal: #57b06a;
+  --warn: #d3a03c;
+  --err: #e0685c;
 
-  /* The system's own text face first. Asking for Helvetica on Windows gets
-     Arial, and Arial at eleven pixels is what makes an application look its
-     age more than any other single choice. */
+  /* The system's own text face. Asking for Helvetica on Windows gets Arial,
+     and Arial at eleven pixels dates an application faster than any other
+     single choice. */
   --font: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, -apple-system,
     "Helvetica Neue", sans-serif;
   --mono: "Cascadia Mono", "SF Mono", Consolas, "Roboto Mono", ui-monospace,
@@ -160,7 +156,7 @@ button:focus-visible {
 
 input[type="text"],
 input[type="number"] {
-  background: #ffffff;
+  background: var(--float);
   border: 1px solid var(--rule-2);
   border-radius: var(--r-sm);
   color: var(--ink);
@@ -173,7 +169,7 @@ input[type="number"] {
 input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(216, 75, 30, 0.14);
+  box-shadow: 0 0 0 3px rgba(226, 85, 31, 0.25);
 }
 input[type="checkbox"] {
   accent-color: var(--accent);
@@ -182,7 +178,7 @@ input[type="checkbox"] {
   margin: 0;
 }
 select {
-  background: #ffffff;
+  background: var(--float);
   border: 1px solid var(--rule-2);
   color: var(--text);
   border-radius: var(--r-sm);
@@ -193,7 +189,7 @@ select {
 select:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(216, 75, 30, 0.14);
+  box-shadow: 0 0 0 3px rgba(226, 85, 31, 0.25);
 }
 
 #app {
@@ -279,63 +275,126 @@ select:focus {
 .panelbar {
   position: relative;
 }
+/* One slim row. A group is a name in the bar and its commands are a flyout
+   under it, which is what turns thirty shouting buttons into six quiet ones
+   and hands the hundred pixels they occupied back to the model. */
 .ribbon-panel {
   display: none;
-  gap: 0;
-  padding: 6px 8px 7px;
-  min-height: 64px;
-}
-.ribbon-panel.active {
   align-items: stretch;
+  gap: 0;
+  padding: 4px 8px 3px;
+  min-height: 0;
 }
 .ribbon-panel.active {
   display: flex;
 }
+/* A group is its most used commands as bare icons, with its name underneath
+   opening the rest. Bordered off from the group beside it, the way a toolbar
+   separates one set of tools from another. */
 .group {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  align-items: flex-start;
-  gap: 1px;
-  padding: 0 8px 14px;
-  border-right: 1px solid var(--rule);
   position: relative;
-  /* When this falls behind the number of buttons in a group, that group takes
-     a third row and the viewport loses fifty pixels of height. Past a point
-     widening it stops helping, because the groups to the right get pushed off
-     the window instead; that is when a group needs a dropdown, not more width. */
-  max-width: 648px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 0 9px;
+  border: none;
+  border-right: 1px solid var(--rule);
+  max-width: none;
 }
 .group:last-child {
   border-right: none;
 }
-.glabel {
-  position: absolute;
-  bottom: 0;
-  left: 8px;
+.grp-pinned {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+button.pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--r-sm);
+}
+button.pin .ico {
+  font-size: 19px;
+  line-height: 20px;
+}
+.grp-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  padding: 1px 6px 2px;
   font-size: 9.5px;
   font-weight: 600;
-  color: var(--ink-3);
-  letter-spacing: 1.2px;
+  letter-spacing: 0.9px;
   text-transform: uppercase;
+  color: var(--ink-3);
+  border-radius: var(--r-sm);
 }
+.grp-caret {
+  font-size: 8px;
+  color: var(--ink-3);
+  transform: translateY(-1px);
+}
+.group.open > .grp-trigger {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+/* The group holding the tool in your hand, named for it. */
+.group.has-on > .grp-trigger {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.group.has-on .grp-caret {
+  color: rgba(253, 252, 250, 0.7);
+}
+.group.open .grp-caret {
+  color: var(--ink-2);
+}
+
+/* The flyout. The same buttons that used to sit in the ribbon, laid out as a
+   grid, so nothing about a command changed except where it waits. */
+.grp-pop {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  background: var(--float);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  box-shadow: var(--lift);
+  padding: 7px;
+  gap: 2px;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  width: max-content;
+  max-width: 560px;
+}
+.group.open > .grp-pop {
+  display: flex;
+}
+.grp-pop .toolopts {
+  width: 100%;
+}
+
 button.big {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 1px;
-  /* A fixed width cropped nothing and overlapped the neighbour instead, so
-     "Feature Pattern" sat on top of "Path Pattern". Let a long label wrap onto
-     a second line, and give every button the height of a wrapped one so the
-     rows still line up. */
-  /* Wide enough for a one word name to stay on one line, capped so a two word
-     one folds rather than stretching the group across the ribbon. */
-  width: auto;
-  min-width: 58px;
-  max-width: 84px;
-  min-height: 50px;
-  padding: 4px 2px 3px;
+  gap: 3px;
+  width: 74px;
+  min-width: 74px;
+  max-width: 74px;
+  min-height: 58px;
+  padding: 8px 4px 6px;
   font-size: 10.5px;
   font-weight: 450;
   line-height: 1.2;
@@ -349,17 +408,13 @@ button.big {
 button.big .lbl {
   display: block;
   width: 100%;
-  /* Buttons are nowrap by default, which is right for the toolbar and wrong
-     here: a two word name has to fold rather than run over its neighbour. */
   white-space: normal;
   overflow-wrap: break-word;
   hyphens: auto;
 }
-/* .big clears the background, so an accent ribbon button needs it back or the
-   label ends up white on cream and the button disappears. */
 button.big.accent {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--on-accent);
 }
 button.big:hover {
@@ -371,10 +426,10 @@ button.big.on {
   border-color: transparent;
 }
 /* One weight and one size for every glyph, and a step quieter than the label
-   under it, so thirty of them in a row read as a row rather than as noise. */
+   under it, so a grid of them reads as a grid rather than as noise. */
 .ico {
-  font-size: 17px;
-  line-height: 21px;
+  font-size: 18px;
+  line-height: 22px;
   color: var(--ink-2);
   opacity: 0.9;
 }
@@ -387,6 +442,7 @@ button.big.accent .ico {
   color: var(--on-accent);
   opacity: 1;
 }
+
 .cgrid {
   display: grid;
   grid-template-columns: repeat(6, 24px);
@@ -419,16 +475,30 @@ button.big.accent .ico {
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative;
 }
 
+/* The browser floats over the model rather than walling a column off it. A
+   document with four things in it does not need a panel the height of the
+   window, and the viewport is the point. */
 #browser {
-  width: 228px;
-  flex: none;
-  background: var(--paper);
-  border-right: 1px solid var(--rule);
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 20;
+  width: 226px;
+  max-height: calc(100% - 20px);
+  background: var(--float);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  box-shadow: var(--lift);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+}
+#browser.collapsed #tree {
+  display: none;
 }
 .panel-head {
   display: flex;
@@ -517,7 +587,8 @@ button.big.accent .ico {
   flex: 1;
   position: relative;
   min-width: 0;
-  background: linear-gradient(#d3d6da 0%, #c2c6cb 46%, #aeb2b8 100%);
+  width: 100%;
+  background: radial-gradient(130% 100% at 50% 14%, #333941 0%, #262a30 55%, #1b1e22 100%);
 }
 #view {
   display: block;
@@ -567,7 +638,7 @@ button.big.accent .ico {
   display: flex;
   align-items: center;
   gap: 5px;
-  background: #ffffff;
+  background: var(--float);
   border: 1px solid var(--rule-2);
   border-radius: var(--r-sm);
   box-shadow: var(--lift-sm);
@@ -614,7 +685,7 @@ button.big.accent .ico {
 .sk-dim {
   position: absolute;
   transform: translate(-50%, -50%);
-  background: #fbfaf7;
+  background: var(--float);
   border: 1px solid var(--rule-2);
   color: var(--ink);
   font-family: var(--mono);
@@ -641,12 +712,12 @@ button.big.accent .ico {
   font-size: 11px;
   line-height: 1;
   padding: 1px 3px;
-  background: rgba(252, 251, 248, 0.86);
+  background: rgba(43, 47, 54, 0.86);
   border-radius: 0;
   cursor: pointer;
 }
 .sk-glyph:hover {
-  color: #fff;
+  color: var(--ink);
 }
 
 /* Sits under the view cube, which occupies a 96px square inset 12px from the
@@ -675,7 +746,7 @@ button.big.accent .ico {
   bottom: 12px;
   font-size: 11.5px;
   color: var(--ink-2);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(43, 47, 54, 0.84);
   padding: 5px 10px;
   border-radius: var(--r-sm);
   pointer-events: none;
@@ -685,7 +756,7 @@ button.big.accent .ico {
   font-size: 10.5px;
   font-weight: 500;
   color: var(--accent);
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(43, 47, 54, 0.92);
   padding: 2px 6px;
   border-radius: var(--r-sm);
   pointer-events: none;
@@ -979,7 +1050,7 @@ table.params .v {
 #markmenu {
   position: fixed;
   z-index: 60;
-  background: #ffffff;
+  background: var(--float);
   border: 1px solid var(--rule);
   border-radius: var(--r);
   padding: 4px;
@@ -1050,7 +1121,7 @@ table.params .v {
   z-index: 40;
   min-width: 152px;
   max-width: 232px;
-  background: #ffffff;
+  background: var(--float);
   border: 1px solid var(--rule);
   border-left: 2px solid var(--accent);
   border-radius: var(--r-sm);
@@ -1108,4 +1179,106 @@ table.params .v {
 }
 .toolopts input {
   width: 46px;
+}
+
+/* ---------------- command search ---------------- */
+
+/* Folding the groups away puts a command one click further off. This is the
+   other half of that bargain and the half that makes a large application
+   usable: knowing what a thing is called is enough to reach it. */
+#cmdsearch {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 14vh;
+}
+.cmd-box {
+  width: 460px;
+  max-width: calc(100vw - 40px);
+  background: var(--float);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.cmd-box input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 13px 16px;
+  font-family: var(--font);
+  font-size: 15px;
+  background: var(--float);
+}
+.cmd-box input:focus {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--rule);
+}
+.cmd-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 5px;
+}
+.cmd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 11px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  color: var(--ink);
+}
+.cmd-row .cmd-where {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-3);
+  text-transform: capitalize;
+}
+.cmd-row.at,
+.cmd-row:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.cmd-row.at .cmd-where,
+.cmd-row:hover .cmd-where {
+  color: rgba(253, 252, 250, 0.8);
+}
+
+/* The way in to search, said out loud. A command palette nobody knows about is
+   a command palette nobody uses. */
+#cmdopen {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px 4px 8px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+#cmdopen:hover {
+  background: var(--paper-3);
+  color: var(--ink-2);
+}
+#cmdopen .cmd-mag {
+  font-size: 13px;
+  transform: rotate(-45deg);
+}
+#cmdopen kbd {
+  font-family: var(--font);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  background: var(--float);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 5px;
 }
