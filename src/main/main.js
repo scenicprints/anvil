@@ -3,6 +3,8 @@
 const { app, BrowserWindow, protocol, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
+const fsSync = require('fs');
+const os = require('os');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SCHEME = 'anvil';
@@ -300,9 +302,14 @@ ipcMain.handle('doc:open', async () => {
   const file = res.filePaths[0];
   try {
     const text = await fs.readFile(file, 'utf8');
+    const held = await foreignLock(file);
+    if (currentPath && currentPath !== file) await dropLock(currentPath);
     currentPath = file;
+    lastWrittenAt = await modifiedAt(file);
+    await takeLock(file);
+    beatLock();
     setTitle();
-    return { ok: true, path: file, data: JSON.parse(text) };
+    return { ok: true, path: file, data: JSON.parse(text), held };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -368,15 +375,127 @@ ipcMain.handle('import:binary', async (_e, kind) => {
 ipcMain.handle('doc:openPath', async (_e, file) => {
   try {
     const text = await fs.readFile(file, 'utf8');
+    const held = await foreignLock(file);
+    if (currentPath && currentPath !== file) await dropLock(currentPath);
     currentPath = file;
+    lastWrittenAt = await modifiedAt(file);
+    await takeLock(file);
+    beatLock();
     setTitle();
-    return { ok: true, path: file, data: JSON.parse(text) };
+    return { ok: true, path: file, data: JSON.parse(text), held };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 });
 
-ipcMain.handle('doc:save', async (_e, { data, saveAs }) => {
+/* ------------------------------------------------------------------ */
+/* Keeping a model in a folder that syncs                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Who is holding a document open.
+ *
+ * A folder that syncs is the cheapest hub there is, and the one thing it cannot
+ * do is tell two machines about each other. A lock beside the document does,
+ * and it is only ever advisory: it says who had it and when, and the person at
+ * the second machine decides what that is worth.
+ *
+ * Stale by time rather than by tidiness, because an application that is killed
+ * never gets to clean up after itself and a lock nobody can clear is worse than
+ * no lock at all.
+ */
+const LOCK_STALE_MS = 2 * 60 * 1000;
+const LOCK_BEAT_MS = 30 * 1000;
+let lockBeat = null;
+
+const lockPathFor = (file) => `${file}.anvillock`;
+
+function whoWeAre() {
+  return {
+    host: os.hostname(),
+    user: os.userInfo?.().username || '',
+    pid: process.pid
+  };
+}
+
+async function readLock(file) {
+  try {
+    const text = await fs.readFile(lockPathFor(file), 'utf8');
+    const got = JSON.parse(text);
+    if (!got || typeof got.at !== 'number') return null;
+    return got;
+  } catch {
+    return null;
+  }
+}
+
+/** A lock held by someone else and still being refreshed, or null. */
+async function foreignLock(file) {
+  const got = await readLock(file);
+  if (!got) return null;
+  const mine = whoWeAre();
+  if (got.host === mine.host && got.pid === mine.pid) return null;
+  if (Date.now() - got.at > LOCK_STALE_MS) return null;
+  return got;
+}
+
+async function takeLock(file) {
+  if (!file) return;
+  try {
+    await fs.writeFile(
+      lockPathFor(file),
+      JSON.stringify({ ...whoWeAre(), at: Date.now() }),
+      'utf8'
+    );
+  } catch {
+    /* a lock that cannot be written must not stop the work */
+  }
+}
+
+async function dropLock(file) {
+  if (!file) return;
+  try {
+    const got = await readLock(file);
+    const mine = whoWeAre();
+    // Only ever remove our own, so a second machine's lock survives our exit.
+    if (got && (got.host !== mine.host || got.pid !== mine.pid)) return;
+    await fs.unlink(lockPathFor(file));
+  } catch {
+    /* already gone */
+  }
+}
+
+function beatLock() {
+  if (lockBeat) clearInterval(lockBeat);
+  lockBeat = setInterval(() => {
+    if (currentPath) takeLock(currentPath);
+  }, LOCK_BEAT_MS);
+}
+
+app.on('before-quit', () => {
+  if (lockBeat) clearInterval(lockBeat);
+  // Synchronous, because the process is on its way out and a promise will not
+  // be waited for.
+  try {
+    if (currentPath) {
+      const got = JSON.parse(fsSync.readFileSync(lockPathFor(currentPath), 'utf8'));
+      const mine = whoWeAre();
+      if (got.host === mine.host && got.pid === mine.pid) {
+        fsSync.unlinkSync(lockPathFor(currentPath));
+      }
+    }
+  } catch {
+    /* nothing to clear */
+  }
+});
+
+ipcMain.handle('doc:heldByOther', async () => {
+  if (!currentPath) return { held: false };
+  const got = await foreignLock(currentPath);
+  return got ? { held: true, ...got } : { held: false };
+});
+
+ipcMain.handle('doc:save', async (_e, { data, saveAs, sidecar }) => {
   let file = currentPath;
   if (!file || saveAs) {
     const res = await dialog.showSaveDialog(win, {
@@ -391,8 +510,25 @@ ipcMain.handle('doc:save', async (_e, { data, saveAs }) => {
     await writeAtomic(file, JSON.stringify(data, null, 2));
     currentPath = file;
     lastWrittenAt = await modifiedAt(file);
+    await takeLock(file);
+    beatLock();
+
+    // A model beside the document that anything can open. The point of keeping
+    // work in a synced folder is that a link to it is useful to someone else,
+    // and a link to a file only this application can read is not.
+    let beside = null;
+    if (sidecar?.bytes?.length) {
+      try {
+        const base = file.replace(/\.[^.\\/]+$/, '');
+        beside = `${base}.${sidecar.ext || 'stl'}`;
+        await writeAtomicBytes(beside, Buffer.from(sidecar.bytes));
+      } catch {
+        beside = null;
+      }
+    }
+
     setTitle();
-    return { ok: true, path: file };
+    return { ok: true, path: file, beside };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -418,6 +554,19 @@ async function writeAtomic(file, text) {
     await handle.writeFile(text, 'utf8');
     // On disk, not merely handed to the operating system, before the rename
     // makes it the document of record.
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await fs.rename(temp, file);
+}
+
+/** The same, for something that is bytes rather than text. */
+async function writeAtomicBytes(file, buf) {
+  const temp = `${file}.writing`;
+  const handle = await fs.open(temp, 'w');
+  try {
+    await handle.writeFile(buf);
     await handle.sync();
   } finally {
     await handle.close();

@@ -2000,6 +2000,22 @@ async function cmdOpen() {
   state.dirty = false;
   state.docPath = res.path;
   el.docname.textContent = res.path.split(/[\\/]/).pop();
+
+  // A folder that syncs cannot tell two machines about each other, so a lock
+  // beside the document does. Advisory on purpose: it says who had it and
+  // when, and the decision is the reader's.
+  if (res.held) {
+    const when = new Date(res.held.at).toLocaleString();
+    window.anvil.message({
+      type: 'warning',
+      title: 'Open somewhere else',
+      message: `${res.held.user || 'Someone'} on ${res.held.host} has this open.`,
+      detail:
+        `Last seen ${when}. Two machines editing one file will not merge: ` +
+        'whichever saves last wins. Save a copy if you mean to work on it now.',
+      buttons: ['I understand']
+    });
+  }
   rebuildAll();
   state.vp.fit();
   setStatus(`Opened ${el.docname.textContent}`);
@@ -2026,7 +2042,7 @@ async function cmdSave(saveAs) {
     if (choice?.response === 1) saveAs = true;
   }
 
-  const res = await window.anvil.save(state.doc, saveAs);
+  const res = await window.anvil.save(state.doc, saveAs, sidecarMesh());
   if (!res.ok) {
     if (res.error) setStatus(`Could not save: ${res.error}`);
     return false;
@@ -2034,9 +2050,35 @@ async function cmdSave(saveAs) {
   state.dirty = false;
   state.docPath = res.path;
   el.docname.textContent = res.path.split(/[\\/]/).pop();
-  setStatus(`Saved ${el.docname.textContent}`);
+  setStatus(
+    res.beside
+      ? `Saved ${el.docname.textContent}, and ${res.beside.split(/[\\/]/).pop()} beside it`
+      : `Saved ${el.docname.textContent}`
+  );
   return true;
 }
+/**
+ * A model written beside the document, in a format anything can open.
+ *
+ * The point of keeping work in a folder that syncs is that a link to it is
+ * useful to somebody else, and a link to a file only this application can read
+ * is not. An STL costs nothing to write, and every viewer, slicer and browser
+ * preview understands one.
+ */
+function sidecarMesh() {
+  const bodies = (state.result?.bodies || []).filter(
+    (b) => b.solid && !state.hiddenBodies.has(b.id)
+  );
+  if (!bodies.length) return null;
+  try {
+    const data = toBinarySTL(bodies.map((b) => K.meshData(b.solid)));
+    return { ext: 'stl', bytes: data instanceof Uint8Array ? data : new Uint8Array(data) };
+  } catch {
+    // A model that will not export must never be a model that will not save.
+    return null;
+  }
+}
+
 
 /** Has the open document been written by something else since we last saw it? */
 async function changedElsewhere() {
