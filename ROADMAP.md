@@ -8,9 +8,8 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.15.0**. 428 tests. Batches 11 to 16 and 18 have shipped.
-Batches 17, 19, 20, 20b and everything after them have not. Each batch below
-says which.
+Current version: **2.16.0**. 434 tests. Batches 11 to 18 have shipped. Batches
+19, 20, 20b and everything after them have not. Each batch below says which.
 
 ---
 
@@ -1475,9 +1474,21 @@ environment, building a T-Spline rather than a solid, plus the Pipe and Face
 primitives. The solid versions already exist, so this is the same intent
 against a different output.
 
-**Batch 17. Mesh.** Six. Direct Edit, Stitch, Patch, Physical Material,
-Appearance, Compute All. Direct Edit belongs with the import work and could
-move there.
+**Batch 17. Mesh. Shipped in v2.16.0.** All six. Stitch and Patch are the two
+halves of Repair split apart, which is worth doing because the weld tolerance is
+a real decision and hole filling is wrong as often as it is right. Direct Edit
+moves part of a mesh with a falloff, which is what keeps the surface continuous
+instead of tearing at the edge of what moved.
+
+Material and Appearance are deliberately two commands over two separate stores.
+A colour must never change a mass. Both live on the document rather than in the
+timeline: rolling back past a material should not turn a steel bracket into a
+plastic one.
+
+Compute All drops the rebuild cache and replays everything. Anvil rebuilds
+eagerly, so this is not the everyday command it is in Fusion; it is the answer
+to "is the cache lying to me", which otherwise looks exactly like a modelling
+mistake.
 
 **Batch 18. The geometry singles.** Fifteen, all small and unrelated to each
 other. **Three of the four Construct ones shipped in v2.11.0**: a plane square

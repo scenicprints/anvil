@@ -7269,6 +7269,155 @@ async function run() {
     out.dispose();
   });
 
+  /* -------- mesh stitch, patch and direct edit -------- */
+
+  /**
+   * A box written the way a bad exporter writes one: every triangle with its
+   * own three corners, so nothing is joined to anything.
+   */
+  function looseBox(size = 20, jitter = 0) {
+    const h = size / 2;
+    const corner = [
+      [-h, -h, -h], [h, -h, -h], [h, h, -h], [-h, h, -h],
+      [-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]
+    ];
+    const quads = [
+      [0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4],
+      [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]
+    ];
+    const P = [];
+    const T = [];
+    // A jitter puts every copy of a corner its own small distance from the
+    // others, which is what a scan gives and what a weld tolerance is for.
+    // Counted per corner so no two copies of one ever land in the same place.
+    const seen = new Map();
+    for (const [a, b, c, d] of quads) {
+      for (const tri of [[a, b, c], [a, c, d]]) {
+        const base = P.length;
+        for (const v of tri) {
+          const k = seen.get(v) || 0;
+          seen.set(v, k + 1);
+          P.push(corner[v].map((x, axis) => x + jitter * k * (axis === 1 ? -1 : 1)));
+        }
+        T.push([base, base + 1, base + 2]);
+      }
+    }
+    return {
+      numProp: 3,
+      vertProperties: new Float32Array(P.flat()),
+      triVerts: new Uint32Array(T.flat())
+    };
+  }
+
+  test('mesh stitch: a mesh with no shared corners becomes one surface', () => {
+    const mesh = looseBox(20);
+    const before = MT.meshHealth(mesh);
+    assert(before.vertices === 36, `every triangle its own corners, got ${before.vertices}`);
+    assert(before.duplicated === 28, `28 of them sit on top of another, got ${before.duplicated}`);
+
+    const out = MT.stitchMesh(mesh, 1e-4);
+    assert(out.joined === 28, `28 points joined into 8, got ${out.joined}`);
+    assert(out.openAfter === 0, `and nothing left open, got ${out.openAfter}`);
+    assert(out.closed, 'so it is a closed surface now');
+  });
+
+  test('mesh stitch: a tolerance too small joins nothing', () => {
+    // Corners that nearly meet rather than exactly, which is what a scan gives.
+    // Under the gap between them, welding cannot do anything, and the count of
+    // open edges is what says so.
+    const scanned = looseBox(20, 0.05);
+    const tight = MT.stitchMesh(scanned, 0.001);
+    assert(tight.joined === 0, `nothing joined, got ${tight.joined}`);
+    assert(tight.openAfter > 0, 'and it is still in pieces');
+
+    const loose = MT.stitchMesh(scanned, 0.5);
+    assert(loose.joined > 0, `raising it joins them, got ${loose.joined}`);
+    assert(loose.openAfter < tight.openAfter, 'and closes the gaps');
+  });
+
+  test('mesh patch: a hole is filled and the body closes', () => {
+    // A box with one triangle taken out of it.
+    const stitched = MT.stitchMesh(looseBox(20), 1e-4).mesh;
+    const tris = [];
+    const src = stitched.triVerts;
+    for (let t = 3; t < src.length / 3; t++) {
+      tris.push([src[t * 3], src[t * 3 + 1], src[t * 3 + 2]]);
+    }
+    const holed = {
+      numProp: 3,
+      vertProperties: stitched.vertProperties,
+      triVerts: new Uint32Array(tris.flat())
+    };
+    assert(MT.meshHealth(holed).openEdges > 0, 'it has a hole in it');
+
+    const out = MT.patchMesh(holed);
+    assert(out.filled >= 1, `at least one hole filled, got ${out.filled}`);
+    assert(MT.meshHealth(out.mesh).openEdges === 0, 'and it is shut');
+  });
+
+  test('mesh patch: a hole too big to be a fault is left alone', () => {
+    // The whole top off a box. That is where the part was cut, not a fault, and
+    // filling it turns the part into a bag.
+    const stitched = MT.stitchMesh(looseBox(20), 1e-4).mesh;
+    const tris = [];
+    const src = stitched.triVerts;
+    for (let t = 2; t < src.length / 3; t++) {
+      tris.push([src[t * 3], src[t * 3 + 1], src[t * 3 + 2]]);
+    }
+    const holed = {
+      numProp: 3,
+      vertProperties: stitched.vertProperties,
+      triVerts: new Uint32Array(tris.flat())
+    };
+    const rim = MT.patchMesh(holed).sizes[0];
+    assert(rim > 0, 'the hole has a perimeter');
+
+    const out = MT.patchMesh(holed, { maxPerimeter: rim / 2 });
+    assert(out.filled === 0, 'nothing filled');
+    assert(out.left === 1, 'and it says one was left');
+    assert(MT.meshHealth(out.mesh).openEdges > 0, 'so the mesh is still open');
+  });
+
+  test('mesh direct edit: what moves falls off with distance', () => {
+    const mesh = MT.stitchMesh(looseBox(20), 1e-4).mesh;
+    const P = [];
+    for (let i = 0; i < mesh.vertProperties.length; i += 3) {
+      P.push([mesh.vertProperties[i], mesh.vertProperties[i + 1], mesh.vertProperties[i + 2]]);
+    }
+    // One corner, and everything within 25 of it follows a little.
+    const weights = MT.meshVertexWeights(mesh, [0], 25);
+    assert(weights.get(0) === 1, 'the chosen one moves fully');
+    assert(weights.size > 1, 'and its neighbours follow');
+    for (const [v, w] of weights) {
+      if (v === 0) continue;
+      assert(w > 0 && w < 1, 'every follower moves less than the whole way');
+    }
+
+    const out = MT.shiftMeshPoints(mesh, weights, [0, 0, 10]);
+    const moved = [];
+    for (let i = 0; i < out.vertProperties.length; i += 3) {
+      moved.push(out.vertProperties[i + 2] - P[i / 3][2]);
+    }
+    near(moved[0], 10, 1e-5, 'the chosen corner went the whole way');
+    // The far corner of a 20 box is 34.6 away, past the 25 asked for, so it
+    // must not have moved at all.
+    const far = P.findIndex((p) => Math.hypot(p[0] - P[0][0], p[1] - P[0][1], p[2] - P[0][2]) > 25);
+    assert(far > 0, 'there is a corner out of reach');
+    near(moved[far], 0, 1e-9, 'and it stayed where it was');
+  });
+
+  test('mesh direct edit: with no reach, only what was picked moves', () => {
+    const mesh = MT.stitchMesh(looseBox(20), 1e-4).mesh;
+    const weights = MT.meshVertexWeights(mesh, [0, 1], 0);
+    assert(weights.size === 2, `only the two, got ${weights.size}`);
+    const out = MT.shiftMeshPoints(mesh, weights, [5, 0, 0]);
+    let moved = 0;
+    for (let i = 0; i < out.vertProperties.length; i += 3) {
+      if (Math.abs(out.vertProperties[i] - mesh.vertProperties[i]) > 1e-9) moved++;
+    }
+    assert(moved === 2, `two points moved, got ${moved}`);
+  });
+
   /* -------- building a form from curves -------- */
 
   /** A square of side `w` in the XY plane, as a closed run with no repeat. */

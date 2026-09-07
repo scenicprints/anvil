@@ -1189,6 +1189,18 @@ export function rebuild(doc, options = {}) {
           doMeshRepair(feature, scope, scopeObj, errors);
           break;
 
+        case 'meshStitch':
+          doMeshStitch(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshPatch':
+          doMeshPatch(feature, scope, scopeObj, errors);
+          break;
+
+        case 'meshDirectEdit':
+          doMeshDirectEdit(feature, scope, scopeObj, errors);
+          break;
+
         case 'meshReduce':
           doMeshReduce(feature, scope, scopeObj, errors);
           break;
@@ -6609,6 +6621,107 @@ export function rebuild(doc, options = {}) {
   }
 
   /** Weld, drop what is degenerate, agree on which way is out, close the holes. */
+  /**
+   * Join triangles that only nearly meet, and nothing else.
+   *
+   * The half of Repair that closes gaps, on its own, because the tolerance is a
+   * real decision and doing it apart from hole filling is what lets it be
+   * raised and looked at again.
+   */
+  function doMeshStitch(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Stitch works on a mesh body');
+    const tol = feature.tolerance ? safeEval(feature.tolerance, scope, 1e-4) : 1e-4;
+    for (const b of targets) {
+      const out = MT.stitchMesh(b.sheet, tol);
+      replaceBody(bodies, b, { sheet: out.mesh });
+      if (out.openAfter) {
+        errs.push({
+          feature: feature.id,
+          message: `${b.name}: ${out.joined} points joined, ${out.openAfter} edges still open. Raise the tolerance, or use Patch.`
+        });
+      }
+    }
+  }
+
+  /**
+   * Fill the holes in a mesh, or only the ones small enough to be faults.
+   *
+   * Filling every hole is wrong as often as it is right: a scan has a hundred
+   * pinholes worth closing and one big opening where the part was cut off, and
+   * closing that one turns the part into a bag.
+   */
+  function doMeshPatch(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Patch works on a mesh body');
+    const limit = feature.maxPerimeter ? safeEval(feature.maxPerimeter, scope, 0) : 0;
+    for (const b of targets) {
+      const out = MT.patchMesh(b.sheet, { maxPerimeter: limit });
+      if (!out.filled && !out.left) continue;
+      replaceBody(bodies, b, { sheet: out.mesh });
+      if (out.left) {
+        errs.push({
+          feature: feature.id,
+          message: `${b.name}: ${out.filled} filled, ${out.left} left open as too big to be a fault.`
+        });
+      }
+    }
+  }
+
+  /**
+   * Move part of a mesh, without history and without recognising anything.
+   *
+   * What an imported mesh actually needs: a boss in the wrong place moved a
+   * millimetre, without converting the whole thing to a solid first. The
+   * falloff is what keeps the surface continuous, so what moves is a region
+   * rather than a plate with torn edges.
+   */
+  function doMeshDirectEdit(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Direct Edit works on a mesh body');
+    const distance = safeEval(feature.distance, scope, 0);
+    if (Math.abs(distance) < 1e-9) return;
+    const reach = Math.max(0, safeEval(feature.falloff, scope, 0));
+
+    for (const b of targets) {
+      const chosen = (feature.faces || [])
+        .filter((f) => f.body === b.id)
+        .map((f) => f.face);
+      if (!chosen.length) continue;
+
+      let topo;
+      try {
+        topo = buildTopology(b.sheet);
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Direct Edit: ${err.message}` });
+        continue;
+      }
+      const tris = [];
+      let normal = [0, 0, 1];
+      let found = 0;
+      for (const id of chosen) {
+        const face = topo.faces[id];
+        if (!face) continue;
+        tris.push(...face.tris);
+        normal = found === 0 ? face.normal.slice() : normal;
+        found++;
+      }
+      if (!tris.length) continue;
+
+      const dir = feature.direction === 'z'
+        ? [0, 0, 1]
+        : feature.direction === 'y'
+          ? [0, 1, 0]
+          : feature.direction === 'x'
+            ? [1, 0, 0]
+            : normal;
+      const verts = MT.vertsOfTriangles(b.sheet, tris);
+      const weights = MT.meshVertexWeights(b.sheet, verts, reach);
+      const shift = [dir[0] * distance, dir[1] * distance, dir[2] * distance];
+      replaceBody(bodies, b, { sheet: MT.shiftMeshPoints(b.sheet, weights, shift) });
+    }
+  }
+
   function doMeshRepair(feature, scope, ks, errs) {
     const targets = pickMeshes(feature);
     if (!targets.length) throw new Error('Repair works on a mesh body');
@@ -7168,6 +7281,9 @@ export const FEATURE_LABELS = {
   insertMesh: 'Insert Mesh',
   tessellate: 'Tessellate',
   meshRepair: 'Repair',
+  meshStitch: 'Stitch Mesh',
+  meshPatch: 'Patch Mesh',
+  meshDirectEdit: 'Direct Edit',
   meshReduce: 'Reduce',
   meshRemesh: 'Remesh',
   meshSmooth: 'Smooth',

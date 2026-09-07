@@ -123,6 +123,16 @@
             </div>
 
             <div class="group">
+              <span class="glabel">Appearance</span>
+              <button data-cmd="physicalMaterial" class="big" title="What a body is made of, which is where its mass comes from">
+                <span class="ico">&#9679;</span><span class="lbl">Material</span></button>
+              <button data-cmd="appearance" class="big" title="What a body looks like, which is nothing to do with what it is made of">
+                <span class="ico">&#9673;</span><span class="lbl">Colour</span></button>
+              <button data-cmd="computeAll" class="big" title="Throw the cache away and build the whole timeline again">
+                <span class="ico">&#8635;</span><span class="lbl">Compute All</span></button>
+            </div>
+
+            <div class="group">
               <span class="glabel">Make</span>
               <button data-cmd="print3D" class="big" title="Write it for a printer and open it in the slicer">
                 <span class="ico">&#9636;</span><span class="lbl">3D Print</span></button>
@@ -354,6 +364,9 @@
                 <span class="ico">&#9906;</span><span class="lbl">Recognise</span></button>
               <button data-menu="faceGroups" class="big" title="Group triangles into faces you can point at, by angle or by hand">
                 <span class="ico">&#9638;</span><span class="lbl">Face Groups &#9662;</span></button>
+              <button data-cmd="meshStitch" class="big" title="Join triangles that only nearly meet"><span class="ico">&#9868;</span><span class="lbl">Stitch</span></button>
+              <button data-cmd="meshPatch" class="big" title="Fill holes, or only the small ones"><span class="ico">&#9645;</span><span class="lbl">Patch</span></button>
+              <button data-cmd="meshDirectEdit" class="big" title="Move part of a mesh, with a falloff"><span class="ico">&#10021;</span><span class="lbl">Direct Edit</span></button>
               <button data-cmd="meshRepair" class="big" title="Weld, tidy, orient and close">
                 <span class="ico">&#10010;</span><span class="lbl">Repair</span></button>
               <button data-cmd="meshMerge" class="big" title="Several mesh bodies as one">

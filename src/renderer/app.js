@@ -288,6 +288,9 @@ function rebuildAll() {
         // The smooth surface drawn behind the cage in Control Frame, so what is
         // being shaped and what it stands for are both on screen at once.
         overlayMesh: b.overlayMesh || null,
+        // A colour set by hand, which is about how it looks and not about what
+        // it is made of, so it lives on the document rather than the timeline.
+        appearance: state.doc.appearance?.byBody?.[b.id] || null,
         visible: !state.hiddenBodies.has(b.id)
       });
     } catch (err) {
@@ -1662,6 +1665,24 @@ async function runCommand(cmd) {
     case 'meshRepair':
       cmdMeshRepair();
       break;
+    case 'meshStitch':
+      cmdMeshStitch();
+      break;
+    case 'meshPatch':
+      cmdMeshPatch();
+      break;
+    case 'meshDirectEdit':
+      cmdMeshDirectEdit();
+      break;
+    case 'physicalMaterial':
+      cmdPhysicalMaterial();
+      break;
+    case 'appearance':
+      cmdAppearance();
+      break;
+    case 'computeAll':
+      cmdComputeAll();
+      break;
     case 'meshReduce':
       cmdMeshReduce();
       break;
@@ -2287,6 +2308,7 @@ function migrate(data) {
   normalizeSheetRules(doc);
   doc.meshData = doc.meshData || {};
   doc.imageData = doc.imageData || {};
+  doc.appearance = doc.appearance || {};
   doc.forms = doc.forms || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
   if (doc.rollback === undefined) doc.rollback = null;
@@ -11197,6 +11219,262 @@ function cmdMeshRepair() {
   reportHealth();
 }
 
+function cmdMeshStitch() {
+  startMeshFeature('meshStitch', 'Stitch Mesh', meshStitchFields(), { tolerance: '0.01' });
+  reportHealth();
+}
+
+function meshStitchFields() {
+  return [
+    meshBodyField(),
+    { key: 'tolerance', label: 'Points closer than this are one point', type: 'expr' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Too small and nothing joins. Too large and detail the size of the tolerance is thrown away. Try it, look at the open edge count, and try again.'
+    }
+  ];
+}
+
+function cmdMeshPatch() {
+  startMeshFeature('meshPatch', 'Patch Mesh', meshPatchFields(), { maxPerimeter: '0' });
+  reportHealth();
+}
+
+function meshPatchFields() {
+  return [
+    meshBodyField(),
+    { key: 'maxPerimeter', label: 'Biggest hole to fill, 0 for all', type: 'expr' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Measured round the rim of the hole, not in edges, so the same hole reads the same in a fine mesh and a coarse one. Filling every hole turns a part that was cut off into a bag.'
+    }
+  ];
+}
+
+/**
+ * Move part of a mesh, with no history and nothing recognised first.
+ *
+ * The thing an imported mesh actually needs. A boss a millimetre out of place
+ * gets moved without converting anything, and the falloff is what keeps the
+ * surface continuous around what moved.
+ */
+function cmdMeshDirectEdit() {
+  if (state.sketcher.active) finishSketch();
+  const meshes = meshBodies();
+  if (!meshes.length) {
+    setStatus('Direct Edit works on a mesh body. Insert a mesh, or tessellate a solid.');
+    return;
+  }
+  const picked = [];
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    if (meshes.some((b) => b.id === bodyId)) picked.push({ body: bodyId, face: index });
+  }
+  if (!picked.length) {
+    setStatus('Select the part of the mesh to move.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'meshDirectEdit',
+    bodies: [...new Set(picked.map((f) => f.body))],
+    faces: picked,
+    direction: 'normal',
+    distance: '1',
+    falloff: '5'
+  };
+  openFeatureEditor(feature, 'Direct Edit', meshDirectEditFields());
+}
+
+function meshDirectEditFields() {
+  return [
+    {
+      key: 'direction',
+      label: 'Which way',
+      type: 'select',
+      options: [
+        ['normal', 'Out of the face'],
+        ['x', 'Along X'],
+        ['y', 'Along Y'],
+        ['z', 'Along Z']
+      ]
+    },
+    { key: 'distance', label: 'How far', type: 'expr' },
+    { key: 'falloff', label: 'How far the move carries', type: 'expr' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Without a falloff the region moves and its edges tear. With one the surface around it follows and stays continuous.'
+    }
+  ];
+}
+
+/**
+ * What a body is made of, which is what its mass and its cost come from.
+ *
+ * Kept on the document rather than in the timeline, because it is not a step in
+ * building the shape: rolling back past it should not turn a steel bracket into
+ * a plastic one.
+ */
+function cmdPhysicalMaterial() {
+  if (state.sketcher.active) finishSketch();
+  const bodies = (state.result?.bodies || []).filter((b) => b.solid || b.sheet);
+  if (!bodies.length) {
+    setStatus('Nothing to give a material to yet.');
+    return;
+  }
+  const chosen = state.selection.bodies.size
+    ? bodies.filter((b) => state.selection.bodies.has(b.id))
+    : bodies;
+  const mats = state.doc.materials || {};
+  const current = mats.byBody?.[chosen[0].id] || mats.default || 'pla';
+
+  showInspector(
+    'Physical Material',
+    [
+      {
+        key: 'material',
+        label: 'Material',
+        type: 'select',
+        value: current,
+        options: MATERIAL_OPTIONS
+      },
+      {
+        key: 'everything',
+        label: 'Give it to every body',
+        type: 'bool',
+        value: false
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'}. A printed part is infill and air, so the mass this gives is the mass of the same shape solid.`
+      }
+    ],
+    (v) => {
+      pushUndo('material');
+      state.doc.materials = state.doc.materials || {};
+      state.doc.materials.byBody = state.doc.materials.byBody || {};
+      if (v.everything) {
+        state.doc.materials.default = v.material;
+        state.doc.materials.byBody = {};
+      } else {
+        for (const b of chosen) state.doc.materials.byBody[b.id] = v.material;
+      }
+      state.dirty = true;
+      renderTree();
+      setStatus(
+        v.everything
+          ? `Everything is ${materialLabel(v.material)}.`
+          : `${chosen.length} bod${chosen.length === 1 ? 'y is' : 'ies are'} ${materialLabel(v.material)}.`
+      );
+    }
+  );
+}
+
+/**
+ * What a body looks like, which is nothing to do with what it is made of.
+ *
+ * Fusion keeps these apart and it is right to: a steel bracket shown in red to
+ * mark it as the one being worked on is still steel, and a change of colour
+ * must not change what it weighs.
+ */
+function cmdAppearance() {
+  if (state.sketcher.active) finishSketch();
+  const bodies = state.result?.bodies || [];
+  if (!bodies.length) {
+    setStatus('Nothing to colour yet.');
+    return;
+  }
+  const chosen = state.selection.bodies.size
+    ? bodies.filter((b) => state.selection.bodies.has(b.id))
+    : bodies;
+  const kept = state.doc.appearance?.byBody?.[chosen[0].id] || '';
+
+  showInspector(
+    'Appearance',
+    [
+      {
+        key: 'colour',
+        label: 'Colour',
+        type: 'select',
+        value: kept,
+        options: APPEARANCE_OPTIONS
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'}. Colour is what it looks like, not what it is made of, and it does not change what it weighs.`
+      }
+    ],
+    (v) => {
+      pushUndo('appearance');
+      state.doc.appearance = state.doc.appearance || {};
+      state.doc.appearance.byBody = state.doc.appearance.byBody || {};
+      for (const b of chosen) {
+        if (v.colour) state.doc.appearance.byBody[b.id] = v.colour;
+        else delete state.doc.appearance.byBody[b.id];
+      }
+      state.dirty = true;
+      rebuildAll();
+      setStatus(
+        v.colour
+          ? `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'} recoloured.`
+          : 'Back to the ordinary colour.'
+      );
+    }
+  );
+}
+
+/**
+ * Build the whole timeline again from nothing.
+ *
+ * Anvil rebuilds as it goes, so this is not the everyday command it is in
+ * Fusion. It is here for the one case that matters: the cache holds what the
+ * last rebuild made, and if it is ever wrong, everything downstream of it is
+ * wrong in a way that looks like a modelling mistake. This throws it away, so
+ * "have I confused it" can be answered in a second rather than argued about.
+ */
+function cmdComputeAll() {
+  if (state.sketcher.active) finishSketch();
+  const t0 = performance.now();
+  if (state.cache) {
+    state.cache.dispose();
+    state.cache = null;
+  }
+  rebuildAll();
+  const ms = Math.round(performance.now() - t0);
+  const errors = state.result?.errors?.length || 0;
+  setStatus(
+    errors
+      ? `Rebuilt from nothing in ${ms} ms, with ${errors} problem${errors === 1 ? '' : 's'}.`
+      : `Rebuilt from nothing in ${ms} ms. Everything is as it says.`
+  );
+}
+
+// Off the one list that also holds the densities, so a material can never be
+// offered here and be unknown to the thing that works out the mass.
+const MATERIAL_OPTIONS = MATERIALS.map(([id, label]) => [id, label]);
+
+const APPEARANCE_OPTIONS = [
+  ['', 'The ordinary colour'],
+  ['#b8564a', 'Red'],
+  ['#c98a3c', 'Orange'],
+  ['#c9b03c', 'Yellow'],
+  ['#5d8f5a', 'Green'],
+  ['#4a7fb8', 'Blue'],
+  ['#7a5fa8', 'Violet'],
+  ['#8a8f96', 'Grey'],
+  ['#3c4148', 'Near black']
+];
+
 /** Say what is actually wrong, since that is what decides which knobs matter. */
 function reportHealth() {
   const first = meshBodies()[0];
@@ -14137,6 +14415,12 @@ function describeFeature(feature) {
       return { title: 'Insert Mesh', fields: insertMeshFields() };
     case 'meshRepair':
       return { title: 'Repair', fields: meshRepairFields() };
+    case 'meshStitch':
+      return { title: 'Stitch Mesh', fields: meshStitchFields() };
+    case 'meshPatch':
+      return { title: 'Patch Mesh', fields: meshPatchFields() };
+    case 'meshDirectEdit':
+      return { title: 'Direct Edit', fields: meshDirectEditFields() };
     case 'meshReduce':
       return { title: 'Reduce', fields: meshReduceFields() };
     case 'meshRemesh':

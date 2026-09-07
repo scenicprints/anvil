@@ -161,6 +161,143 @@ export function repairMesh(mesh, opts = {}) {
  * smallest triangle goes first, which is nearly always the sliver that should
  * not have been there, and dropping it can expose another so the pass repeats.
  */
+/**
+ * Close the gaps between triangles that only nearly meet.
+ *
+ * The half of Repair that joins things, on its own. A mesh out of a scanner or
+ * out of a bad exporter has every triangle written with its own three corners,
+ * so two triangles that look joined share no vertex at all and every edge in
+ * the file is an open edge. Welding by position is what makes it one surface.
+ *
+ * The tolerance is the whole of it and it is a real decision: too small and
+ * nothing joins, too large and detail the size of the tolerance is thrown away.
+ * So both counts come back, and the caller can raise it and look again.
+ */
+export function stitchMesh(mesh, tolerance = 1e-4) {
+  const before = meshHealth(mesh);
+  const welded = weldSheet(mesh, Math.max(1e-9, tolerance));
+
+  // Triangles that welding has collapsed onto a line have no area left and are
+  // not part of the surface any more.
+  const P = sheetPoints(welded);
+  const kept = [];
+  for (const [i, j, k] of sheetTris(welded)) {
+    if (i === j || j === k || k === i) continue;
+    if (len(cross(sub(P[j], P[i]), sub(P[k], P[i]))) / 2 < 1e-12) continue;
+    kept.push([i, j, k]);
+  }
+  const out = makeSheet(P, kept);
+  const after = meshHealth(out);
+  return {
+    mesh: out,
+    joined: before.vertices - after.vertices,
+    openBefore: before.openEdges,
+    openAfter: after.openEdges,
+    closed: after.closed
+  };
+}
+
+/**
+ * Fill the holes in a mesh, or the small ones only.
+ *
+ * The other half of Repair. Filling every hole is wrong as often as it is
+ * right: a scan of a bracket has a hundred pinholes worth closing and one big
+ * opening where the part was cut off, and closing that one turns the part into
+ * a bag. So holes are measured, and how big a hole is worth filling is asked.
+ *
+ * The measure is the perimeter of the hole rather than the number of edges
+ * around it, because a hole in a fine mesh and the same hole in a coarse one
+ * are the same hole.
+ */
+export function patchMesh(mesh, opts = {}) {
+  const welded = weldSheet(mesh, opts.tolerance ?? 1e-5);
+  const loops = boundaryLoops(welded);
+  if (!loops.length) return { mesh: welded, filled: 0, left: 0, sizes: [] };
+
+  const P = sheetPoints(welded);
+  const perimeter = (loop) => {
+    let sum = 0;
+    for (let i = 0; i < loop.length; i++) {
+      sum += len(sub(P[loop[(i + 1) % loop.length]], P[loop[i]]));
+    }
+    return sum;
+  };
+  const sizes = loops.map(perimeter);
+  const limit = opts.maxPerimeter > 0 ? opts.maxPerimeter : Infinity;
+
+  const pieces = [welded];
+  let filled = 0;
+  let left = 0;
+  loops.forEach((loop, i) => {
+    if (sizes[i] > limit) {
+      left++;
+      return;
+    }
+    const patch = patchLoops([loop.map((v) => P[v])]);
+    if (patch?.triVerts?.length) {
+      pieces.push(patch);
+      filled++;
+    } else {
+      left++;
+    }
+  });
+  if (!filled) return { mesh: welded, filled: 0, left, sizes };
+
+  let out = weldSheet(mergeMeshes(pieces), opts.tolerance ?? 1e-5);
+  // A patch can land on top of something that was already there, so the check
+  // for a third triangle on an edge has to run after filling and not before.
+  out = dropNonManifold(out);
+  return { mesh: out, filled, left, sizes };
+}
+
+/**
+ * How much each vertex of a mesh should follow a move, by distance.
+ *
+ * The chosen ones move fully and everything within reach of them follows less
+ * and less, on a curve that leaves flat at both ends so the edge of the
+ * influence does not show as a ridge.
+ */
+export function meshVertexWeights(mesh, verts, reach = 0) {
+  const weight = new Map();
+  for (const v of verts) weight.set(v, 1);
+  if (!(reach > 0)) return weight;
+
+  const P = sheetPoints(mesh);
+  const chosen = [...new Set(verts)];
+  for (let v = 0; v < P.length; v++) {
+    if (weight.has(v)) continue;
+    let best = Infinity;
+    for (const c of chosen) {
+      const d = len(sub(P[v], P[c]));
+      if (d < best) best = d;
+    }
+    if (best >= reach) continue;
+    const x = 1 - best / reach;
+    weight.set(v, x * x * (3 - 2 * x));
+  }
+  return weight;
+}
+
+/** Move a mesh's vertices by a shift, scaled by how much each should follow. */
+export function shiftMeshPoints(mesh, weights, shift) {
+  const P = sheetPoints(mesh).map((p) => p.slice());
+  for (const [v, w] of weights) {
+    if (!P[v] || !(w > 0)) continue;
+    P[v] = add(P[v], mul(shift, w));
+  }
+  const out = makeSheet(P, sheetTris(mesh));
+  return out;
+}
+
+/** Every vertex of the triangles listed. */
+export function vertsOfTriangles(mesh, tris) {
+  const out = new Set();
+  for (const t of tris) {
+    for (let k = 0; k < 3; k++) out.add(mesh.triVerts[t * 3 + k]);
+  }
+  return [...out];
+}
+
 export function dropNonManifold(mesh) {
   let P = sheetPoints(mesh);
   let tris = sheetTris(mesh);

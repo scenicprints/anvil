@@ -708,6 +708,39 @@ change of shape rather than a repair. A cage with nothing wrong with it comes
 back untouched and says so, rather than being quietly rebuilt: a rebuild
 renumbers the points and takes every crease and selection with it.
 
+**Stitch** and **Patch** are the two halves of Repair, on their own, and both
+are worth having apart from it. A mesh out of a scanner or a bad exporter writes
+every triangle with its own three corners, so two triangles that look joined
+share no vertex and every edge in the file reads as open; Stitch is what makes
+it one surface. The tolerance is the whole of that decision, too small and
+nothing joins, too large and detail the size of the tolerance is thrown away, so
+the count of what joined and what is still open both come back and it can be
+raised and tried again. Patch fills holes, and asks how big a hole is worth
+filling: a scan of a bracket has a hundred pinholes worth closing and one big
+opening where the part was cut off, and closing that one turns the part into a
+bag. Holes are measured round the rim rather than in edges, so the same hole
+reads the same in a fine mesh and a coarse one.
+
+**Direct Edit** moves part of a mesh with no history and nothing recognised
+first, which is what an imported mesh actually needs: a boss a millimetre out of
+place, moved, without converting anything. The falloff is what keeps it usable.
+Without one the region moves and its edges tear; with one the surface around it
+follows and stays continuous.
+
+**Material** and **Colour** are separate commands because they are separate
+things. Material is what a body is made of and is where its mass comes from;
+colour is what it looks like. A steel bracket shown in red to mark it as the one
+being worked on is still steel, and changing its colour must not change what it
+weighs. Both live on the document rather than in the timeline: rolling back past
+a material should not turn a steel bracket into a plastic one.
+
+**Compute All** throws the rebuild cache away and builds the whole timeline
+again. It is not the everyday command it is in Fusion, because Anvil rebuilds as
+it goes. It is here for the one case that matters: the cache holds what the last
+rebuild made, and if it is ever wrong then everything downstream is wrong in a
+way that looks exactly like a modelling mistake. This is how "have I confused
+it" gets answered in a second instead of argued about.
+
 **Design Advice** measures everything about a part that is likely to give
 trouble downstream. Fusion's version mostly points at moulding; this one points
 at the two things a part here actually meets, a printer and sometimes a cutter.
@@ -1183,7 +1216,7 @@ model file can never execute anything.
 npm test
 ```
 
-428 tests in a hidden window, checking measured quantities: volumes against
+434 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1217,7 +1250,9 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-formcreate.js` puts a square and a path into a document and builds a form
+drilled plate. `demo-mesh17.js` tessellates a solid and runs Stitch, Patch and Direct Edit over
+it, then sets a material and a colour and checks the colour did not change the
+mass. `demo-formcreate.js` puts a square and a path into a document and builds a form
 off each of the From Curves commands. `demo-sculpt.js` works a box cage through
 the Shape menu, smoothing, bevelling,
 freezing and then failing to move what it froze, erasing an edge and

@@ -22,6 +22,24 @@ const SHEET_COLOUR = 0xd9c187;
 // its own thing: a cool grey against the two warm ones.
 const FORM_COLOUR = 0xc4cbd2;
 
+/**
+ * What colour a body is when nothing is happening to it.
+ *
+ * A colour set by hand wins over the kind of body it is. Everything that paints
+ * over a body, selection, hover, an analysis, has to be able to put this back,
+ * so there is one place that says what "back" is.
+ *
+ * `fresh` is the shade a body is built with, a touch lighter than the one it is
+ * restored to. Keeping both here rather than at the call sites is the point:
+ * they used to be two numbers written out in five places.
+ */
+function baseColourOf(rec, fresh = false) {
+  if (rec.appearance) return rec.appearance;
+  if (rec.isForm) return FORM_COLOUR;
+  if (rec.sheet) return SHEET_COLOUR;
+  return fresh ? SOLID_COLOUR : 0xe0dcd2;
+}
+
 const UP = new THREE.Vector3(0, 0, 1);
 
 /**
@@ -783,7 +801,7 @@ export class Viewport {
         // A pale warm grey, brighter than the ground it sits on, with no
         // metal in it. The shape is the subject, not the finish.
         const mat = new THREE.MeshStandardMaterial({
-          color: rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : SOLID_COLOUR,
+          color: baseColourOf(rec, true),
           metalness: 0.0,
           roughness: 0.62,
           flatShading: false,
@@ -822,7 +840,7 @@ export class Viewport {
       } else if (entry.mat.metalness) {
         entry.mat.metalness = 0;
         entry.mat.roughness = 0.62;
-        entry.mat.color.set(rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : 0xe0dcd2);
+        entry.mat.color.set(baseColourOf(rec));
       }
 
       // A surface has no inside, so it is drawn from both sides and in its own
@@ -835,7 +853,7 @@ export class Viewport {
         entry.mat.needsUpdate = true;
       }
       if (rec.sheet && !rec.chrome && !entry.mat.vertexColors) {
-        entry.mat.color.set(rec.isForm ? FORM_COLOUR : SHEET_COLOUR);
+        entry.mat.color.set(baseColourOf(rec));
       }
 
       // Coloured per vertex when an analysis says so, and back to the plain
@@ -853,7 +871,7 @@ export class Viewport {
         entry.mat.color.set(0xffffff);
       } else if (entry.mat.vertexColors) {
         entry.mat.vertexColors = false;
-        entry.mat.color.set(rec.isForm ? FORM_COLOUR : rec.sheet ? SHEET_COLOUR : 0xe0dcd2);
+        entry.mat.color.set(baseColourOf(rec));
       }
       entry.mat.needsUpdate = true;
 
@@ -864,11 +882,7 @@ export class Viewport {
         ? 0xf2f0ec
         : entry.mat.vertexColors
           ? 0xffffff
-          : rec.isForm
-            ? FORM_COLOUR
-            : rec.sheet
-              ? SHEET_COLOUR
-              : 0xe0dcd2;
+          : baseColourOf(rec);
 
       // Control Frame shows the cage and the surface it stands for at the same
       // time. The cage is the body, because that is what has to be pointed at;
