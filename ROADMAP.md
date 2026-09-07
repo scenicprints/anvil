@@ -1066,6 +1066,107 @@ versions, and half a theme is worse than none.
 
 ---
 
+## Everything missing, in one list
+
+Compiled 2026-09-06 from the audit against Fusion's own help, from the README's
+own account of where each tool stops, and from what the measurements turned up
+along the way. Kept in one place so it can be read straight through rather than
+reassembled from six sections. Every line is either something Fusion does that
+this does not, or something this does less well than it should.
+
+### 1. Import, which he ranked first
+
+| | State |
+|---|---|
+| STEP: planes, cylinders, cones, spheres, tori | **shipped v2.10.0** |
+| STEP: B-spline surfaces and trimmed curves | missing, and the larger half of a real file |
+| STEP: assembly structure, per body colour, units from the header | missing |
+| 3MF: colour, materials, build hierarchy | read and thrown away today |
+| OBJ: groups and materials as face groups | read and thrown away today |
+| f3d | no public specification; look inside one before promising anything |
+| Decimation that keeps its faces | 20 percent of the triangles turns 33 faces into 163 |
+| Convert Mesh keeping its faces | 33 in, 19 out |
+| Refitting analytic surfaces on a mesh | a facetted bore should become a true cylinder |
+| Recognise: acting on what it found | it selects holes and fillets; it cannot yet change them |
+| Recognise: blend shells | fillets that run together are one surface and stay one |
+
+### 2. Fusion commands that are simply absent
+
+Each verified against the help page named in the audit, not recalled.
+
+| Panel | Missing |
+|---|---|
+| Solid, Create | Boss, Snap Fit, Rest, Lip |
+| Sketch, Modify | Blend Curve |
+| Surface, Modify | Untrim, Merge |
+| Mesh | Stitch, Patch, Direct Edit |
+| Sheet Metal, Create | Hem, Lofted Flange |
+| Construct | Perpendicular Plane, Plane Through Two Edges, Point Through Two Edges, User Coordinate System |
+| Inspect | Isocurve Analysis, Design Advice |
+| Assemble | As-Built Joint |
+
+Fastener Stack, Display Component Colors, Display Mesh Face Groups and Find
+Similar Components are on Fusion's Inspect panel and are library or cloud
+features rather than geometry, so they sit with the cloud work below.
+
+### 3. Where this application's own tools stop
+
+Not absences so much as edges, and each one is a decision that could be revisited.
+
+- **Patterns.** Fusion's compute options for a pattern that lands on different
+  geometry at each instance.
+- **Silhouette Split** works only where the parting line is flat.
+- **Form.** Circular symmetry is remembered but a drag is not mirrored round it;
+  only mirror symmetry follows live. No range selection, no Select Next. Pull
+  is its own button rather than a key held during a drag.
+- **Sheet metal.** A converted body has no panel tree until it is given one, so
+  it cannot be laid flat straight away.
+- **Rebuild cache.** A change to a parameter, a base body, the sheet metal
+  rules, the component list or a body's name invalidates the whole run. Correct
+  and conservative; finer grain would need to know which feature reads what.
+- **Surfaces.** A surface that folds back on itself cannot divide a body.
+  Isoparametric curves need a surface built here rather than a face lifted off a
+  solid. Patch fills a non-flat boundary with the simplest surface that meets
+  it, not a curvature-continuous one.
+- **Text** is traced from a raster rather than read out of the font's own
+  curves. Right for a printed part, wrong for typography.
+- **Joint contact** stops the parts where they meet along the one degree of
+  freedom being driven. A walk, not a simulation: it will not find a collision
+  that happens partway through some other joint's travel.
+- **Linked projection** keeps the kind of a line and of a circle; anything else
+  arrives as a polyline.
+- **Threads** are real geometry and cost real triangles, which is the point for
+  a printed part and is why Fusion leaves them cosmetic.
+
+### 4. The interface
+
+- **Icons.** Sixty-odd Unicode glyphs of very different weights. The largest
+  remaining thing that dates the look, and a drawn set wants his eye on the
+  direction first.
+- **Discoverability**, which he ranked third of three: hover previews, better
+  empty states, and the keyboard shortcut for a command shown on its row in
+  search.
+
+### 5. Workspaces he ruled in
+
+Each a project rather than a batch.
+
+| | What it needs |
+|---|---|
+| **Render** | Materials, lighting, and a photoreal path separate from the flat viewport shading, which stays. |
+| **Animation** | Exploded views and assembly motion. The assembly solver and joint limits already exist, so what is missing is the timeline and the exploding, not the kinematics. |
+| **Simulation** | A mesher and an FEA solver. Cost it in front of him before starting. |
+| **Generative design** | Fusion uses a compute farm. On one machine this has to be a smaller thing honestly named: a shape optimiser on a coarse voxel field. Cost it before starting. |
+
+### 6. Ruled out, on the record
+
+Drawings. CAM and toolpaths. PCB and Electronics. Cloud, hubs, projects,
+permissions, versioning, sharing, comments, branching, the Data Panel, the web
+and mobile clients, Fusion Manage, Configurations, and cloud compute of any
+kind. Anvil is offline on purpose and he has not asked otherwise.
+
+---
+
 ## Where the work goes next, decided 2026-09-06
 
 He audited Anvil against Fusion's own help and ruled on the workspaces. Three
