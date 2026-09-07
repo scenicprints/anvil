@@ -595,20 +595,38 @@ export function solve(nodes, elements, Ke, opts = {}) {
   if (load < 1e-30) return { ok: false, reason: 'Nothing is pushing it.' };
 
   const count = elements.length / 8;
+  // How much of its full stiffness each element has. Everything is at full
+  // stiffness unless something says otherwise, and the something is topology
+  // optimisation, where an element part way to being air is part way to being
+  // stiff.
+  const scale = opts.scale || null;
   const diag = new Float64Array(dof);
   for (let e = 0; e < count; e++) {
+    const k = scale ? scale[e] : 1;
     for (let a = 0; a < 8; a++) {
       const node = elements[e * 8 + a];
       for (let c = 0; c < 3; c++) {
         const i = a * 3 + c;
-        diag[node * 3 + c] += Ke[i * 24 + i];
+        diag[node * 3 + c] += Ke[i * 24 + i] * k;
       }
     }
   }
   for (let d = 0; d < dof; d++) if (fixed[d] || diag[d] < 1e-30) diag[d] = 1;
 
+  // Started from where the last solve finished, when there is one. In a
+  // topology optimisation the shape barely changes from one round to the next,
+  // so the previous answer is nearly this one and the solver has far less to do.
   const u = new Float64Array(dof);
+  if (opts.guess && opts.guess.length === dof) {
+    u.set(opts.guess);
+    for (let d = 0; d < dof; d++) if (fixed[d]) u[d] = 0;
+  }
   const r = Float64Array.from(f);
+  if (opts.guess && opts.guess.length === dof) {
+    const Au = new Float64Array(dof);
+    scratchMultiply(elements, Ke, scale, u, Au, fixed, dof);
+    for (let d = 0; d < dof; d++) r[d] -= Au[d];
+  }
   const z = new Float64Array(dof);
   const p = new Float64Array(dof);
   const Ap = new Float64Array(dof);
@@ -624,12 +642,13 @@ export function solve(nodes, elements, Ke, opts = {}) {
         local[a * 3 + 1] = x[node + 1];
         local[a * 3 + 2] = x[node + 2];
       }
+      const k = scale ? scale[e] : 1;
       for (let i = 0; i < 24; i++) {
         let sum = 0;
         const row = i * 24;
         for (let j = 0; j < 24; j++) sum += Ke[row + j] * local[j];
         const node = elements[base + ((i / 3) | 0)] * 3 + (i % 3);
-        out[node] += sum;
+        out[node] += sum * k;
       }
     }
     for (let d = 0; d < dof; d++) if (fixed[d]) out[d] = 0;
@@ -672,6 +691,8 @@ export function solve(nodes, elements, Ke, opts = {}) {
   return {
     ok: true,
     displacement: u,
+    // Handed back so the next solve can start from it.
+    guess: u,
     iterations,
     residual,
     converged: residual < target * 10,
@@ -759,6 +780,61 @@ export function stresses(nodes, elements, displacement, material, size) {
     maxMoveAt: moveAt,
     factor: worst > 1e-12 ? material.yield / worst : Infinity
   };
+}
+
+/** The same matrix times a vector, for the one use that happens before the solve. */
+function scratchMultiply(elements, Ke, scale, x, out, fixed, dof) {
+  const count = elements.length / 8;
+  const local = new Float64Array(24);
+  out.fill(0);
+  for (let e = 0; e < count; e++) {
+    const base = e * 8;
+    for (let a = 0; a < 8; a++) {
+      const node = elements[base + a] * 3;
+      local[a * 3] = x[node];
+      local[a * 3 + 1] = x[node + 1];
+      local[a * 3 + 2] = x[node + 2];
+    }
+    const k = scale ? scale[e] : 1;
+    for (let i = 0; i < 24; i++) {
+      let sum = 0;
+      const row = i * 24;
+      for (let j = 0; j < 24; j++) sum += Ke[row + j] * local[j];
+      out[elements[base + ((i / 3) | 0)] * 3 + (i % 3)] += sum * k;
+    }
+  }
+  for (let d = 0; d < dof; d++) if (fixed[d]) out[d] = 0;
+}
+
+/**
+ * How much work is stored in each element, which is what says where material
+ * is earning its place.
+ *
+ * The energy in an element is what it would give back if it were let go, and
+ * the elements storing the most are the ones carrying the load. Topology
+ * optimisation is that reading and nothing more: keep the material that is
+ * working, take away the material that is not, and solve again.
+ */
+export function elementEnergy(elements, Ke, displacement) {
+  const count = elements.length / 8;
+  const out = new Float64Array(count);
+  const local = new Float64Array(24);
+  for (let e = 0; e < count; e++) {
+    for (let a = 0; a < 8; a++) {
+      const node = elements[e * 8 + a] * 3;
+      local[a * 3] = displacement[node];
+      local[a * 3 + 1] = displacement[node + 1];
+      local[a * 3 + 2] = displacement[node + 2];
+    }
+    let sum = 0;
+    for (let i = 0; i < 24; i++) {
+      let row = 0;
+      for (let j = 0; j < 24; j++) row += Ke[i * 24 + j] * local[j];
+      sum += local[i] * row;
+    }
+    out[e] = sum;
+  }
+  return out;
 }
 
 /**

@@ -91,6 +91,7 @@ import { decalMesh } from '../src/renderer/decal.js';
 import * as CF from '../src/renderer/configure.js';
 import * as AM from '../src/renderer/animation.js';
 import * as FE from '../src/renderer/fea.js';
+import * as GD from '../src/renderer/generative.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
@@ -7571,6 +7572,199 @@ async function run() {
       }
     }
     near(worst, 0, 1e-6, 'pushing here and measuring there is the same either way round');
+  });
+
+  /* -------- generative design -------- */
+
+  /** The design space, its grid, and everything a solve of it needs. */
+  function designSpace(L, W, H, through) {
+    const grid = FE.voxelise(beamMesh(L, W, H), { through });
+    const nodes = FE.nodesOf(grid);
+    const material = FE.stiffnessOf('pla');
+    const Ke = FE.hexStiffness(material.modulus, material.poisson, grid.size);
+    const cells = [];
+    for (let k = 0; k < grid.n[2]; k++) {
+      for (let j = 0; j < grid.n[1]; j++) {
+        for (let i = 0; i < grid.n[0]; i++) {
+          if (grid.inside[grid.at(i, j, k)]) cells.push((k * grid.n[1] + j) * grid.n[0] + i);
+        }
+      }
+    }
+    const held = FE.nodesNear(nodes, { origin: [0, 0, 0], normal: [1, 0, 0] }, grid.size * 0.4);
+    const load = [];
+    for (let n = 0; n < nodes.count; n++) {
+      const x = nodes.xyz[n * 3];
+      const z = nodes.xyz[n * 3 + 2];
+      if (Math.abs(x - L) < grid.size * 0.4 && z < grid.size * 0.6) load.push(n);
+    }
+    return { grid, nodes, material, Ke, cells, held, load };
+  }
+
+  test('generative: the budget is met exactly, whatever the readings say', () => {
+    // The step has one job: move material towards where it is wanted without
+    // spending more than there is. It finds that by bisecting on how hard to
+    // push, and the readings it is given vary by many powers of ten between one
+    // problem and the next, so the search has to be on the logarithm. Bisected
+    // the ordinary way it spends every step in the top decade and never
+    // reaches the bottom ones, and everything empties.
+    for (const size of [1e-12, 1, 1e9]) {
+      const density = new Float64Array(400).fill(0.5);
+      const sensitivity = new Float64Array(400);
+      for (let e = 0; e < 400; e++) sensitivity[e] = -size * (1 + (e % 7));
+      const out = GD.step(density, sensitivity, { fraction: 0.3 });
+      near(GD.usage(out), 0.3, 1e-6, `budget met with readings of size ${size}`);
+    }
+  });
+
+  test('generative: material goes where the reading says it is wanted', () => {
+    const density = new Float64Array(100).fill(0.5);
+    const sensitivity = new Float64Array(100).fill(-1);
+    // One element worth far more than the rest.
+    sensitivity[42] = -1000;
+    const out = GD.step(density, sensitivity, { fraction: 0.5 });
+    assert(out[42] > density[42], 'the one that is working gets more');
+    assert(out[0] < density[0], 'and the ones that are not give some up');
+    near(GD.usage(out), 0.5, 1e-6, 'and the total is unchanged');
+  });
+
+  test('generative: nothing moves more than a step in one round', () => {
+    const density = new Float64Array(100).fill(0.5);
+    const sensitivity = new Float64Array(100).fill(-1);
+    sensitivity[7] = -1e12;
+    const out = GD.step(density, sensitivity, { fraction: 0.5, move: 0.2 });
+    for (let e = 0; e < 100; e++) {
+      assert(Math.abs(out[e] - 0.5) <= 0.2 + 1e-9, `element ${e} moved no more than a step`);
+    }
+  });
+
+  test('generative: locked material stays solid and is paid for', () => {
+    const density = new Float64Array(100).fill(0.5);
+    const sensitivity = new Float64Array(100).fill(-1);
+    const locked = new Uint8Array(100);
+    for (let e = 0; e < 10; e++) locked[e] = 1;
+    const out = GD.step(density, sensitivity, { fraction: 0.5, locked });
+    for (let e = 0; e < 10; e++) near(out[e], 1, 1e-12, 'locked material is solid');
+    near(GD.usage(out), 0.5, 1e-6, 'and it comes out of the same budget');
+  });
+
+  test('generative: the blur takes a checkerboard out', () => {
+    // A checkerboard is not a shape, it is an artefact of the elements, and it
+    // looks stiffer to the maths than it is. Without the blur that is what the
+    // answer turns into.
+    const grid = FE.voxelise(beamMesh(20, 20, 20), { through: 8 });
+    const cells = [];
+    for (let k = 0; k < grid.n[2]; k++) {
+      for (let j = 0; j < grid.n[1]; j++) {
+        for (let i = 0; i < grid.n[0]; i++) {
+          if (grid.inside[grid.at(i, j, k)]) cells.push((k * grid.n[1] + j) * grid.n[0] + i);
+        }
+      }
+    }
+    const near2 = GD.neighbourhood(grid, cells, 1.6);
+    const density = new Float64Array(cells.length).fill(0.5);
+    const raw = new Float64Array(cells.length);
+    cells.forEach((cell, e) => {
+      const i = cell % grid.n[0];
+      const j = ((cell / grid.n[0]) | 0) % grid.n[1];
+      const k = (cell / (grid.n[0] * grid.n[1])) | 0;
+      raw[e] = (i + j + k) % 2 ? -2 : -1;
+    });
+
+    const spread = (a) => {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const v of a) {
+        lo = Math.min(lo, v);
+        hi = Math.max(hi, v);
+      }
+      return hi - lo;
+    };
+    const smoothed = GD.blur(near2, density, raw);
+    assert(
+      spread(smoothed) < spread(raw) * 0.6,
+      `the alternation is flattened, ${spread(smoothed).toFixed(3)} from ${spread(raw).toFixed(3)}`
+    );
+  });
+
+  test('generative: the neighbourhood weights fall off with distance', () => {
+    const grid = FE.voxelise(beamMesh(20, 20, 20), { through: 6 });
+    const cells = [];
+    for (let k = 0; k < grid.n[2]; k++) {
+      for (let j = 0; j < grid.n[1]; j++) {
+        for (let i = 0; i < grid.n[0]; i++) {
+          if (grid.inside[grid.at(i, j, k)]) cells.push((k * grid.n[1] + j) * grid.n[0] + i);
+        }
+      }
+    }
+    const near2 = GD.neighbourhood(grid, cells, 2);
+    // The middle element of the block, which has neighbours all round it.
+    const middle = Math.floor(cells.length / 2);
+    const count = near2.starts[middle + 1] - near2.starts[middle];
+    assert(count > 6, `it has neighbours, got ${count}`);
+    let best = 0;
+    for (let i = near2.starts[middle]; i < near2.starts[middle + 1]; i++) {
+      best = Math.max(best, near2.weights[i]);
+    }
+    // Itself is nearest, so it counts most.
+    near(best, 2, 1e-9, 'the nearest weighs the most');
+  });
+
+  test('generative: it really does make the part stiffer for the same material', () => {
+    // The whole claim, in one number. Compliance is how much the part gives
+    // under the load, and less of it for the same material is the entire point.
+    const space = designSpace(60, 8, 30, 3);
+    assert(space.held.length > 0 && space.load.length > 0, 'it is held and pushed');
+    const near2 = GD.neighbourhood(space.grid, space.cells, 1.5);
+
+    const out = GD.optimise(
+      space.cells.length,
+      (scale, guess) =>
+        FE.solve(space.nodes, space.nodes.elements, space.Ke, {
+          fixed: FE.dofsOf(space.held),
+          forces: FE.spreadForce(space.load, [0, 0, -50], space.nodes.elements),
+          scale,
+          guess,
+          iterations: 600
+        }),
+      (u) => FE.elementEnergy(space.nodes.elements, space.Ke, u),
+      near2,
+      { fraction: 0.35, rounds: 20 }
+    );
+
+    assert(out.ok, out.reason || 'it ran');
+    near(GD.usage(out.density), 0.35, 0.005, 'it spent what it was allowed');
+    const first = out.history[0].compliance;
+    const last = out.history[out.history.length - 1].compliance;
+    assert(last < first * 0.5, `stiffer by more than half, ${(last / first).toFixed(3)} of what it was`);
+    // And it settled on a shape rather than a fog of half material.
+    assert(GD.crispness(out.density) > 0.6, `mostly solid or empty, ${(GD.crispness(out.density) * 100).toFixed(0)} per cent`);
+  });
+
+  test('generative: what comes out is a surface, closed, with the right amount in it', () => {
+    const space = designSpace(40, 10, 20, 3);
+    const density = new Float64Array(space.cells.length).fill(0);
+    // A slab through the middle, which has a surface anybody can count.
+    let kept = 0;
+    space.cells.forEach((cell, e) => {
+      const k = (cell / (space.grid.n[0] * space.grid.n[1])) | 0;
+      if (k === 1) {
+        density[e] = 1;
+        kept++;
+      }
+    });
+    assert(kept > 0, 'there is a slab to keep');
+
+    const shape = GD.surfaceOf(space.grid, space.cells, density);
+    assert(shape, 'it made a surface');
+    const health = MT.meshHealth(shape);
+    assert(health.openEdges === 0, `and it is closed, ${health.openEdges} open edges`);
+    assert(health.nonManifold === 0, 'with no edge carrying three faces');
+  });
+
+  test('generative: nothing kept is no surface, said rather than an empty mesh', () => {
+    const space = designSpace(40, 10, 20, 2);
+    const empty = new Float64Array(space.cells.length);
+    assert(GD.surfaceOf(space.grid, space.cells, empty) === null, 'it says there is nothing');
   });
 
   /* -------- animation -------- */

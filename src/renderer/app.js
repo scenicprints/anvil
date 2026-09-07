@@ -47,6 +47,7 @@ import { decalMesh } from './decal.js';
 import * as CF from './configure.js';
 import * as AN from './animation.js';
 import * as FE from './fea.js';
+import * as GD from './generative.js';
 import { meshHealth, sectionCurves } from './meshtools.js';
 import {
   newComponent,
@@ -1747,6 +1748,9 @@ async function runCommand(cmd) {
       break;
     case 'clearStress':
       clearStress();
+      break;
+    case 'generative':
+      cmdGenerative();
       break;
     case 'meshReduce':
       cmdMeshReduce();
@@ -6984,6 +6988,247 @@ function startInterference() {
 }
 
 /**
+ * Let the load decide the shape.
+ *
+ * The question it answers is the one nobody can answer by eye. Given where the
+ * part is held, where it is pushed, and how much material it may have, where
+ * should that material go? Not "is this bracket strong enough", which is what
+ * the stress solver answers, but "what should the bracket look like".
+ *
+ * It is set up exactly like a stress run, because it is one: the same held
+ * faces, the same pushed faces, the same load. What it adds is the allowance,
+ * and then it solves the part forty times over, each time taking material from
+ * where it is idle and giving it to where it is working.
+ *
+ * What comes out is a new body, blocky at the resolution it was worked out at,
+ * and it is meant to be worked on rather than printed. Smooth it, or trace it,
+ * or use it as the shape to model properly. That is how this is used everywhere
+ * it is used.
+ */
+function cmdGenerative() {
+  if (state.sketcher.active) finishSketch();
+  const setup = state.stressSetup;
+  if (!setup?.held?.length || !setup?.pushed?.length) {
+    setStatus('Set it up under Stress first: hold some faces, push some others.');
+    return;
+  }
+
+  const kept = state.generativeSetup || { fraction: '35', rounds: '30', through: '3', fine: '1.5' };
+  showInspector(
+    'Generative Design',
+    [
+      { key: 'fraction', label: 'How much material it may keep, per cent', type: 'expr', value: kept.fraction },
+      {
+        key: 'through',
+        label: 'Cubes through the thinnest part',
+        type: 'select',
+        value: kept.through,
+        options: [
+          ['2', '2, quick and blocky'],
+          ['3', '3'],
+          ['4', '4, slow'],
+          ['5', '5, very slow']
+        ]
+      },
+      { key: 'fine', label: 'Finest feature, in cubes', type: 'expr', value: kept.fine },
+      { key: 'rounds', label: 'How many rounds at most', type: 'expr', value: kept.rounds },
+      {
+        key: '__setup',
+        label: '',
+        type: 'note',
+        text: `${setup.held.length} held, ${setup.pushed.length} pushed, ${setup.force} newtons ${
+          { 'z-': 'down', 'z+': 'up', into: 'into the face' }[setup.direction] || setup.direction
+        }.`
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'It solves the part once per round, so this takes a while. What comes out is blocky at the resolution it was worked out at, and it is a shape to work from rather than a part to print.'
+      }
+    ],
+    async (v) => {
+      state.generativeSetup = { ...v };
+      await runGenerative({ ...setup, ...v });
+    }
+  );
+}
+
+async function runGenerative(setup) {
+  const body = (state.result?.bodies || []).find(
+    (b) => b.solid && b.id === setup.held[0].body
+  );
+  const record = (state.records || []).find((r) => r.id === body?.id);
+  if (!record?.topology) {
+    setStatus('That body is not here any more.');
+    return;
+  }
+
+  const scope = resolveParameters(state.doc.parameters);
+  const through = Math.round(safeEval(setup.through, scope, 3));
+  const fraction = Math.max(5, Math.min(90, safeEval(setup.fraction, scope, 35))) / 100;
+  const rounds = Math.max(5, Math.min(200, Math.round(safeEval(setup.rounds, scope, 30))));
+  const fine = Math.max(1, safeEval(setup.fine, scope, 1.5));
+
+  setStatus('Cutting the design space into cubes...');
+  await new Promise((r) => setTimeout(r, 0));
+
+  const grid = FE.voxelise(record.mesh, { through });
+  if (!grid) {
+    setStatus('That body could not be cut into cubes.');
+    return;
+  }
+  const nodes = FE.nodesOf(grid);
+  const mats = state.doc.materials || {};
+  const material = FE.stiffnessOf(mats.byBody?.[body.id] || mats.default || 'pla');
+  const Ke = FE.hexStiffness(material.modulus, material.poisson, grid.size);
+
+  // Which cell each element sits in, in the order the elements were made, which
+  // is what lets a reading be blurred with its neighbours.
+  const cells = [];
+  for (let k = 0; k < grid.n[2]; k++) {
+    for (let j = 0; j < grid.n[1]; j++) {
+      for (let i = 0; i < grid.n[0]; i++) {
+        if (grid.inside[grid.at(i, j, k)]) cells.push((k * grid.n[1] + j) * grid.n[0] + i);
+      }
+    }
+  }
+
+  const held = stressNodesFor(setup.held, record, nodes, grid);
+  const pushed = stressNodesFor(setup.pushed, record, nodes, grid);
+  if (!held.length || !pushed.length) {
+    setStatus('The grid is too coarse to land on those faces. Try more cubes.');
+    return;
+  }
+
+  const magnitude = safeEval(setup.force, scope, 100);
+  const dir = stressDirection(setup, record);
+  const forces = FE.spreadForce(pushed, dir.map((v) => v * magnitude), nodes.elements);
+  const fixed = FE.dofsOf(held);
+
+  // The material carrying the load in and out has to stay: taking away the
+  // face that is bolted down solves a different problem.
+  const locked = new Uint8Array(cells.length);
+  lockAround(nodes, cells, grid, [...held, ...pushed], locked);
+
+  setStatus(`Working, ${cells.length} cubes, up to ${rounds} rounds...`);
+  await new Promise((r) => setTimeout(r, 0));
+
+  const near = GD.neighbourhood(grid, cells, fine);
+  const t0 = performance.now();
+  let last = null;
+  const out = GD.optimise(
+    cells.length,
+    (scale, guess) =>
+      FE.solve(nodes, nodes.elements, Ke, { fixed, forces, scale, guess, iterations: 800 }),
+    (u) => FE.elementEnergy(nodes.elements, Ke, u),
+    near,
+    {
+      fraction,
+      rounds,
+      locked,
+      onRound: (r) => {
+        last = r;
+        setStatus(
+          `Round ${r.round} of ${rounds}, giving ${r.compliance.toExponential(2)}, still moving by ${r.change.toFixed(3)}.`
+        );
+      }
+    }
+  );
+  if (!out.ok) {
+    setStatus(out.reason);
+    return;
+  }
+
+  const shape = GD.surfaceOf(grid, cells, out.density, 0.5);
+  if (!shape) {
+    setStatus('Nothing was left. Allow it more material.');
+    return;
+  }
+
+  pushUndo('generative design');
+  const key = uid('mesh');
+  state.doc.meshData[key] = {
+    verts: Array.from(shape.vertProperties),
+    tris: Array.from(shape.triVerts)
+  };
+  state.doc.features.push({
+    id: uid('f'),
+    type: 'insertMesh',
+    data: key,
+    label: `${body.name} generated`,
+    scale: '1',
+    at: [0, 0, 0]
+  });
+  state.dirty = true;
+  rebuildAll();
+
+  const first = out.history[0].compliance;
+  const final = out.history[out.history.length - 1].compliance;
+  const took = Math.round((performance.now() - t0) / 100) / 10;
+  setStatus(
+    `${Math.round(GD.usage(out.density) * 100)} in a hundred of the space kept, ` +
+      `${(first / final).toFixed(1)} times stiffer than spreading the same material evenly. ` +
+      `${out.rounds} rounds, ${took} s. It is blocky on purpose: smooth it on the Mesh tab.`
+  );
+}
+
+/** Lock the cubes around a set of nodes, so a fixture is never optimised away. */
+function lockAround(nodes, cells, grid, list, locked) {
+  const [nx, ny] = grid.n;
+  const index = new Map();
+  cells.forEach((cell, e) => index.set(cell, e));
+  for (const n of list) {
+    const i = Math.floor((nodes.xyz[n * 3] - grid.origin[0]) / grid.size);
+    const j = Math.floor((nodes.xyz[n * 3 + 1] - grid.origin[1]) / grid.size);
+    const k = Math.floor((nodes.xyz[n * 3 + 2] - grid.origin[2]) / grid.size);
+    for (let dk = -1; dk <= 0; dk++) {
+      for (let dj = -1; dj <= 0; dj++) {
+        for (let di = -1; di <= 0; di++) {
+          const e = index.get((k + dk) * nx * ny + (j + dj) * nx + (i + di));
+          if (e !== undefined) locked[e] = 1;
+        }
+      }
+    }
+  }
+}
+
+/** The nodes a set of held or pushed faces comes to, on a given grid. */
+function stressNodesFor(refs, record, nodes, grid) {
+  const seen = new Set();
+  for (const r of refs) {
+    const [face] = resolveFaceRefs(record.topology, [r.face]);
+    if (!face) continue;
+    for (const n of FE.nodesNear(
+      nodes,
+      { origin: face.centre, normal: face.normal },
+      grid.size * 0.6
+    )) {
+      if (withinFace(nodes, n, face, grid.size)) seen.add(n);
+    }
+  }
+  return [...seen];
+}
+
+/** Which way a stress or generative setup pushes. */
+function stressDirection(setup, record) {
+  if (setup.direction === 'into') {
+    const [face] = resolveFaceRefs(record.topology, [setup.pushed[0].face]);
+    if (face) return face.normal.map((v) => -v);
+  }
+  return (
+    {
+      'z-': [0, 0, -1],
+      'z+': [0, 0, 1],
+      'x+': [1, 0, 0],
+      'x-': [-1, 0, 0],
+      'y+': [0, 1, 0],
+      'y-': [0, -1, 0]
+    }[setup.direction] || [0, 0, -1]
+  );
+}
+
+/**
  * What happens to a part when it is pushed.
  *
  * A real finite element solve, not a rule of thumb. What it needs from the
@@ -7167,56 +7412,15 @@ async function runStress(setup) {
   const material = FE.stiffnessOf(mats.byBody?.[body.id] || mats.default || 'pla');
   const Ke = FE.hexStiffness(material.modulus, material.poisson, grid.size);
 
-  const facesOf = (refs) => {
-    const out = [];
-    for (const r of refs) {
-      const [face] = resolveFaceRefs(record.topology, [r.face]);
-      if (face) out.push(face);
-    }
-    return out;
-  };
-  const nodesOnFaces = (faces) => {
-    const seen = new Set();
-    for (const face of faces) {
-      for (const n of FE.nodesNear(
-        nodes,
-        { origin: face.centre, normal: face.normal },
-        grid.size * 0.6
-      )) {
-        // Only the part of that plane the face actually covers, or holding one
-        // end of a part would hold everything else that happens to be level
-        // with it.
-        if (withinFace(nodes, n, face, grid.size)) seen.add(n);
-      }
-    }
-    return [...seen];
-  };
-
-  const heldFaces = facesOf(setup.held);
-  const pushedFaces = facesOf(setup.pushed);
-  if (!heldFaces.length || !pushedFaces.length) {
-    setStatus('The faces this was set up on are not on the model any more.');
-    return;
-  }
-  const held = nodesOnFaces(heldFaces);
-  const pushed = nodesOnFaces(pushedFaces);
+  const held = stressNodesFor(setup.held, record, nodes, grid);
+  const pushed = stressNodesFor(setup.pushed, record, nodes, grid);
   if (!held.length || !pushed.length) {
     setStatus('The grid is too coarse to land on those faces. Try more cubes.');
     return;
   }
 
   const magnitude = safeEval(setup.force, scope, 100);
-  const dir =
-    setup.direction === 'into'
-      ? pushedFaces[0].normal.map((v) => -v)
-      : {
-          'z-': [0, 0, -1],
-          'z+': [0, 0, 1],
-          'x+': [1, 0, 0],
-          'x-': [-1, 0, 0],
-          'y+': [0, 1, 0],
-          'y-': [0, -1, 0]
-        }[setup.direction] || [0, 0, -1];
+  const dir = stressDirection(setup, record);
 
   setStatus(`Solving, ${nodes.count * 3} unknowns...`);
   await new Promise((r) => setTimeout(r, 0));

@@ -8,9 +8,14 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.22.0**. 507 tests. Batches 11 to 20b have shipped, and
-three of the four workspaces in Batch 21: **Render, Animation and Simulation**.
-What is left is **Generative Design**.
+Current version: **2.23.0**. 516 tests.
+
+**Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
+workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
+
+What is left is not on this list: it is whatever the next thing turns out to be.
+The sections below are kept as the record of what was built and, more usefully,
+of what was learned building it.
 
 ---
 
@@ -1620,10 +1625,24 @@ Four things in it are load-bearing, and three of them were bugs first:
    in bending has no stress in it, so a centre reading is zero for a beam at
    yield.
 
-**Generative Design** is what is left. It means running many solves and picking,
-so it could not have started before this and is a multiple of it. The grid this
-uses is exactly the one SIMP topology optimisation wants, which is the reason to
-have built it this way.
+**Generative Design shipped in v2.23.0.** Topology optimisation on the same grid
+the stress solver uses, which is the reason it was built that way. `generative.js`
+holds it, and it never has to know how a part is solved: the solve is handed in.
+
+Three things in it, and two were bugs first:
+
+1. **The bisection is on the logarithm, and its bracket comes from the data.**
+   How hard to push material about depends on how much energy is in the part,
+   which varies by many powers of ten between problems. Bisected the ordinary
+   way between fixed bounds, the search spends every step in the top decade and
+   never reaches the bottom ones, and the answer empties the whole part.
+2. **The sensitivity is blurred before it is acted on**, or the answer becomes a
+   checkerboard, which is not a shape.
+3. **The solve is warm started from the previous round.** The shape barely
+   changes from one round to the next, so the last answer is nearly this one.
+
+Material at the fixtures and under the load is locked solid. Optimising away the
+face that is bolted down solves a different problem.
 
 **Not scheduled, deliberately:** the twelve library and cloud backed commands
 listed with the inventory, and everything in section 6 of it.

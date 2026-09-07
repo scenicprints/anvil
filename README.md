@@ -762,6 +762,38 @@ And one run at one resolution is not a number to design to. Two runs at
 different resolutions are: when the answer stops moving, that is the answer. The
 panel reports the resolution it used so that comparison can actually be made.
 
+**Generative Design** answers the question nobody can answer by eye: given where
+the part is held, where it is pushed, and how much material it may have, where
+should that material go? Not "is this bracket strong enough", which is what
+Stress answers, but "what should the bracket look like".
+
+It is set up as a stress problem, because it is one, and adds an allowance. Then
+it solves the part thirty or forty times over, each round taking material from
+where it is idle and giving it to where it is working. Two details in that are
+not obvious and both are necessary.
+
+Material is a dial, not a switch: an element is somewhere between nothing and
+solid, and its stiffness is its share cubed. Cubing is what makes half-solid
+material a bad deal, costing half the budget for an eighth of the stiffness, so
+the answer settles on shapes that are mostly solid or mostly empty rather than a
+fog of half material everywhere.
+
+And the reading has to be blurred before it is acted on. Acted on directly the
+answer breaks into a checkerboard of alternating solid and empty cells, which is
+not a shape, it is an artefact of the elements, and it looks stiffer to the
+maths than it is. Averaging each element's reading with its neighbours removes
+it, and sets the finest feature the answer is allowed to have, which is exactly
+what somebody printing it wants to control.
+
+The material at the fixtures and under the load is held solid, because taking
+away the face that is bolted down solves a different problem.
+
+What comes out is a new mesh body, blocky at the resolution it was worked out
+at, and it is meant to be worked on rather than printed: smooth it, trace it, or
+use it as the shape to model properly. The status line says how much of the
+allowance it spent and how many times stiffer the result is than the same
+material spread evenly, which is the number that says whether it did anything.
+
 ## Pictures and taking things apart
 
 **Render** makes a still of the model that is better than the screen can draw in
@@ -1471,7 +1503,7 @@ model file can never execute anything.
 npm test
 ```
 
-507 tests in a hidden window, checking measured quantities: volumes against
+516 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1505,7 +1537,10 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-stress.js` builds a bar, holds one end, pushes the other, and compares
+drilled plate. `demo-generative.js` sets up the case every topology optimisation paper opens
+with, a design space held at one end and pushed at the far bottom corner, and
+checks it spent its allowance and came out several times stiffer than the same
+material spread evenly. `demo-stress.js` builds a bar, holds one end, pushes the other, and compares
 the deflection and the stress against the beam formulae, then runs it again
 finer to show the answer has settled. `demo-render.js` renders a plate, checks the picture is the size asked for and
 holds a model rather than an empty frame, that a transparent background really
