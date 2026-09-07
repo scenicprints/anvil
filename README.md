@@ -648,6 +648,28 @@ Where blends run into each other there is no flat between them, so they are one
 continuous surface and are reported as one. Claiming twelve fillets on a fully
 rounded box would mean inventing boundaries the geometry does not have.
 
+**Insert Model** reads STEP as well as mesh formats, and STEP is the one that
+changes what an import is worth. An STL is triangles somebody else chose, so an
+imported model can only ever be a shape. A STEP file carries the surfaces
+themselves: this face is a plane, that one is a cylinder of radius five about
+that axis. A part that arrives that way was never facetted, so it can be cut
+to whatever tolerance you ask for rather than to whatever the exporter picked.
+
+The reading is in two halves that know nothing about each other. `stepfile.js`
+is the Part 21 grammar and nothing else: a tokeniser and an entity graph, with
+strings, enumerations, references, complex instances and the escape sequences
+that carry characters the file's own encoding cannot. `stepread.js` is the
+geometry, and it works the same way for every surface: take the face's boundary,
+map it into the surface's own two parameters, triangulate it there as an
+ordinary polygon with holes, and lift it back out. Doing it in parameter space
+is what lets one piece of code fill a face whether it is flat, cylindrical,
+conical, spherical or toroidal. Only the mapping differs.
+
+**What it does not read yet is B-splines**, which are the other half of a real
+STEP file. A face on one is counted and named rather than skipped in silence,
+and the import says so: a part quietly missing a face is a part you must not
+print.
+
 **Insert Mesh** reads STL, binary or ASCII, OBJ, and 3MF. The 3MF is unzipped
 with the browser's own inflate rather than a bundled one, since a 3MF is a zip of
 XML and `DecompressionStream` is already here. **Tessellate** goes the other way,
@@ -979,7 +1001,7 @@ model file can never execute anything.
 npm test
 ```
 
-344 tests in a hidden window, checking measured quantities: volumes against
+348 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1009,7 +1031,8 @@ a rigid group and a motion link. `demo-inspect.js` shells a box, weighs it, chec
 through its wall, colours its draft and cuts it open, `demo-project.js` draws a
 tangent arc, projects a face both linked and as a
 copy, and sections a body, checking that the linked ones move when the model
-does, `demo-recognise.js` drills a plate, reads it back as four holes in two sizes,
+does, `demo-step.js` writes a STEP file entity by entity, reads it back, and checks
+the solid it makes measures exactly what the file described. `demo-recognise.js` drills a plate, reads it back as four holes in two sizes,
 clicks a size to select it, then exports the same body to STL and reads it again
 with no history at all to check it says the same thing. `demo-pull.js` clicks a face, drags the arrow that appears, checks the body grew
 while the drag was happening, types an exact size over what was dragged to, and

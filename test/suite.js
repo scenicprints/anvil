@@ -78,6 +78,8 @@ import {
   buildEdges
 } from '../src/renderer/meshutil.js';
 import * as RC from '../src/renderer/recognise.js';
+import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
+import { readSTEP } from '../src/renderer/stepread.js';
 import * as SH from '../src/renderer/sheet.js';
 import * as SM from '../src/renderer/sheetmetal.js';
 import * as MT from '../src/renderer/meshtools.js';
@@ -6429,6 +6431,298 @@ async function run() {
     });
     return part;
   }
+
+  /* -------- STEP -------- */
+
+  /**
+   * A valid STEP file for an axis aligned box, written out entity by entity.
+   *
+   * Generated rather than pasted so the numbers in the assertions come from the
+   * same place as the geometry: a box of 40 by 30 by 20 has to read back as
+   * 24000, and if it does not, one of the two is wrong in a way worth finding.
+   */
+  function stepBox(w, d, h) {
+    const lines = [];
+    let n = 0;
+    const put = (text) => {
+      n += 1;
+      lines.push(`#${n}=${text};`);
+      return n;
+    };
+    const pt = (x, y, z) => put(`CARTESIAN_POINT('',(${x},${y},${z}))`);
+    const dir = (x, y, z) => put(`DIRECTION('',(${x},${y},${z}))`);
+
+    const hx = w / 2;
+    const hy = d / 2;
+    const hz = h / 2;
+    const corner = {};
+    for (const sx of [-1, 1])
+      for (const sy of [-1, 1])
+        for (const sz of [-1, 1])
+          corner[`${sx},${sy},${sz}`] = pt(sx * hx, sy * hy, sz * hz);
+
+    const vert = {};
+    for (const k of Object.keys(corner)) vert[k] = put(`VERTEX_POINT('',#${corner[k]})`);
+
+    const faces = [];
+    // Each face: the outward normal, the in-plane x, and its four corners in
+    // order round the ring.
+    const specs = [
+      { nrm: [1, 0, 0], x: [0, 1, 0], ring: ['1,-1,-1', '1,1,-1', '1,1,1', '1,-1,1'] },
+      { nrm: [-1, 0, 0], x: [0, 0, 1], ring: ['-1,-1,-1', '-1,-1,1', '-1,1,1', '-1,1,-1'] },
+      { nrm: [0, 1, 0], x: [0, 0, 1], ring: ['-1,1,-1', '-1,1,1', '1,1,1', '1,1,-1'] },
+      { nrm: [0, -1, 0], x: [1, 0, 0], ring: ['-1,-1,-1', '1,-1,-1', '1,-1,1', '-1,-1,1'] },
+      { nrm: [0, 0, 1], x: [1, 0, 0], ring: ['-1,-1,1', '1,-1,1', '1,1,1', '-1,1,1'] },
+      { nrm: [0, 0, -1], x: [0, 1, 0], ring: ['-1,-1,-1', '-1,1,-1', '1,1,-1', '1,-1,-1'] }
+    ];
+
+    for (const f of specs) {
+      const o = pt(f.nrm[0] * hx, f.nrm[1] * hy, f.nrm[2] * hz);
+      const z = dir(...f.nrm);
+      const xd = dir(...f.x);
+      const place = put(`AXIS2_PLACEMENT_3D('',#${o},#${z},#${xd})`);
+      const plane = put(`PLANE('',#${place})`);
+
+      const oriented = [];
+      for (let i = 0; i < f.ring.length; i++) {
+        const a = vert[f.ring[i]];
+        const b = vert[f.ring[(i + 1) % f.ring.length]];
+        const lp = pt(0, 0, 0);
+        const ld = dir(1, 0, 0);
+        const vec = put(`VECTOR('',#${ld},1.)`);
+        const line = put(`LINE('',#${lp},#${vec})`);
+        const edge = put(`EDGE_CURVE('',#${a},#${b},#${line},.T.)`);
+        oriented.push(put(`ORIENTED_EDGE('',*,*,#${edge},.T.)`));
+      }
+      const loop = put(`EDGE_LOOP('',(${oriented.map((i) => `#${i}`).join(',')}))`);
+      const bound = put(`FACE_OUTER_BOUND('',#${loop},.T.)`);
+      faces.push(put(`ADVANCED_FACE('',(#${bound}),#${plane},.T.)`));
+    }
+
+    const shell = put(`CLOSED_SHELL('',(${faces.map((i) => `#${i}`).join(',')}))`);
+    put(`MANIFOLD_SOLID_BREP('box',#${shell})`);
+
+    return [
+      'ISO-10303-21;',
+      'HEADER;',
+      "FILE_DESCRIPTION((''),'2;1');",
+      "FILE_NAME('box.step','2026-09-06T00:00:00',(''),(''),'','','');",
+      "FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));",
+      'ENDSEC;',
+      'DATA;',
+      ...lines,
+      'ENDSEC;',
+      'END-ISO-10303-21;'
+    ].join('\n');
+  }
+
+  test('step: the parser reads the shapes the grammar allows', () => {
+    const text = [
+      'ISO-10303-21;',
+      'HEADER;',
+      "FILE_NAME('a''b.step','',(''),(''),'','','');",
+      'ENDSEC;',
+      'DATA;',
+      "#1=CARTESIAN_POINT('origin',(0.,1.5,-2.));",
+      '/* a comment, with a ) and a , in it */',
+      "#2=DIRECTION('',(0.,0.,1.));",
+      '#3=AXIS2_PLACEMENT_3D($,#1,#2,*);',
+      "#4=ADVANCED_FACE('',(#3),#1,.F.);",
+      '#5=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#1)));',
+      'ENDSEC;',
+      'END-ISO-10303-21;'
+    ].join('\n');
+
+    const step = parseSTEP(text);
+    assert(step.instances.size === 5, `five instances, got ${step.instances.size}`);
+
+    const p = step.instances.get(1);
+    assert(p.type === 'CARTESIAN_POINT', p.type);
+    assert(p.args[0] === 'origin', 'the name is a string');
+    near(p.args[1][1], 1.5, 1e-9, 'and the coordinates are numbers');
+    near(p.args[1][2], -2, 1e-9, 'negative ones included');
+
+    const a = step.instances.get(3);
+    assert(a.args[0] === UNSET, '$ is absent, not the string "$"');
+    assert(a.args[1] instanceof Ref && a.args[1].id === 1, 'a reference resolves by id');
+    assert(step.get(a.args[1]).type === 'CARTESIAN_POINT', 'and points at the right thing');
+
+    const f = step.instances.get(4);
+    assert(f.args[3] instanceof Enum && f.args[3].name === 'F', 'an enumeration is its own kind');
+    assert(Array.isArray(f.args[1]) && f.args[1][0] instanceof Ref, 'a list of references');
+
+    // A complex instance is several types at once, and each is findable.
+    assert(step.all('GLOBAL_UNIT_ASSIGNED_CONTEXT').length === 1, 'the complex instance is indexed');
+    assert(step.all('GEOMETRIC_REPRESENTATION_CONTEXT').length === 1, 'under each of its types');
+
+    // The comment did not eat the entity after it.
+    assert(step.instances.get(2).type === 'DIRECTION', 'the comment was skipped whole');
+
+    // A doubled quote inside a string is one quote, not the end of it.
+    const head = stepHeader(text);
+    assert(head.FILE_NAME[0] === "a'b.step", `unescaped to ${head.FILE_NAME[0]}`);
+  });
+
+  test('step: a box reads back at the size it was written', () => {
+    const out = readSTEP(stepBox(40, 30, 20));
+    assert(out.bodies.length === 1, `one solid, got ${out.bodies.length}`);
+    assert(out.faces === 6, `six faces, got ${out.faces}`);
+    assert(out.unreadFaces === 0, `all six understood, ${out.unreadFaces} were not`);
+
+    const body = out.bodies[0];
+    {
+      const vp = body.mesh.vertProperties;
+      const bad = [];
+      for (let i = 0; i < vp.length; i++) if (!Number.isFinite(vp[i])) bad.push(i);
+      const tv = body.mesh.triVerts;
+      let maxIdx = -1;
+      for (let i = 0; i < tv.length; i++) maxIdx = Math.max(maxIdx, tv[i]);
+      assert(
+        bad.length === 0 && maxIdx < vp.length / 3,
+        `verts=${vp.length / 3} tris=${tv.length / 3} maxIdx=${maxIdx} nonFinite=${bad.length} ` +
+          `first=${[...vp.slice(0, 9)].map((n) => Number(n.toFixed(2)))}`
+      );
+    }
+    assert(body.closed, 'and the shell is closed');
+    assert(body.mesh.triVerts.length / 3 === 12, `two triangles a face, got ${body.mesh.triVerts.length / 3}`);
+
+    // The measurement that matters: it is the box it said it was.
+    const scope = new K.Scope();
+    let solid;
+    try {
+      solid = K.ofMesh(body.mesh.vertProperties, body.mesh.triVerts, scope);
+    } catch (err) {
+      const vp = body.mesh.vertProperties;
+      const tv = body.mesh.triVerts;
+      let bad = -1;
+      for (let i = 0; i < vp.length; i++) if (!Number.isFinite(vp[i])) { bad = i; break; }
+      assert(false, `${err.message} :: verts=${vp.length / 3} tris=${tv.length / 3} ` +
+        `firstBad=${bad} sample=${[...vp.slice(0, 9)]} tri0=${[...tv.slice(0, 3)]}`);
+    }
+    assert(K.status(solid) === 'NoError', `a real solid, got ${K.status(solid)}`);
+    near(solid.volume(), 40 * 30 * 20, 1e-6, 'forty by thirty by twenty');
+    assert(solid.genus() === 0, 'and a plain one');
+
+    // Facing outwards, not inwards: a solid built inside out has negative
+    // volume, and manifold would have told us, but the faces are worth
+    // checking directly too.
+    const topo = buildTopology(K.meshData(solid));
+    assert(topo.faces.length === 6, `six faces after the round trip, got ${topo.faces.length}`);
+    scope.dispose();
+  });
+
+  test('step: a cylindrical face lands on its own cylinder', () => {
+    // Half a pipe: one face on a cylindrical surface, bounded by two straight
+    // edges and two arcs. A full revolution has a seam and is its own problem;
+    // this is the mapping itself, which is what a curved face turns on.
+    const r = 10;
+    const hHalf = 15;
+    const lines = [];
+    let n = 0;
+    const put = (t) => {
+      n += 1;
+      lines.push(`#${n}=${t};`);
+      return n;
+    };
+    const pt = (x, y, z) => put(`CARTESIAN_POINT('',(${x},${y},${z}))`);
+    const dir = (x, y, z) => put(`DIRECTION('',(${x},${y},${z}))`);
+
+    const axisO = pt(0, 0, 0);
+    const axisZ = dir(0, 0, 1);
+    const axisX = dir(1, 0, 0);
+    const place = put(`AXIS2_PLACEMENT_3D('',#${axisO},#${axisZ},#${axisX})`);
+    const surf = put(`CYLINDRICAL_SURFACE('',#${place},${r}.)`);
+
+    const v = (x, y, z) => put(`VERTEX_POINT('',#${pt(x, y, z)})`);
+    const a0 = v(r, 0, -hHalf);
+    const a1 = v(-r, 0, -hHalf);
+    const b1 = v(-r, 0, hHalf);
+    const b0 = v(r, 0, hHalf);
+
+    const circAt = (z) => {
+      const o = pt(0, 0, z);
+      const zz = dir(0, 0, 1);
+      const xx = dir(1, 0, 0);
+      const pl = put(`AXIS2_PLACEMENT_3D('',#${o},#${zz},#${xx})`);
+      return put(`CIRCLE('',#${pl},${r}.)`);
+    };
+    const lineThrough = () => {
+      const o = pt(0, 0, 0);
+      const d0 = dir(0, 0, 1);
+      const vec = put(`VECTOR('',#${d0},1.)`);
+      return put(`LINE('',#${o},#${vec})`);
+    };
+
+    const eBottom = put(`EDGE_CURVE('',#${a0},#${a1},#${circAt(-hHalf)},.T.)`);
+    const eLeft = put(`EDGE_CURVE('',#${a1},#${b1},#${lineThrough()},.T.)`);
+    const eTop = put(`EDGE_CURVE('',#${b1},#${b0},#${circAt(hHalf)},.T.)`);
+    const eRight = put(`EDGE_CURVE('',#${b0},#${a0},#${lineThrough()},.T.)`);
+
+    const oe = [eBottom, eLeft, eTop, eRight].map((e) =>
+      put(`ORIENTED_EDGE('',*,*,#${e},.T.)`)
+    );
+    const loop = put(`EDGE_LOOP('',(${oe.map((i) => `#${i}`).join(',')}))`);
+    const bound = put(`FACE_OUTER_BOUND('',#${loop},.T.)`);
+    const face = put(`ADVANCED_FACE('',(#${bound}),#${surf},.T.)`);
+    put(`OPEN_SHELL('',(#${face}))`);
+
+    const text = ['ISO-10303-21;', 'DATA;', ...lines, 'ENDSEC;', 'END-ISO-10303-21;'].join('\n');
+    const out = readSTEP(text, { tolerance: 0.02 });
+
+    assert(out.bodies.length === 1, `one patch, got ${out.bodies.length}`);
+    assert(out.unreadFaces === 0, 'the cylindrical surface was understood');
+
+    const mesh = out.bodies[0].mesh;
+    const count = mesh.vertProperties.length / 3;
+    assert(count > 20, `arcs were walked, not chorded: ${count} points`);
+
+    // Every point sits on the cylinder it was defined on, which is the whole
+    // claim a parametric surface makes.
+    let worst = 0;
+    let zLo = Infinity;
+    let zHi = -Infinity;
+    for (let i = 0; i < count; i++) {
+      const x = mesh.vertProperties[i * 3];
+      const y = mesh.vertProperties[i * 3 + 1];
+      const z = mesh.vertProperties[i * 3 + 2];
+      worst = Math.max(worst, Math.abs(Math.hypot(x, y) - r));
+      zLo = Math.min(zLo, z);
+      zHi = Math.max(zHi, z);
+    }
+    near(worst, 0, 1e-4, 'every point is exactly one radius from the axis');
+    near(zLo, -hHalf, 1e-4, 'and it runs the height it was given');
+    near(zHi, hHalf, 1e-4, 'at both ends');
+  });
+
+  test('step: a surface it cannot read is counted, not lost', () => {
+    // A face on a B-spline. Reading it is a later job; pretending the part is
+    // complete without it is how something gets printed with a hole in it.
+    const text = [
+      'ISO-10303-21;',
+      'DATA;',
+      "#1=CARTESIAN_POINT('',(0.,0.,0.));",
+      "#2=DIRECTION('',(0.,0.,1.));",
+      "#3=DIRECTION('',(1.,0.,0.));",
+      "#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);",
+      "#5=B_SPLINE_SURFACE_WITH_KNOTS('',3,3,((#1)),.UNSPECIFIED.,.F.,.F.,.F.,(4),(4),(0.),(1.),.UNSPECIFIED.);",
+      "#6=VERTEX_POINT('',#1);",
+      "#7=EDGE_LOOP('',());",
+      "#8=FACE_OUTER_BOUND('',#7,.T.);",
+      "#9=ADVANCED_FACE('',(#8),#5,.T.);",
+      "#10=CLOSED_SHELL('',(#9));",
+      'ENDSEC;',
+      'END-ISO-10303-21;'
+    ].join('\n');
+
+    const out = readSTEP(text);
+    assert(out.faces === 1, 'one face was seen');
+    assert(out.unreadFaces === 1, 'and it is reported as unread');
+    assert(
+      out.unread.includes('B_SPLINE_SURFACE_WITH_KNOTS'),
+      `naming the surface kind, got ${JSON.stringify(out.unread)}`
+    );
+    assert(out.bodies.length === 0, 'and nothing was invented in its place');
+  });
 
   /* -------- recognition -------- */
 

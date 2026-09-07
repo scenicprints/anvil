@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.9.0**. 344 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
+Current version: **2.10.0**. 348 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
 
 ---
 
@@ -1139,6 +1139,95 @@ face that goes all the way round, so bores fitted and fillets did not: a fillet
 is a quarter of a cylinder and its average sits out on the surface. Every fillet
 in the application had been coming back as an unrecognised curve. It is an
 algebraic circle fit now, which does not care how much of the arc it is given.
+
+### The import plan, decided 2026-09-06
+
+He asked for f3d, 3mf, step, obj and stl, and to be able to edit what comes in.
+Measured first, because the complaint was about Fusion and it was worth knowing
+whether Anvil shares it. A drilled, filleted plate, 7,584 triangles and 33
+faces, imported as STL and converted:
+
+| | triangles | faces |
+|---|---|---|
+| modelled here | 7,584 | 33 |
+| imported as STL | 7,584 | 33 |
+| after Convert Mesh | 5,948 | 19 |
+
+**Anvil cannot have Fusion's problem.** Fusion turns a mesh into a boundary
+representation and needs a face per triangle, which is where the assload comes
+from. This kernel is a mesh kernel, so converting hands it the triangles it
+already had, and the count went down. A mesh can also be cut against a solid
+directly, without converting at all: measured, it works.
+
+What the numbers did show is two problems of our own. Converting loses faces,
+33 down to 19, so there is less to point at afterwards than before. And
+decimating destroys them: 20 percent of the triangles gives 163 faces instead
+of 33, because every flat is chipped into fragments. Lighter currently means
+less editable, which is the same complaint one level down.
+
+So the order is by what makes an import editable, not by file format count.
+
+**Batch 11. STEP. Slices 1 and 2 shipped in v2.10.0**, which is the parser and
+every analytic surface. B-splines and assemblies remain.
+
+The one that changes the answer. A STEP file carries real
+surfaces, so a bracket arrives as six flats and two bores rather than as
+thousands of facets, and it is editable because it was never triangles.
+1. Part 21 parser: tokeniser, entity graph, forward references. Self contained
+   and testable on its own.
+2. Geometry: planes first, then cylinders, cones, spheres, tori. Faces with
+   bounds, tessellated into the kernel at a chosen tolerance.
+3. B-spline surfaces and trimmed curves.
+4. Assembly structure and colour.
+
+**Batch 12. The formats that already half work.**
+- 3MF carries colour, materials and a build hierarchy, all of which is thrown
+  away today. Read it into components and body colours.
+- OBJ carries groups and materials; make them face groups on arrival.
+- STL stays what it is, one lump of triangles, and that is honest.
+- **f3d is a Fusion archive with no public specification.** Investigate what is
+  actually inside one before promising anything. If it is a container we cannot
+  read, say so plainly rather than half read it.
+
+**Batch 13. Editable after import.**
+- Decimation that keeps its faces: preserve flats and feature edges while
+  collapsing, so lighter does not mean unselectable.
+- Drop the conversion step where it is only ceremony.
+- Refit analytic surfaces on a mesh: turn a facetted bore back into a true
+  cylinder. This is what makes an STL editable rather than merely usable, and
+  it is where the recognition work already points.
+
+### The Fusion gaps, from the audit
+
+Ordered as they would be felt, not as they appear in the menus.
+
+**Batch 14. The commands.** Untrim, Blend Curve, Hem, Lofted Flange, Mesh
+Stitch, Patch and Direct Edit, Boss, Snap Fit, Rest, Lip, Perpendicular Plane,
+Plane Through Two Edges, Point Through Two Edges, User Coordinate System,
+As-Built Joint, Isocurve Analysis.
+
+**Batch 15 and beyond. The workspaces he ruled in.** Render, Animation,
+Simulation, Generative Design. Each is a project rather than a batch. Cost
+Simulation and Generative Design in front of him before starting either.
+
+### What STEP taught
+
+- **Keep the grammar and the geometry apart.** `stepfile.js` knows what a Part
+  21 file is and nothing about what a cylinder means; `stepread.js` is the
+  other way round. Each is testable on its own, and the parser tests do not
+  need a solid kernel to run.
+- **Triangulate in the surface's own parameters, not in the world.** A
+  cylindrical face unrolled is a polygon, and so is a conical one, and so is a
+  flat one. One triangulator serves all of them and only the map back out
+  differs. Trying to do it in three dimensions would have meant a separate
+  routine per surface kind.
+- **Count what you cannot read.** A face on a B-spline is reported by name. A
+  part silently missing a face is a part that gets printed wrong.
+- **`earcut` here is not the usual one.** It takes rings of points and returns
+  index triples, where the common library takes flat coordinates and hole start
+  offsets. Called the wrong way it returned degenerate triangles rather than
+  throwing, and the only symptom was the kernel refusing the mesh with a
+  complaint about non-finite vertices, which was not the problem at all.
 
 ### Still to do here
 

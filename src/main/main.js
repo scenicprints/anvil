@@ -341,9 +341,13 @@ ipcMain.handle('import:binary', async (_e, kind) => {
   const filters =
     kind === 'image'
       ? [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp'] }]
-      : [{ name: 'Mesh', extensions: ['stl', 'obj', '3mf'] }];
+      : [
+          { name: 'Models', extensions: ['step', 'stp', 'stl', 'obj', '3mf'] },
+          { name: 'STEP', extensions: ['step', 'stp'] },
+          { name: 'Mesh', extensions: ['stl', 'obj', '3mf'] }
+        ];
   const res = await dialog.showOpenDialog(win, {
-    title: kind === 'image' ? 'Choose an image' : 'Insert Mesh',
+    title: kind === 'image' ? 'Choose an image' : 'Insert Model',
     filters,
     properties: ['openFile']
   });

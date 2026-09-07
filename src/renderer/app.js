@@ -37,6 +37,7 @@ import {
   uid
 } from './features.js';
 import { recognise } from './recognise.js';
+import { readSTEP } from './stepread.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
 import * as SM from './sheetmetal.js';
 import * as FM from './form.js';
@@ -10281,6 +10282,63 @@ function startMeshFeature(type, title, fields, extra = {}) {
  * feature, because nothing in the timeline can reproduce them: the file they
  * came from may not be there next time this is opened.
  */
+/**
+ * A STEP file, read as bodies.
+ *
+ * Every shell in the file becomes a body. A face the reader does not
+ * understand yet, which today means anything on a B-spline, is counted and
+ * said out loud rather than dropped: a part that is quietly missing a face is
+ * a part you must not print, and the count is what tells you whether what you
+ * have is usable.
+ */
+function insertSTEP(name, bytes) {
+  let out;
+  try {
+    out = readSTEP(new TextDecoder().decode(bytes));
+  } catch (err) {
+    setStatus(`Could not read that STEP file: ${err.message}`);
+    return;
+  }
+  if (!out.bodies.length) {
+    setStatus(
+      out.unread.length
+        ? `Nothing readable in that STEP file. It is built from ${out.unread.join(', ')}.`
+        : 'Nothing readable in that STEP file.'
+    );
+    return;
+  }
+
+  pushUndo('insert step');
+  let made = 0;
+  for (const body of out.bodies) {
+    const key = uid('m');
+    state.doc.meshData[key] = {
+      verts: Array.from(body.mesh.vertProperties),
+      tris: Array.from(body.mesh.triVerts)
+    };
+    insertFeature({
+      id: uid('f'),
+      type: 'insertMesh',
+      data: key,
+      label:
+        body.name ||
+        `${name.replace(/\.[^.]+$/, '')}${out.bodies.length > 1 ? ` ${made + 1}` : ''}`,
+      scale: '1',
+      at: [0, 0, 0]
+    });
+    made++;
+  }
+  state.dirty = true;
+  rebuildAll();
+
+  const missed = out.unreadFaces
+    ? `, ${out.unreadFaces} face${out.unreadFaces === 1 ? '' : 's'} not read (${out.unread.join(', ')})`
+    : '';
+  setStatus(
+    `${made} bod${made === 1 ? 'y' : 'ies'} from ${out.faces} face${out.faces === 1 ? '' : 's'}${missed}.`
+  );
+}
+
 async function cmdInsertMesh() {
   if (state.sketcher.active) finishSketch();
   const res = await window.anvil.importBinary('mesh');
@@ -10290,10 +10348,19 @@ async function cmdInsertMesh() {
   }
 
   const name = res.path.split(/[\\/]/).pop();
+  const bytes = res.bytes instanceof Uint8Array ? res.bytes : new Uint8Array(res.bytes);
+
+  // STEP is not a mesh format and does not go down the mesh path. It carries
+  // the surfaces themselves, so what arrives is a body built from planes and
+  // cylinders rather than from triangles somebody else chose for us.
+  if (/\.(step|stp)$/i.test(name)) {
+    insertSTEP(name, bytes);
+    return;
+  }
+
   const kind = meshReaderFor(name);
   let mesh;
   try {
-    const bytes = res.bytes instanceof Uint8Array ? res.bytes : new Uint8Array(res.bytes);
     if (kind === 'obj') mesh = parseOBJ(new TextDecoder().decode(bytes));
     else if (kind === '3mf') mesh = await parse3MF(bytes);
     else mesh = parseSTL(bytes);
