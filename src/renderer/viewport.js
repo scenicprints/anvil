@@ -782,6 +782,142 @@ export class Viewport {
 
   /* ---------------------------------------------------------------- */
 
+  /**
+   * Images laid on a plane, to trace over.
+   *
+   * Drawn behind everything by default and never pickable, which is the whole
+   * of what makes a canvas useful rather than in the way: it has to be visible
+   * under the sketch being drawn on top of it and it must never be what a click
+   * lands on.
+   *
+   * Each entry says where it goes and how big it really is. Turning pixels into
+   * millimetres is the caller's business; by the time it arrives here it is a
+   * rectangle in the world with a picture on it.
+   */
+  setCanvases(list) {
+    const seen = new Set();
+    if (!this._canvases) this._canvases = new Map();
+
+    for (const c of list || []) {
+      seen.add(c.id);
+      let entry = this._canvases.get(c.id);
+      if (!entry || entry.url !== c.url) {
+        if (entry) this._dropCanvas(entry);
+        const tex = new THREE.TextureLoader().load(c.url, () => this.invalidate());
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const mat = new THREE.MeshBasicMaterial({
+          map: tex,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          toneMapped: false
+        });
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+        // Never the thing a click lands on. A canvas is there to be drawn over.
+        mesh.userData.pickable = null;
+        mesh.raycast = () => {};
+        this.scene.add(mesh);
+        entry = { url: c.url, mesh, mat, tex };
+        this._canvases.set(c.id, entry);
+      }
+
+      entry.mat.opacity = c.opacity ?? 0.6;
+      // Behind the model means behind it whatever order things were added in,
+      // which is what the depth test decides rather than the render order.
+      entry.mat.depthTest = c.behind !== false;
+      entry.mesh.renderOrder = c.behind === false ? 6 : -1;
+      entry.mesh.scale.set(c.width, c.height, 1);
+      entry.mesh.position.set(c.origin[0], c.origin[1], c.origin[2]);
+      entry.mesh.setRotationFromMatrix(
+        new THREE.Matrix4().makeBasis(
+          new THREE.Vector3(...c.x),
+          new THREE.Vector3(...c.y),
+          new THREE.Vector3(...c.n)
+        )
+      );
+      entry.mesh.visible = c.visible !== false;
+    }
+
+    for (const [id, entry] of this._canvases) {
+      if (seen.has(id)) continue;
+      this._dropCanvas(entry);
+      this._canvases.delete(id);
+    }
+    this.invalidate();
+  }
+
+  _dropCanvas(entry) {
+    this.scene.remove(entry.mesh);
+    entry.mesh.geometry.dispose();
+    entry.mat.dispose();
+    entry.tex?.dispose();
+  }
+
+  /**
+   * Images lying on the surface of a part.
+   *
+   * The geometry arrives already cut to the shape of the image, so all that is
+   * needed here is a textured material on it. Drawn after the bodies and with
+   * nothing written to the depth buffer, because a decal sits a hair proud of
+   * the surface and must not fight with it.
+   */
+  setDecals(list) {
+    const seen = new Set();
+    if (!this._decals) this._decals = new Map();
+
+    for (const d of list || []) {
+      seen.add(d.id);
+      let entry = this._decals.get(d.id);
+      if (!entry || entry.url !== d.url) {
+        if (entry) this._dropDecal(entry);
+        const tex = new THREE.TextureLoader().load(d.url, () => this.invalidate());
+        tex.colorSpace = THREE.SRGBColorSpace;
+        // Clamped rather than repeated. The geometry already stops where the
+        // image does, so anything outside is a rounding error at the seam and
+        // repeating it would wrap the far edge of the picture into it.
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        const mat = new THREE.MeshBasicMaterial({
+          map: tex,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.FrontSide,
+          toneMapped: false
+        });
+        const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+        mesh.userData.pickable = null;
+        mesh.raycast = () => {};
+        mesh.renderOrder = 7;
+        this.scene.add(mesh);
+        entry = { url: d.url, mesh, mat, tex };
+        this._decals.set(d.id, entry);
+      }
+
+      const geom = entry.mesh.geometry;
+      geom.setAttribute('position', new THREE.BufferAttribute(d.mesh.vertProperties, 3));
+      geom.setAttribute('uv', new THREE.BufferAttribute(d.mesh.uv, 2));
+      geom.setIndex(new THREE.BufferAttribute(d.mesh.triVerts, 1));
+      geom.computeVertexNormals();
+      geom.computeBoundingSphere();
+      entry.mat.opacity = d.opacity ?? 1;
+      entry.mesh.visible = d.visible !== false;
+    }
+
+    for (const [id, entry] of this._decals) {
+      if (seen.has(id)) continue;
+      this._dropDecal(entry);
+      this._decals.delete(id);
+    }
+    this.invalidate();
+  }
+
+  _dropDecal(entry) {
+    this.scene.remove(entry.mesh);
+    entry.mesh.geometry.dispose();
+    entry.mat.dispose();
+    entry.tex?.dispose();
+  }
+
   setBodies(bodyRecords) {
     const seen = new Set();
 

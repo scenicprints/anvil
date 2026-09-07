@@ -43,6 +43,7 @@ import { readSTEP } from './stepread.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
 import * as SM from './sheetmetal.js';
 import * as FM from './form.js';
+import { decalMesh } from './decal.js';
 import { meshHealth, sectionCurves } from './meshtools.js';
 import {
   newComponent,
@@ -56,7 +57,7 @@ import { CONSTRUCTION_LABELS } from './construction.js';
 import { resolveParameters, evaluate, safeEval } from './expr.js';
 import { entityRuns, interiorPoint, pointInPolygon, tessellate, chainPath } from './profile.js';
 import { buildTopology, basisFor } from './topology.js';
-import { edgeReference, faceReference } from './edgefeature.js';
+import { edgeReference, faceReference, resolveFaceRefs } from './edgefeature.js';
 import { TEXT_FONTS } from './textoutline.js';
 import { parseSVG, parseDXF } from './vectorimport.js';
 import {
@@ -305,6 +306,8 @@ function rebuildAll() {
   if (previous) previous.dispose();
 
   state.vp.setBodies(records);
+  state.vp.setCanvases(placedCanvases());
+  state.vp.setDecals(placedDecals(records));
   state.vp.setSelection(state.selection.bodies);
   pruneSelection();
   refreshHighlight();
@@ -1669,6 +1672,21 @@ async function runCommand(cmd) {
     case 'exportFlatDXF':
       cmdExportFlatDXF();
       break;
+    case 'insertComponent':
+      cmdInsertFromFile(false);
+      break;
+    case 'insertDerive':
+      cmdInsertFromFile(true);
+      break;
+    case 'refreshDerived':
+      cmdRefreshDerived();
+      break;
+    case 'insertCanvas':
+      cmdInsertCanvas();
+      break;
+    case 'insertDecal':
+      cmdInsertDecal();
+      break;
     case 'insertMesh':
       cmdInsertMesh();
       break;
@@ -2335,6 +2353,9 @@ function migrate(data) {
   doc.imageData = doc.imageData || {};
   doc.appearance = doc.appearance || {};
   doc.flatExports = doc.flatExports || {};
+  doc.canvases = doc.canvases || {};
+  doc.decals = doc.decals || {};
+  doc.constraints = doc.constraints || [];
   doc.forms = doc.forms || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
   if (doc.rollback === undefined) doc.rollback = null;
@@ -2713,6 +2734,21 @@ function renderTree() {
       n.appendChild(eye);
     }
 
+    if (opts.remove) {
+      // A cross rather than a bin: this row is the only place some things can
+      // be got rid of, and a thing that cannot be removed is a thing nobody
+      // will risk adding.
+      const x = document.createElement('span');
+      x.className = 'eye';
+      x.textContent = '✕';
+      x.title = 'Remove';
+      x.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        opts.remove();
+      });
+      n.appendChild(x);
+    }
+
     if (opts.onClick) n.addEventListener('click', opts.onClick);
     if (opts.onDblClick) n.addEventListener('dblclick', opts.onDblClick);
     el.tree.appendChild(n);
@@ -2798,6 +2834,48 @@ function renderTree() {
       addNode(`${j.name}: ${child?.name || '?'} on ${parent?.name || '?'}`, {
         child: true,
         onClick: () => editJoint(j)
+      });
+    }
+  }
+
+  // Canvases and decals are neither bodies nor features, and they have to be
+  // somewhere: a picture laid on the model that cannot be switched off or
+  // thrown away is not a tool, it is a mess.
+  const canvases = Object.values(state.doc.canvases || {});
+  const decals = Object.values(state.doc.decals || {});
+  if (canvases.length || decals.length) {
+    addNode('Images', { head: true });
+    for (const c of canvases) {
+      addNode(`${c.name} (canvas)`, {
+        child: true,
+        eye: () => {
+          state.hiddenCanvases = state.hiddenCanvases || new Set();
+          if (state.hiddenCanvases.has(c.id)) state.hiddenCanvases.delete(c.id);
+          else state.hiddenCanvases.add(c.id);
+          rebuildAll();
+        },
+        visible: !state.hiddenCanvases?.has(c.id),
+        onClick: () => showCanvasPanel(c.id),
+        remove: () => {
+          pushUndo('remove canvas');
+          delete state.doc.imageData[c.image];
+          delete state.doc.canvases[c.id];
+          state.dirty = true;
+          rebuildAll();
+        }
+      });
+    }
+    for (const d of decals) {
+      addNode(`${d.name} (decal)`, {
+        child: true,
+        onClick: () => showDecalPanel(d.id),
+        remove: () => {
+          pushUndo('remove decal');
+          delete state.doc.imageData[d.image];
+          delete state.doc.decals[d.id];
+          state.dirty = true;
+          rebuildAll();
+        }
       });
     }
   }
@@ -5237,6 +5315,13 @@ const RIBBON_MENUS = {
     ['insertSvg', 'Insert SVG'],
     ['insertDxf', 'Insert DXF']
   ],
+  insertParts: [
+    ['insertComponent', 'Insert Component from a file'],
+    ['insertDerive', 'Insert Derive, kept linked'],
+    ['refreshDerived', 'Refresh what is derived'],
+    ['insertCanvas', 'Canvas, an image to trace'],
+    ['insertDecal', 'Decal, an image on a face']
+  ],
   selectMore: [
     ['selectGrow', 'Grow'],
     ['selectShrink', 'Shrink'],
@@ -6837,6 +6922,504 @@ function startInterference() {
     () => {}
   );
   setStatus(`${hits.length} overlap${hits.length === 1 ? '' : 's'} found.`);
+}
+
+/**
+ * An image laid on a face of the model.
+ *
+ * The face is remembered as a reference rather than as a number, so the decal
+ * follows the part when the model is rebuilt. Where it was when it was placed
+ * is kept as well, and used when the face has gone: a decal that vanishes
+ * because a fillet was added is worse than one sitting where it was left, and
+ * the tree says which of the two has happened.
+ */
+async function cmdInsertDecal() {
+  if (state.sketcher.active) finishSketch();
+  const pick = firstPickedFaceRef();
+  if (!pick) {
+    setStatus('Select the flat face to put it on first.');
+    return;
+  }
+  const frame = decalFrameFromSelection();
+  if (!frame) {
+    setStatus('That face is curved. A decal needs somewhere flat to look at.');
+    return;
+  }
+
+  const res = await window.anvil.importBinary('image');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+  let bitmap;
+  try {
+    bitmap = await imageOf(res.bytes);
+  } catch (err) {
+    setStatus(`Could not read that image: ${err.message}`);
+    return;
+  }
+
+  const key = uid('img');
+  state.doc.imageData[key] = { url: bitmap.url, width: bitmap.width, height: bitmap.height };
+  const id = uid('decal');
+  const across = 30;
+  state.doc.decals = state.doc.decals || {};
+  state.doc.decals[id] = {
+    id,
+    name: (res.path || 'Decal').split(/[\\/]/).pop(),
+    image: key,
+    face: pick,
+    frame,
+    width: across,
+    height: (across * bitmap.height) / bitmap.width,
+    x: 0,
+    y: 0,
+    turn: 0,
+    opacity: 1
+  };
+  state.dirty = true;
+  showDecalPanel(id);
+}
+
+/** The frame a decal projects along, captured off the face that was picked. */
+function decalFrameFromSelection() {
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const face = record?.topology?.faces[index];
+    if (!face?.planar) continue;
+    const basis = basisFor(face.normal);
+    // Standing off the face and looking back at it, which is what makes the
+    // projection direction point into the material.
+    return {
+      origin: [0, 1, 2].map((i) => face.centre[i] + face.normal[i] * 1),
+      x: basis.x,
+      y: basis.y,
+      n: face.normal.map((v) => -v)
+    };
+  }
+  return null;
+}
+
+/** The panel that sizes and places a decal. */
+function showDecalPanel(id) {
+  const decal = state.doc.decals?.[id];
+  if (!decal) return;
+  showInspector(
+    'Decal',
+    [
+      { key: 'width', label: 'How wide', type: 'expr', value: String(decal.width) },
+      { key: 'x', label: 'Across the face', type: 'expr', value: String(decal.x) },
+      { key: 'y', label: 'Up it', type: 'expr', value: String(decal.y) },
+      { key: 'turn', label: 'Turned, degrees', type: 'expr', value: String(decal.turn) },
+      { key: 'opacity', label: 'How solid, 0 to 1', type: 'expr', value: String(decal.opacity) },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'The triangles under it are really cut to the edge of the image, so it stops where the picture stops rather than where the mesh happens to.'
+      }
+    ],
+    (v) => {
+      const scope = resolveParameters(state.doc.parameters);
+      const width = Math.max(1e-3, safeEval(v.width, scope, decal.width));
+      const held = state.doc.imageData[decal.image];
+      pushUndo('decal');
+      Object.assign(decal, {
+        width,
+        height: held ? (width * held.height) / held.width : decal.height,
+        x: safeEval(v.x, scope, 0),
+        y: safeEval(v.y, scope, 0),
+        turn: safeEval(v.turn, scope, 0),
+        opacity: Math.max(0, Math.min(1, safeEval(v.opacity, scope, 1)))
+      });
+      state.dirty = true;
+      rebuildAll();
+      const on = placedDecals(state.records || []).find((d) => d.decalId === decal.id);
+      setStatus(
+        on
+          ? `${decal.name}, ${Math.round(on.coverage * 100)} in a hundred of it on the part.`
+          : `${decal.name} is not landing on anything. Move it, or make it smaller.`
+      );
+    }
+  );
+}
+
+/**
+ * Every decal, cut to the surface it lies on.
+ *
+ * Recomputed each rebuild rather than stored, because what it lies on is what
+ * changes. Storing the cut mesh would mean a decal that stayed the shape of a
+ * face that is no longer there.
+ */
+function placedDecals(records) {
+  const out = [];
+  for (const d of Object.values(state.doc.decals || {})) {
+    const held = state.doc.imageData?.[d.image];
+    if (!held?.url) continue;
+
+    // The face if it is still there, and where it was if it is not.
+    let frame = d.frame;
+    let target = null;
+    for (const record of records) {
+      if (!record.topology) continue;
+      const [face] = resolveFaceRefs(record.topology, [d.face]);
+      if (!face?.planar) continue;
+      const basis = basisFor(face.normal);
+      frame = {
+        origin: [0, 1, 2].map((i) => face.centre[i] + face.normal[i] * 1),
+        x: basis.x,
+        y: basis.y,
+        n: face.normal.map((v) => -v)
+      };
+      target = record;
+      break;
+    }
+    if (!frame) continue;
+
+    const t = ((d.turn || 0) * Math.PI) / 180;
+    const cos = Math.cos(t);
+    const sin = Math.sin(t);
+    const x = [0, 1, 2].map((i) => frame.x[i] * cos + frame.y[i] * sin);
+    const y = [0, 1, 2].map((i) => -frame.x[i] * sin + frame.y[i] * cos);
+    const origin = [0, 1, 2].map((i) => frame.origin[i] + x[i] * (d.x || 0) + y[i] * (d.y || 0));
+    const placed = { origin, x, y, n: frame.n };
+
+    // Against the body it was put on if that is known, and against everything
+    // otherwise, which is what makes a decal work across a joint between two
+    // bodies that meet.
+    const look = target ? [target] : records;
+    for (const record of look) {
+      if (!record.mesh) continue;
+      const cut = decalMesh(record.mesh, placed, {
+        width: d.width,
+        height: d.height,
+        offset: Math.max(0.01, (d.width || 30) * 0.0005)
+      });
+      if (!cut) continue;
+      out.push({
+        id: `${d.id}:${record.id}`,
+        decalId: d.id,
+        url: held.url,
+        mesh: cut,
+        coverage: cut.coverage,
+        opacity: d.opacity ?? 1,
+        visible: !state.hiddenBodies.has(record.id)
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every canvas, worked out into a rectangle in the world.
+ *
+ * The plane, the offsets and the turn are settings; what the viewport wants is
+ * a place and two directions. Doing that here keeps the drawing code from
+ * having to know what a construction plane is.
+ */
+function placedCanvases() {
+  const out = [];
+  const scope = resolveParameters(state.doc.parameters).scope;
+  for (const c of Object.values(state.doc.canvases || {})) {
+    const held = state.doc.imageData?.[c.image];
+    if (!held?.url) continue;
+    const plane = resolvePlane(c.plane || 'XY', scope, state.result?.construction);
+    if (!plane) continue;
+
+    const t = ((c.turn || 0) * Math.PI) / 180;
+    const cos = Math.cos(t);
+    const sin = Math.sin(t);
+    const x = [
+      plane.x[0] * cos + plane.y[0] * sin,
+      plane.x[1] * cos + plane.y[1] * sin,
+      plane.x[2] * cos + plane.y[2] * sin
+    ];
+    const y = [
+      -plane.x[0] * sin + plane.y[0] * cos,
+      -plane.x[1] * sin + plane.y[1] * cos,
+      -plane.x[2] * sin + plane.y[2] * cos
+    ];
+    const origin = [0, 1, 2].map(
+      (i) => plane.origin[i] + plane.x[i] * (c.x || 0) + plane.y[i] * (c.y || 0)
+    );
+    out.push({
+      id: c.id,
+      url: held.url,
+      width: c.width || 100,
+      height: c.height || 100,
+      opacity: c.opacity ?? 0.6,
+      behind: c.behind !== false,
+      visible: !state.hiddenCanvases?.has(c.id),
+      origin,
+      x,
+      y,
+      n: plane.n
+    });
+  }
+  return out;
+}
+
+/**
+ * Bodies out of another Anvil document, as a component of this one.
+ *
+ * What comes across is the shape, not the timeline, and that is on purpose.
+ * Replaying somebody else's features inside this document would mean two sets
+ * of parameters with the same names, two sets of sketches, and a rebuild that
+ * fails here because of an edit made over there. What is wanted from an
+ * inserted part is its shape.
+ *
+ * Derived is the same thing with the path remembered, so it can be read again.
+ * Linked and live are different words: this is linked, and it updates when it
+ * is told to, which is what Refresh is for.
+ */
+async function cmdInsertFromFile(derive) {
+  if (state.sketcher.active) finishSketch();
+  const res = await window.anvil.readAnother?.();
+  if (!res?.ok) {
+    if (res?.error) setStatus(res.error);
+    return;
+  }
+
+  const taken = await bodiesFromDocument(res.text);
+  if (!taken) return;
+  if (!taken.meshes.length) {
+    setStatus(`${taken.name} has no solid bodies in it.`);
+    return;
+  }
+
+  pushUndo(derive ? 'insert derive' : 'insert component');
+  const keys = taken.meshes.map((m) => {
+    const key = uid('mesh');
+    state.doc.meshData[key] = m;
+    return key;
+  });
+
+  const comp = newComponent(taken.name);
+  state.doc.components = state.doc.components || [];
+  state.doc.components.push(comp);
+
+  state.doc.features.push({
+    id: uid('f'),
+    type: 'insertComponent',
+    component: comp.id,
+    data: keys,
+    label: taken.name,
+    scale: '1',
+    at: [0, 0, 0],
+    // Only a derived part remembers where it came from. An inserted one is a
+    // copy and saying it was linked would be a lie.
+    source: derive ? { path: res.path, modified: res.modified, bodies: keys.length } : null
+  });
+  state.dirty = true;
+  rebuildAll();
+  setStatus(
+    `${taken.name}: ${keys.length} bod${keys.length === 1 ? 'y' : 'ies'}${
+      derive ? ', kept linked to the file it came from' : ''
+    }.`
+  );
+}
+
+/**
+ * Rebuild every derived part from the file it came from.
+ *
+ * Told to rather than watched for. A file watcher would mean this document
+ * changing under somebody's hands while they were working in it, and a part
+ * that changes shape without being asked is worse than one that is a day old.
+ */
+async function cmdRefreshDerived() {
+  const derived = (state.doc.features || []).filter((f) => f.type === 'insertComponent' && f.source?.path);
+  if (!derived.length) {
+    setStatus('Nothing in this document is derived from another file.');
+    return;
+  }
+
+  let changed = 0;
+  let missing = 0;
+  for (const f of derived) {
+    const res = await window.anvil.readAnother?.(f.source.path);
+    if (!res?.ok) {
+      missing++;
+      continue;
+    }
+    const taken = await bodiesFromDocument(res.text);
+    if (!taken?.meshes.length) {
+      missing++;
+      continue;
+    }
+    const before = f.data.map((k) => state.doc.meshData[k]?.tris?.length || 0).join(',');
+    for (const k of f.data) delete state.doc.meshData[k];
+    f.data = taken.meshes.map((m) => {
+      const key = uid('mesh');
+      state.doc.meshData[key] = m;
+      return key;
+    });
+    f.source = { path: res.path, modified: res.modified, bodies: f.data.length };
+    const after = f.data.map((k) => state.doc.meshData[k]?.tris?.length || 0).join(',');
+    if (before !== after) changed++;
+  }
+
+  if (changed) {
+    pushUndo('refresh derived');
+    state.dirty = true;
+    rebuildAll();
+  }
+  setStatus(
+    `${derived.length} derived part${derived.length === 1 ? '' : 's'} checked. ` +
+      `${changed || 'none'} changed${missing ? `, ${missing} could not be read` : ''}.`
+  );
+}
+
+/**
+ * Another document's solids, as triangles.
+ *
+ * Rebuilt in a scope of its own and thrown away straight afterwards, so nothing
+ * of the other document's kernel handles outlives this call.
+ */
+async function bodiesFromDocument(text) {
+  let other;
+  try {
+    other = migrate(JSON.parse(text));
+  } catch (err) {
+    setStatus(`That document could not be read: ${err.message}`);
+    return null;
+  }
+
+  let res;
+  try {
+    res = rebuild(other, {});
+  } catch (err) {
+    setStatus(`That document does not rebuild: ${err.message}`);
+    return null;
+  }
+
+  const meshes = [];
+  try {
+    for (const b of res.bodies) {
+      const mesh = b.solid ? K.meshData(b.solid) : b.sheet;
+      if (!mesh?.triVerts?.length) continue;
+      meshes.push({
+        verts: Array.from(mesh.vertProperties),
+        tris: Array.from(mesh.triVerts)
+      });
+    }
+  } finally {
+    res.dispose();
+  }
+  return { name: other.name || 'Inserted part', meshes };
+}
+
+/**
+ * An image on a plane, to trace over.
+ *
+ * The one thing this does that nothing else here does is let a drawing that
+ * exists only as a photograph become a part. Calibrating is the whole of making
+ * that work: an image has pixels and a part has millimetres, and the way across
+ * is to say how long something in the picture really is.
+ */
+async function cmdInsertCanvas() {
+  if (state.sketcher.active) finishSketch();
+  const res = await window.anvil.importBinary('image');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+
+  let bitmap;
+  try {
+    bitmap = await imageOf(res.bytes);
+  } catch (err) {
+    setStatus(`Could not read that image: ${err.message}`);
+    return;
+  }
+
+  const key = uid('img');
+  state.doc.canvases = state.doc.canvases || {};
+  const id = uid('canvas');
+  const across = 100;
+  state.doc.canvases[id] = {
+    id,
+    name: (res.path || 'Canvas').split(/[\\/]/).pop(),
+    image: key,
+    plane: 'XY',
+    width: across,
+    height: (across * bitmap.height) / bitmap.width,
+    x: 0,
+    y: 0,
+    turn: 0,
+    opacity: 0.6,
+    behind: true
+  };
+  state.doc.imageData[key] = { url: bitmap.url, width: bitmap.width, height: bitmap.height };
+  state.dirty = true;
+  showCanvasPanel(id);
+}
+
+/** An image as a data URL and its size, which is all a canvas needs of it. */
+async function imageOf(bytes) {
+  const blob = new Blob([bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)]);
+  const url = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('unreadable'));
+    reader.readAsDataURL(blob);
+  });
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('not an image this can read'));
+    img.src = url;
+  });
+  return { url, width: img.naturalWidth, height: img.naturalHeight };
+}
+
+/** The panel that places a canvas and calibrates it. */
+function showCanvasPanel(id) {
+  const canvas = state.doc.canvases?.[id];
+  if (!canvas) return;
+  showInspector(
+    'Canvas',
+    [
+      {
+        key: 'plane',
+        label: 'On which plane',
+        type: 'select',
+        value: canvas.plane,
+        options: planeOptions()
+      },
+      { key: 'width', label: 'How wide it really is', type: 'expr', value: String(canvas.width) },
+      { key: 'x', label: 'Across', type: 'expr', value: String(canvas.x) },
+      { key: 'y', label: 'Up', type: 'expr', value: String(canvas.y) },
+      { key: 'turn', label: 'Turned, degrees', type: 'expr', value: String(canvas.turn) },
+      { key: 'opacity', label: 'How solid, 0 to 1', type: 'expr', value: String(canvas.opacity) },
+      { key: 'behind', label: 'Behind the model', type: 'bool', value: canvas.behind !== false },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'An image has pixels and a part has millimetres. Set the width to something in the picture whose real size is known, and everything traced off it comes out the right size.'
+      }
+    ],
+    (v) => {
+      const scope = resolveParameters(state.doc.parameters);
+      const width = Math.max(1e-3, safeEval(v.width, scope, canvas.width));
+      const held = state.doc.imageData[canvas.image];
+      pushUndo('canvas');
+      Object.assign(canvas, {
+        plane: v.plane,
+        width,
+        height: held ? (width * held.height) / held.width : canvas.height,
+        x: safeEval(v.x, scope, 0),
+        y: safeEval(v.y, scope, 0),
+        turn: safeEval(v.turn, scope, 0),
+        opacity: Math.max(0, Math.min(1, safeEval(v.opacity, scope, 0.6))),
+        behind: !!v.behind
+      });
+      state.dirty = true;
+      rebuildAll();
+      setStatus(`${canvas.name}, ${round(width, 1)} across.`);
+    }
+  );
 }
 
 /**

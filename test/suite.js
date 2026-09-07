@@ -87,6 +87,7 @@ import * as RC from '../src/renderer/recognise.js';
 import * as SEL from '../src/renderer/select.js';
 import * as PL from '../src/renderer/plastic.js';
 import * as AS from '../src/renderer/assembly.js';
+import { decalMesh } from '../src/renderer/decal.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
@@ -7269,6 +7270,104 @@ async function run() {
     const size = meshSize(mesh);
     near(size[0], 5, 0.01, 'pushed along the frame, which here is world x');
     out.dispose();
+  });
+
+  /* -------- decals -------- */
+
+  /** A flat plate in XY, as two triangles, to lay a decal on. */
+  function decalPlate(half = 50) {
+    return {
+      numProp: 3,
+      vertProperties: new Float32Array([
+        -half, -half, 0,
+        half, -half, 0,
+        half, half, 0,
+        -half, half, 0
+      ]),
+      triVerts: new Uint32Array([0, 1, 2, 0, 2, 3])
+    };
+  }
+
+  /** Looking straight down at the plate from above. */
+  const DECAL_DOWN = { origin: [0, 0, 10], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, -1] };
+
+  test('decal: the triangles are really cut to the edge of the image', () => {
+    // The plate is one hundred across and made of two triangles. A forty by
+    // twenty decal on it has to come out forty by twenty, which it can only do
+    // if the triangles were actually cut rather than kept or dropped whole.
+    const out = decalMesh(decalPlate(), DECAL_DOWN, { width: 40, height: 20, offset: 0.02 });
+    assert(out, 'it landed');
+    const xs = [];
+    const ys = [];
+    const zs = [];
+    for (let i = 0; i < out.vertProperties.length; i += 3) {
+      xs.push(out.vertProperties[i]);
+      ys.push(out.vertProperties[i + 1]);
+      zs.push(out.vertProperties[i + 2]);
+    }
+    near(Math.min(...xs), -20, 1e-6, 'cut at the left edge of the image');
+    near(Math.max(...xs), 20, 1e-6, 'and the right');
+    near(Math.min(...ys), -10, 1e-6, 'the bottom');
+    near(Math.max(...ys), 10, 1e-6, 'and the top');
+    near(Math.min(...zs), 0.02, 1e-6, 'and it sits a hair proud of the surface');
+    near(out.coverage, 1, 1e-6, 'all of it is on the part');
+  });
+
+  test('decal: its own coordinates run zero to one across the picture', () => {
+    const out = decalMesh(decalPlate(), DECAL_DOWN, { width: 40, height: 20 });
+    const us = [];
+    const vs = [];
+    for (let i = 0; i < out.uv.length; i += 2) {
+      us.push(out.uv[i]);
+      vs.push(out.uv[i + 1]);
+    }
+    near(Math.min(...us), 0, 1e-6, 'the left of the image is nought');
+    near(Math.max(...us), 1, 1e-6, 'and the right is one');
+    near(Math.min(...vs), 0, 1e-6, 'the bottom');
+    near(Math.max(...vs), 1, 1e-6, 'and the top');
+  });
+
+  test('decal: it does not come out on the back of the part as well', () => {
+    // Looking up at the same plate from below. The plate faces up, so nothing
+    // should be caught: a decal on the front appearing mirrored on the back is
+    // the first thing anybody notices.
+    const behind = { origin: [0, 0, -10], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+    assert(decalMesh(decalPlate(), behind, { width: 40, height: 20 }) === null, 'nothing on the back');
+  });
+
+  test('decal: hanging off the edge says how much of it landed', () => {
+    // Half off the side of a plate that only reaches x = 50.
+    const frame = { ...DECAL_DOWN, origin: [50, 0, 10] };
+    const out = decalMesh(decalPlate(), frame, { width: 40, height: 20 });
+    assert(out, 'the half that is on the part landed');
+    near(out.coverage, 0.5, 1e-6, 'and it says half of it is on');
+    const xs = [];
+    for (let i = 0; i < out.vertProperties.length; i += 3) xs.push(out.vertProperties[i]);
+    near(Math.max(...xs), 50, 1e-6, 'stopping at the edge of the plate');
+  });
+
+  test('decal: a decal missing the part entirely lands nothing', () => {
+    const frame = { ...DECAL_DOWN, origin: [500, 0, 10] };
+    assert(decalMesh(decalPlate(), frame, { width: 40, height: 20 }) === null, 'nothing at all');
+  });
+
+  test('decal: it follows a surface round a corner', () => {
+    // Two plates at right angles, one flat and one standing up, with the decal
+    // looking down at both. Only the flat one faces the image, so only that is
+    // taken, which is what stops a decal painting the side of a step.
+    const mesh = {
+      numProp: 3,
+      vertProperties: new Float32Array([
+        -50, -50, 0, 50, -50, 0, 50, 50, 0, -50, 50, 0,
+        -50, -50, 0, -50, 50, 0, -50, 50, 40, -50, -50, 40
+      ]),
+      triVerts: new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7])
+    };
+    const out = decalMesh(mesh, DECAL_DOWN, { width: 40, height: 20 });
+    assert(out, 'it landed on the flat');
+    const zs = [];
+    for (let i = 0; i < out.vertProperties.length; i += 3) zs.push(out.vertProperties[i + 2]);
+    assert(Math.max(...zs) < 1, 'and nothing of it climbed the wall');
   });
 
   /* -------- hems -------- */

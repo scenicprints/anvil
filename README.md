@@ -708,6 +708,50 @@ change of shape rather than a repair. A cage with nothing wrong with it comes
 back untouched and says so, rather than being quietly rebuilt: a rebuild
 renumbers the points and takes every crease and selection with it.
 
+## Inserting
+
+**Insert Component** takes the bodies out of another Anvil document and puts
+them in this one as a component. What comes across is the shape, not the
+timeline, and that is on purpose: replaying somebody else's features inside this
+document would mean two sets of parameters with the same names, two sets of
+sketches, and a rebuild that fails here because of an edit made over there. The
+bodies travel as triangles and go straight back to being solids, which is safe
+because they were solids when they left. A manifold body is watertight by
+construction, so what comes back through a mesh is the same shape and not an
+approximation of it.
+
+**Insert Derive** is the same thing with the path remembered. Linked and live
+are different words: this is linked, and it updates when it is told to, which is
+what **Refresh** is for. Told to rather than watched for, because a file watcher
+would mean this document changing under your hands while you were working in it,
+and a part that changes shape without being asked is worse than one that is a
+day old.
+
+The file being read is never made current, never locked and never saved to.
+Getting that wrong would mean inserting a part quietly took over from the
+assembly being built.
+
+**Canvas** puts an image on a plane to trace over, which is how a drawing that
+exists only as a photograph becomes a part. Calibrating is the whole of making
+that work: an image has pixels and a part has millimetres, and the way across is
+to say how long something in the picture really is. A canvas is never what a
+click lands on, and it draws behind the model by default, because it is there to
+be drawn over.
+
+**Decal** lays an image on a face. The difficulty is not the picture, it is the
+edge of it: a decal covers some triangles whole and cuts across others, and
+leaving those means the image smears past where it should stop while dropping
+them gives a ragged edge that follows the mesh rather than the artwork. So the
+triangles are really cut. Each one is projected into the decal's own flat frame,
+clipped against the rectangle there, and the pieces are lifted back onto the
+surface by where they sit inside the original triangle. Only triangles facing
+back at the image are taken, or a decal put on the front of a part comes out on
+the back as well, mirrored. It reports how much of itself landed, because a
+decal half off the edge of a part is a real thing to want to know about.
+
+Both are listed in the browser under Images, where they can be switched off or
+thrown away. A picture laid on the model that cannot be removed is not a tool.
+
 **Hem** folds an edge back on itself. A raw sheet edge is sharp, it is weak, and
 on a panel anyone will ever touch it has to go somewhere; folding it back
 doubles the thickness there and buries the cut. Four kinds, and none of them
@@ -1300,7 +1344,7 @@ model file can never execute anything.
 npm test
 ```
 
-463 tests in a hidden window, checking measured quantities: volumes against
+469 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1334,7 +1378,9 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-batch20a.js` folds a hem on a sheet metal plate, takes a flat pattern,
+drilled plate. `demo-batch20b.js` inserts a part from another document's bodies, lays a canvas
+on a plane and a decal on a face, and measures the decal on the part against the
+size it was asked for. `demo-batch20a.js` folds a hem on a sheet metal plate, takes a flat pattern,
 fakes a DXF export and checks the tree notices when the model moves past it, and
 captures a joint origin. `demo-plastic.js` makes a plate and puts a ribbed boss, a sunken rest, a snap
 fit and a lip on it, measuring the volume before and after each, which is the

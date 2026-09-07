@@ -1202,6 +1202,10 @@ export function rebuild(doc, options = {}) {
           doFlatPattern(feature, scope, scopeObj, errors);
           break;
 
+        case 'insertComponent':
+          doInsertComponent(feature, doc, scope, scopeObj, errors);
+          break;
+
         case 'insertMesh':
           doInsertMesh(feature, scope, scopeObj, errors);
           break;
@@ -7019,6 +7023,78 @@ export function rebuild(doc, options = {}) {
    * not be there next time. That is the same reason a sketch is stored rather
    * than replayed.
    */
+  /**
+   * Bodies taken out of another document.
+   *
+   * They arrive as triangles and go straight back to being solids, which is
+   * safe because they were solids when they left: a manifold body is watertight
+   * by construction, so what comes back through a mesh is the same shape and
+   * not an approximation of it.
+   *
+   * What does not come across is the other document's timeline. That is on
+   * purpose. Replaying somebody else's features inside this one would mean two
+   * sets of parameters with the same names, two sets of sketches, and a rebuild
+   * that fails here because of an edit made over there. What is wanted from an
+   * inserted part is its shape.
+   *
+   * A derived part is the same thing plus the path it came from, so it can be
+   * read again. Linked and live are different words: this is linked, and it
+   * updates when it is told to.
+   */
+  function doInsertComponent(feature, doc, scope, ks, errs) {
+    const keys = feature.data || [];
+    if (!keys.length) throw new Error('That inserted part has nothing in it');
+
+    const at = feature.at || [0, 0, 0];
+    const s = feature.scale ? safeEval(feature.scale, scope, 1) : 1;
+    let made = 0;
+
+    keys.forEach((key, i) => {
+      const mesh = storedMesh(key);
+      if (!mesh) {
+        errs.push({
+          feature: feature.id,
+          message: 'Part of that inserted component is not in this document any more'
+        });
+        return;
+      }
+      let placed = mesh;
+      if (Math.abs(s - 1) > 1e-9 || at.some((v) => Math.abs(v) > 1e-9)) {
+        const P = MT.meshPoints(mesh).map((p) => [
+          p[0] * s + at[0],
+          p[1] * s + at[1],
+          p[2] * s + at[2]
+        ]);
+        placed = SH.makeSheet(P, MT.meshTris(mesh));
+      }
+
+      let solid = null;
+      try {
+        solid = K.ofMesh(placed.vertProperties, placed.triVerts, ks);
+      } catch {
+        solid = null;
+      }
+      if (!solid || K.isEmpty(solid) || K.status(solid) !== 'NoError') {
+        // It came in open, which happens when the other document held a
+        // surface. Better a surface here than a solid that is not one.
+        addSheetBody(feature, placed, `${feature.label || 'Inserted'} ${i + 1}`);
+        made++;
+        return;
+      }
+      const id = `${feature.id}:${bodies.length}`;
+      bodies.push({
+        id,
+        name: doc.bodyNames?.[id] || `${feature.label || 'Inserted'} ${i + 1}`,
+        solid,
+        createdBy: feature.id,
+        component: feature.component || null
+      });
+      made++;
+    });
+
+    if (!made) throw new Error('Nothing came across from that document');
+  }
+
   function doInsertMesh(feature, scope, ks, errs) {
     const mesh = storedMesh(feature.data);
     if (!mesh) throw new Error('That inserted mesh is not in this document any more');
@@ -7713,6 +7789,7 @@ export const FEATURE_LABELS = {
   finishForm: 'Finish Form',
   formThicken: 'Thicken Form',
   insertMesh: 'Insert Mesh',
+  insertComponent: 'Insert Component',
   tessellate: 'Tessellate',
   meshRepair: 'Repair',
   meshStitch: 'Stitch Mesh',

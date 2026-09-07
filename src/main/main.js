@@ -342,6 +342,42 @@ ipcMain.handle('import:vector', async (_e, kind) => {
 });
 
 /**
+ * Another Anvil document, read without opening it.
+ *
+ * The difference from `doc:open` is the whole point: this reads a file so the
+ * document that is already open can take something out of it, and the file
+ * being read is never made current, never locked and never saved to. Getting
+ * that wrong would mean inserting a part quietly took over from the assembly
+ * being built.
+ *
+ * A path can be given, which is how a derived part is refreshed later without
+ * asking again, and only a path that ends in .anvil is read.
+ */
+ipcMain.handle('doc:readAnother', async (_e, file) => {
+  let target = file;
+  if (!target) {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Insert from another document',
+      filters: [{ name: 'Anvil', extensions: ['anvil'] }],
+      properties: ['openFile']
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    target = res.filePaths[0];
+  }
+  if (!/\.anvil$/i.test(target)) return { ok: false, error: 'That is not an Anvil document' };
+  if (currentPath && path.resolve(currentPath) === path.resolve(target)) {
+    return { ok: false, error: 'That is this document. A part cannot be derived from itself.' };
+  }
+  try {
+    const text = await fs.readFile(target, 'utf8');
+    const at = await modifiedAt(target);
+    return { ok: true, path: target, text, modified: at };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+/**
  * A mesh or an image off the disk, as bytes.
  *
  * Bytes rather than text, because an STL is usually binary and a 3MF is always

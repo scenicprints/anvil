@@ -8,9 +8,8 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.18.0**. 463 tests. Batches 11 to 19 have shipped, and five
-of Batch 20's nine. Batch 20b and everything after it have not. Each batch below
-says which.
+Current version: **2.19.0**. 469 tests. Batches 11 to 20 have shipped. Batch 20b
+and everything after it have not. Each batch below says which.
 
 ---
 
@@ -1550,11 +1549,16 @@ width of flat and what is marked is where it starts and where it stops. A single
 line down the middle is the commonest way a flat pattern gets folded in the
 wrong place.
 
-**Four left, and they are the interesting half.** Insert Component from a file,
-Insert Derive, Decal, Canvas. Insert Component and Derive both mean one document
-reading another, which is the first thing here that needs a document to know
-about a file it does not own. Decal and Canvas both need an image drawn on
-geometry, which the viewport has never had to do.
+**The other four shipped in v2.19.0**: Insert Component, Insert Derive with a
+Refresh, Canvas and Decal. **Batch 20 is done.**
+
+Three things worth knowing. A document read for insertion is never made current,
+never locked and never saved to, which is a separate IPC from opening one and
+has to stay separate. Derived parts refresh when told, not when watched: a part
+that changes shape under somebody's hands is worse than one that is a day old.
+And the decal really clips the triangles it lands on, in the image's own flat
+frame, rather than keeping or dropping them whole; the clipped corners carry
+barycentric weights so they can be lifted back onto the surface.
 
 **Batch 20b. Configurations and document history.** The local half of section
 6b, and larger than it looks. The Configuration Table with its eleven

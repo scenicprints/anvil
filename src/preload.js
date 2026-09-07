@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('anvil', {
   newDoc: () => ipcRenderer.invoke('doc:new'),
   open: () => ipcRenderer.invoke('doc:open'),
   openPath: (file) => ipcRenderer.invoke('doc:openPath', file),
+  readAnother: (file) => ipcRenderer.invoke('doc:readAnother', file),
   save: (data, saveAs, sidecar) =>
     ipcRenderer.invoke('doc:save', { data, saveAs, sidecar }),
   currentPath: () => ipcRenderer.invoke('doc:currentPath'),
