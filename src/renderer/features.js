@@ -1158,6 +1158,14 @@ export function rebuild(doc, options = {}) {
           doFlange(feature, scope, scopeObj, errors);
           break;
 
+        case 'hem':
+          doHem(feature, scope, scopeObj, errors);
+          break;
+
+        case 'loftedFlange':
+          doLoftedFlange(feature, doc, scope, scopeObj, errors);
+          break;
+
         case 'contourFlange':
           doContourFlange(feature, doc, scope, scopeObj, errors);
           break;
@@ -1306,7 +1314,8 @@ export function rebuild(doc, options = {}) {
   // their shape.
   const assembly = solveAssembly(doc.components, doc.joints, scope, {
     rigidGroups: doc.rigidGroups,
-    motionLinks: doc.motionLinks
+    motionLinks: doc.motionLinks,
+    constraints: doc.constraints
   });
   for (const e of assembly.errors) errors.push({ feature: e.id, message: e.message });
   if (assembly.transforms.size) {
@@ -6244,6 +6253,149 @@ export function rebuild(doc, options = {}) {
     }
   }
 
+  /**
+   * An edge folded back on itself.
+   *
+   * The same shape of work as a flange, and deliberately so: it finds the edge
+   * the same way, backs the bend line off the same way, and hands the folding
+   * to the part tree. What differs is only that a hem is one or two folds of
+   * standard proportion rather than one fold of a stated height, which is why
+   * it is worth a command instead of two flanges by hand.
+   */
+  function doHem(feature, scope, ks, errs) {
+    const rule = sheetRule(scope, feature);
+    const targets = pickSheetMetal(feature);
+    if (!targets.length) throw new Error('Hem works on a sheet metal body');
+
+    const length = safeEval(feature.length, scope, rule.thickness * 4);
+    const radius = feature.radius
+      ? safeEval(feature.radius, scope, rule.thickness)
+      : rule.thickness;
+    if (!(length > 1e-6)) throw new Error('A hem of no length is nothing');
+
+    for (const body of targets) {
+      const part = SM.clonePart(body.sheetMetal);
+      const frames = SM.resolveFrames(part, rule.thickness, rule.kFactor, {});
+      let n = 0;
+
+      const mesh = meshOf(body);
+      let topo;
+      try {
+        topo = buildTopology(mesh);
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Hem: ${err.message}` });
+        continue;
+      }
+
+      for (const ref of feature.edges || []) {
+        const [edge] = resolveEdgeRefs(topo, [ref]);
+        if (!edge) {
+          errs.push({ feature: feature.id, message: 'Hem lost the edge it was on' });
+          continue;
+        }
+        const found = panelEdgeAt(part, frames, rule.thickness, edge.points);
+        if (!found) {
+          errs.push({
+            feature: feature.id,
+            message: 'That edge is not the boundary of a flat face, so nothing can be folded from it'
+          });
+          continue;
+        }
+        const line = SM.orientBendLine(found.panel.contour, { a: found.a, b: found.b });
+        const shifted = shiftLineInto(found.panel.contour, line, radius);
+        const made = SM.addHem(part, found.panel.id, shifted, {
+          kind: feature.kind || 'single',
+          thickness: rule.thickness,
+          radius,
+          length,
+          angle: safeEval(feature.angle, scope, 270),
+          angle1: safeEval(feature.angle1, scope, 135),
+          angle2: safeEval(feature.angle2, scope, 90),
+          relief: feature.relief !== false,
+          id: `${feature.id}:${n}`
+        });
+        if (made) n++;
+      }
+      if (!n) continue;
+      materialiseSheetPart(feature, part, rule, ks, body, errs);
+    }
+  }
+
+  /**
+   * A flange that changes shape as it goes, from one section to another.
+   *
+   * This is the one sheet metal feature that is not a fold. A transition from a
+   * square duct to a round one has no bend line anywhere on it, so it cannot go
+   * in the panel and bend tree and it has no flat pattern here. That is said
+   * out loud rather than left to be discovered: the part is real and correct as
+   * a solid, and it is not something this can unfold.
+   */
+  function doLoftedFlange(feature, doc, scope, ks, errs) {
+    const rule = sheetRule(scope, feature);
+    const runs = [];
+    for (const id of [feature.sketch, feature.sketchTo]) {
+      const sk = doc.sketches[id];
+      if (!sk) throw new Error('A lofted flange needs two sketches');
+      solveSketch(sk, { maxIterations: 40 });
+      const plane = sketchPlanes[sk.id] || resolvePlane(sk.plane, scope, builtConstruction);
+      const chain = chainPath(sk, {});
+      if (!chain?.points?.length) throw new Error(`${sk.name} has no chain of curves in it`);
+      const pts = chain.points.map((q) => {
+        const w = sketchToWorld(plane, q.x, q.y, q.z || 0);
+        return [w.x, w.y, w.z];
+      });
+      // A closed section repeats its first point at the end. Left in, the loft
+      // has a zero width face down one side of it.
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      const meets =
+        Math.hypot(first[0] - last[0], first[1] - last[1], first[2] - last[2]) < 1e-6;
+      runs.push({ points: meets && pts.length > 3 ? pts.slice(0, -1) : pts, closed: !!chain.closed || meets });
+    }
+
+    const around = Math.max(2, Math.round(safeEval(feature.around, scope, 24)));
+    const resampled = runs.map((r) => SH.resampleRun(r.points, around, r.closed));
+    if (resampled.some((r) => !r)) throw new Error('Those sections could not be read');
+
+    const sheet = SH.loftRunsSheet(resampled, { closed: runs.every((r) => r.closed) });
+    if (!sheet?.triVerts?.length) throw new Error('Nothing lofted between those sections');
+
+    const thickness = feature.thickness
+      ? safeEval(feature.thickness, scope, rule.thickness)
+      : rule.thickness;
+    const { sheet: solidMesh, closed } = SH.thickenSheet(sheet, thickness, false);
+    if (!closed) {
+      errs.push({
+        feature: feature.id,
+        message: 'That transition did not close when it was given thickness. Try fewer sections, or sections that face the same way.'
+      });
+      return;
+    }
+
+    let solid = null;
+    try {
+      solid = K.ofMesh(solidMesh.vertProperties, solidMesh.triVerts, ks);
+    } catch {
+      solid = null;
+    }
+    if (!solid || K.isEmpty(solid) || K.status(solid) !== 'NoError') {
+      throw new Error('That transition runs into itself when it is given thickness');
+    }
+
+    const key = `${feature.id}:${bodies.length}`;
+    bodies.push({
+      id: key,
+      name: doc.bodyNames?.[key] || feature.name || `Transition ${bodies.length + 1}`,
+      solid,
+      createdBy: feature.id,
+      component: feature.component || null
+    });
+    errs.push({
+      feature: feature.id,
+      message: 'A lofted flange has no bend lines, so it has no flat pattern here.'
+    });
+  }
+
   /** Move a bend line back into the panel, square to itself. */
   function shiftLineInto(contour, line, distance) {
     if (!(Math.abs(distance) > 1e-9)) return line;
@@ -7589,6 +7741,8 @@ export const FEATURE_LABELS = {
   miter: 'Miter',
   convertToSheetMetal: 'Convert To Sheet Metal',
   flatPattern: 'Flat Pattern',
+  hem: 'Hem',
+  loftedFlange: 'Lofted Flange',
   surfaceExtrude: 'Extrude Surface',
   surfaceRevolve: 'Revolve Surface',
   surfaceSweep: 'Sweep Surface',

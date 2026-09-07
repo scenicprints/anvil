@@ -8,8 +8,9 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.17.0**. 450 tests. Batches 11 to 19 have shipped. Batches
-20, 20b and everything after them have not. Each batch below says which.
+Current version: **2.18.0**. 463 tests. Batches 11 to 19 have shipped, and five
+of Batch 20's nine. Batch 20b and everything after it have not. Each batch below
+says which.
 
 ---
 
@@ -1537,9 +1538,23 @@ later), Constrain Components. Insert: Insert Component from a file, Insert
 Derive, Decal, Canvas. Sheet Metal: Hem, Lofted Flange, and a flat pattern that
 tracks whether it is out of date.
 
-The Insert four are the interesting half. Insert Component and Derive both mean
-one document reading another, which is the first thing here that needs a
-document to know about a file it does not own.
+**Five shipped in v2.18.0**: sheet metal Hem and Lofted Flange, the flat pattern
+that knows its exported DXF is behind the model, Joint Origin, and Constrain
+Components.
+
+Two things worth knowing. `sections` is taken as a field name by Loft, where it
+holds a list of profiles, and a second feature using it for a count crashes the
+whole rebuild rather than its own feature; the lofted flange calls it `around`.
+And a bend shows on a flat pattern as two lines, not one: a bend takes up a
+width of flat and what is marked is where it starts and where it stops. A single
+line down the middle is the commonest way a flat pattern gets folded in the
+wrong place.
+
+**Four left, and they are the interesting half.** Insert Component from a file,
+Insert Derive, Decal, Canvas. Insert Component and Derive both mean one document
+reading another, which is the first thing here that needs a document to know
+about a file it does not own. Decal and Canvas both need an image drawn on
+geometry, which the viewport has never had to do.
 
 **Batch 20b. Configurations and document history.** The local half of section
 6b, and larger than it looks. The Configuration Table with its eleven

@@ -2074,6 +2074,18 @@ async function runCommand(cmd) {
     case 'asBuiltJoint':
       startAsBuiltJoint();
       break;
+    case 'jointOrigin':
+      cmdJointOrigin();
+      break;
+    case 'constrainComponents':
+      cmdConstrainComponents();
+      break;
+    case 'hem':
+      cmdHem();
+      break;
+    case 'loftedFlange':
+      cmdLoftedFlange();
+      break;
     case 'rigidGroup':
       startRigidGroup();
       break;
@@ -2322,6 +2334,7 @@ function migrate(data) {
   doc.meshData = doc.meshData || {};
   doc.imageData = doc.imageData || {};
   doc.appearance = doc.appearance || {};
+  doc.flatExports = doc.flatExports || {};
   doc.forms = doc.forms || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
   if (doc.rollback === undefined) doc.rollback = null;
@@ -2816,9 +2829,17 @@ function renderTree() {
   const sheetList = allBodies.filter((b) => !b.solid && !b.mesh && !b.form);
   const meshList = allBodies.filter((b) => !b.solid && b.mesh && !b.form);
   const formList = allBodies.filter((b) => !b.solid && b.form);
-  const bodyNode = (b) =>
-    addNode(b.name, {
+  const bodyNode = (b) => {
+    // A flat pattern that has been sent out as a DXF says so, and says when the
+    // model has moved since. Somebody cutting from that file has no way to know
+    // otherwise, and the cost of finding out late is a sheet of metal.
+    const sent = b.outline ? flatExportState(b) : null;
+    const label = sent
+      ? `${b.name} ${sent.stale ? '(DXF is behind the model)' : '(DXF written)'}`
+      : b.name;
+    return addNode(label, {
       child: true,
+      error: sent?.stale ? `${sent.file} was written from an older shape` : null,
       selected: state.selection.bodies.has(b.id),
       eye: () => {
         if (state.hiddenBodies.has(b.id)) state.hiddenBodies.delete(b.id);
@@ -2834,6 +2855,7 @@ function renderTree() {
         updateHints();
       }
     });
+  };
 
   if (solidList.length || (!sheetList.length && !meshList.length && !formList.length)) {
     addNode('Bodies', { head: true });
@@ -5175,6 +5197,8 @@ const RIBBON_MENUS = {
     ['newComponent', 'New Component'],
     ['newJoint', 'Joint'],
     ['asBuiltJoint', 'As-built Joint'],
+    ['jointOrigin', 'Joint Origin'],
+    ['constrainComponents', 'Constrain Components'],
     ['rigidGroup', 'Rigid Group'],
     ['motionLink', 'Motion Link'],
     ['driveJoints', 'Drive Joints']
@@ -6813,6 +6837,328 @@ function startInterference() {
     () => {}
   );
   setStatus(`${hits.length} overlap${hits.length === 1 ? '' : 's'} found.`);
+}
+
+/**
+ * A named place on the model that joints and constraints can be pointed at.
+ *
+ * Fusion has this because picking geometry every time is fine until the
+ * geometry moves. A joint origin is captured once, from a face, an edge or a
+ * bore, and everything that refers to it goes on working when the face it came
+ * off is replaced by a fillet.
+ *
+ * It is put in the document's construction list rather than in a list of its
+ * own, because that is already the list of "things that exist to be referred
+ * to" and it is already rebuilt in order.
+ */
+function cmdJointOrigin() {
+  if (state.sketcher.active) finishSketch();
+  const frame = capturedFrameFromSelection();
+  if (!frame) {
+    setStatus('Select a flat face, a bore, or a round edge to capture.');
+    return;
+  }
+
+  showInspector(
+    'Joint Origin',
+    [
+      { key: 'name', label: 'Name', type: 'text', value: nextJointOriginName() },
+      { key: 'offset', label: 'Along its own axis', type: 'expr', value: '0' },
+      {
+        key: '__where',
+        label: '',
+        type: 'note',
+        text: `At ${frame.p.map((n) => round(n, 2)).join(', ')}, facing ${frame.axis
+          .map((n) => round(n, 2))
+          .join(', ')}.`
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Captured now and kept. Whatever refers to it goes on working when the face it came off is replaced by a fillet.'
+      }
+    ],
+    (v) => {
+      const scope = resolveParameters(state.doc.parameters);
+      const along = safeEval(v.offset, scope, 0);
+      pushUndo('joint origin');
+      const id = uid('jo');
+      state.doc.construction = state.doc.construction || [];
+      state.doc.features.push({
+        id: uid('f'),
+        type: 'construction',
+        entry: {
+          id,
+          name: v.name || 'Joint origin',
+          type: 'jointOrigin',
+          p: [
+            frame.p[0] + frame.axis[0] * along,
+            frame.p[1] + frame.axis[1] * along,
+            frame.p[2] + frame.axis[2] * along
+          ],
+          axis: frame.axis.slice(),
+          axis2: frame.axis2 ? frame.axis2.slice() : null
+        }
+      });
+      state.dirty = true;
+      rebuildAll();
+      setStatus(`${v.name || 'Joint origin'} captured.`);
+    }
+  );
+}
+
+function nextJointOriginName() {
+  const used = new Set(
+    (state.doc.features || [])
+      .filter((f) => f.type === 'construction' && f.entry?.type === 'jointOrigin')
+      .map((f) => f.entry.name)
+  );
+  let n = 1;
+  while (used.has(`Origin ${n}`)) n++;
+  return `Origin ${n}`;
+}
+
+/**
+ * A point and a direction off whatever is picked.
+ *
+ * A bore gives its axis, a flat face gives its normal, a round edge gives its
+ * centre and the way it faces, and a straight edge gives its direction. Those
+ * are the four things people point at, and each one has an obvious answer.
+ */
+function capturedFrameFromSelection() {
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const face = record?.topology?.faces[index];
+    if (!face) continue;
+    if (face.cylinder) return captureJointOrigin(face.cylinder.origin, face.cylinder.dir);
+    if (face.planar) return captureJointOrigin(face.centre, face.normal);
+  }
+  for (const key of state.selection.edges) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const edge = record?.topology?.edges[index];
+    if (!edge) continue;
+    if (edge.kind === 'circle') return captureJointOrigin(edge.centre, edge.axis);
+    if (edge.kind === 'line') return captureJointOrigin(edge.start, edge.dir);
+  }
+  return null;
+}
+
+/**
+ * Put a face of one component against a face of another.
+ *
+ * The other way of assembling, and worth having alongside joints rather than
+ * instead of them. A joint says how two parts may move for ever after; a
+ * constraint says where a part goes now. Most of the time that is all anybody
+ * wants, and being made to define a joint origin first is why people give up
+ * and type coordinates.
+ */
+function cmdConstrainComponents() {
+  if (state.sketcher.active) finishSketch();
+  const picked = [];
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const face = record?.topology?.faces[index];
+    const body = (state.result?.bodies || []).find((b) => b.id === bodyId);
+    if (!face || !body?.component) continue;
+    picked.push({ body, face, record });
+  }
+  if (picked.length < 2) {
+    setStatus('Select one face on each of the two components, the child first.');
+    return;
+  }
+  const [child, parent] = picked;
+  if (child.body.component === parent.body.component) {
+    setStatus('Those two faces are on the same component, so there is nothing to move.');
+    return;
+  }
+
+  showInspector(
+    'Constrain Components',
+    [
+      {
+        key: 'kind',
+        label: 'How they meet',
+        type: 'select',
+        value: 'mate',
+        options: [
+          ['mate', 'Mate, the faces touch'],
+          ['flush', 'Flush, the faces line up'],
+          ['concentric', 'Concentric, on one axis']
+        ]
+      },
+      { key: 'offset', label: 'Held apart by', type: 'expr', value: '0' },
+      { key: 'flip', label: 'The other way round', type: 'bool', value: false },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: `${componentName(child.body.component)} moves onto ${componentName(parent.body.component)}. Whatever is jointed to it comes too.`
+      }
+    ],
+    (v) => {
+      const scope = resolveParameters(state.doc.parameters);
+      pushUndo('constrain components');
+      state.doc.constraints = state.doc.constraints || [];
+      state.doc.constraints.push({
+        id: uid('cn'),
+        kind: v.kind,
+        child: child.body.component,
+        parent: parent.body.component,
+        childFrame: localFrameOf(child),
+        parentFrame: localFrameOf(parent),
+        offset: safeEval(v.offset, scope, 0),
+        flip: !!v.flip
+      });
+      state.dirty = true;
+      rebuildAll();
+      const bad = (state.result?.errors || []).filter((e) => /brought together/.test(e.message));
+      setStatus(
+        bad.length
+          ? bad[0].message
+          : `${componentName(child.body.component)} is ${v.kind === 'concentric' ? 'on the same axis as' : v.kind === 'flush' ? 'flush with' : 'mated to'} ${componentName(parent.body.component)}.`
+      );
+    }
+  );
+}
+
+/**
+ * A face as a point and a direction in its component's own space.
+ *
+ * In the component's space rather than the world's, so the constraint survives
+ * everything else moving the part first. The body already carries the transform
+ * that was applied to it, so undoing that is what turns the world back into the
+ * component.
+ */
+function localFrameOf(pick) {
+  const world = pick.face.cylinder
+    ? { p: pick.face.cylinder.origin, axis: pick.face.cylinder.dir }
+    : { p: pick.face.centre, axis: pick.face.normal };
+  const comp = (state.doc.components || []).find((c) => c.id === pick.body.component);
+  const m = comp ? matrixOfComponent(comp) : null;
+  if (!m) return { p: world.p.slice(), axis: world.axis.slice() };
+  const inv = m.clone().invert();
+  const p = new THREE.Vector3(...world.p).applyMatrix4(inv);
+  const a = new THREE.Vector3(...world.axis).transformDirection(inv).normalize();
+  return { p: [p.x, p.y, p.z], axis: [a.x, a.y, a.z] };
+}
+
+/** A component's own placement, as a matrix. */
+function matrixOfComponent(comp) {
+  const t = comp.transform;
+  if (!t) return new THREE.Matrix4();
+  if (Array.isArray(t) && t.length === 16) return new THREE.Matrix4().fromArray(t);
+  const m = new THREE.Matrix4();
+  if (t.position) m.setPosition(t.position[0], t.position[1], t.position[2]);
+  return m;
+}
+
+function componentName(id) {
+  return (state.doc.components || []).find((c) => c.id === id)?.name || 'that component';
+}
+
+/* -------- sheet metal, the two that were missing -------- */
+
+function cmdHem() {
+  if (state.sketcher.active) finishSketch();
+  if (!sheetBodies().length) {
+    setStatus('A hem folds the edge of a sheet metal body. There are none yet.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'hem',
+    bodies: pickedSheetIds(),
+    edges: [...selectedEdgeRefs().values()].flat(),
+    kind: 'single',
+    length: '6',
+    radius: '',
+    angle: '270',
+    angle1: '135',
+    angle2: '90',
+    relief: true
+  };
+  openFeatureEditor(feature, 'Hem', hemFields());
+  if (!feature.edges.length) {
+    setEditPick('sheetEdges');
+    setStatus('Click the edges to fold back.');
+  }
+}
+
+function hemFields() {
+  return [
+    sheetBodyField(),
+    {
+      key: '__edges',
+      label: 'Edges',
+      type: 'pick',
+      pick: 'sheetEdges',
+      summary: (f) => countOf(f.edges, 'edge'),
+      clear: (f) => {
+        f.edges = [];
+      }
+    },
+    {
+      key: 'kind',
+      label: 'Kind',
+      type: 'select',
+      options: [
+        ['single', 'Single, folded flat back'],
+        ['teardrop', 'Teardrop, curled round'],
+        ['rolled', 'Rolled, a curl'],
+        ['double', 'Double, folded twice']
+      ]
+    },
+    { key: 'length', label: 'How much is folded back', type: 'expr' },
+    { key: 'radius', label: 'Inner radius, blank for one thickness', type: 'text' },
+    { key: 'angle', label: 'How far round', type: 'expr', showIf: (f) => f.kind === 'rolled' },
+    { key: 'angle1', label: 'First fold', type: 'expr', showIf: (f) => f.kind === 'teardrop' },
+    { key: 'angle2', label: 'Second fold', type: 'expr', showIf: (f) => f.kind === 'teardrop' },
+    { key: 'relief', label: 'Cut relief where it leaves the panel', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'A raw sheet edge is sharp and weak. Folding it back doubles the thickness there and buries the cut. Folded to nothing the metal cracks, so the radius never goes below a thousandth.'
+    }
+  ];
+}
+
+function cmdLoftedFlange() {
+  if (state.sketcher.active) finishSketch();
+  const sketches = sketchesWithCurves();
+  if (sketches.length < 2) {
+    setStatus('A lofted flange runs between two sketched sections. Draw both first.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'loftedFlange',
+    sketch: sketches[0].id,
+    sketchTo: sketches[1].id,
+    around: '24',
+    thickness: ''
+  };
+  openFeatureEditor(feature, 'Lofted Flange', loftedFlangeFields());
+}
+
+function loftedFlangeFields() {
+  const list = () => sketchesWithCurves().map((sk) => [sk.id, sk.name]);
+  return [
+    { key: 'sketch', label: 'From', type: 'select', options: list },
+    { key: 'sketchTo', label: 'To', type: 'select', options: list },
+    { key: 'around', label: 'Points round each section', type: 'expr' },
+    { key: 'thickness', label: 'Thickness, blank for the rule', type: 'text' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'A transition has no bend lines anywhere on it, so it has no flat pattern here. The part is real; it is not something this can unfold.'
+    }
+  ];
 }
 
 /**
@@ -11096,11 +11442,69 @@ async function cmdExportFlatDXF() {
   );
   const res = await window.anvil.exportMesh(`${base} flat.dxf`, 'dxf', text);
   if (res.ok) {
+    // What was cut is now a file on a disk somewhere, and the model will go on
+    // changing. Remember the shape it had when it went out, so the moment the
+    // model moves the app can say the file is behind rather than leaving
+    // somebody to cut yesterday's part.
+    state.doc.flatExports = state.doc.flatExports || {};
+    state.doc.flatExports[one.id] = {
+      path: res.path,
+      at: Date.now(),
+      key: outlineKey(one.outline)
+    };
+    state.dirty = true;
     setStatus(`Exported ${res.path.split(/[\\/]/).pop()}`);
     window.anvil.showItem(res.path);
+    renderTree();
   } else if (res.error) {
     setStatus(`Export failed: ${res.error}`);
   }
+}
+
+/**
+ * A short signature of a flat outline, for telling whether it has changed.
+ *
+ * Every point of every panel, rounded to a thousandth. Rounded because a
+ * rebuild can move a point by a rounding error without the part being any
+ * different, and telling somebody their file is out of date when it is not is
+ * the fastest way to have the warning ignored.
+ */
+function outlineKey(outline) {
+  if (!outline) return '';
+  const bits = [];
+  for (const panel of outline.panels || []) {
+    for (const p of panel.contour || panel || []) {
+      bits.push(Math.round(p[0] * 1000), Math.round(p[1] * 1000));
+    }
+  }
+  for (const hole of outline.holes || []) {
+    for (const p of hole) bits.push(Math.round(p[0] * 1000), Math.round(p[1] * 1000));
+  }
+  for (const line of outline.bendLines || []) {
+    for (const p of [line.a, line.b]) {
+      if (p) bits.push(Math.round(p[0] * 1000), Math.round(p[1] * 1000));
+    }
+  }
+  // A rolling hash rather than the whole list: this is stored in the document
+  // and read on every tree redraw.
+  let h = 2166136261;
+  for (const n of bits) {
+    h ^= n & 0xffffffff;
+    h = Math.imul(h, 16777619);
+  }
+  return `${bits.length}:${(h >>> 0).toString(16)}`;
+}
+
+/** Has the flat pattern moved since its DXF was written? */
+function flatExportState(body) {
+  const record = state.doc.flatExports?.[body.id];
+  if (!record) return null;
+  const now = outlineKey(body.outline);
+  return {
+    ...record,
+    stale: now !== record.key,
+    file: record.path ? record.path.split(/[\\/]/).pop() : ''
+  };
 }
 
 /* -------- the fields those dialogs show -------- */
@@ -14673,6 +15077,10 @@ function describeFeature(feature) {
       return { title: 'Base Flange', fields: baseFlangeFields() };
     case 'flange':
       return { title: 'Flange', fields: flangeFields() };
+    case 'hem':
+      return { title: 'Hem', fields: hemFields() };
+    case 'loftedFlange':
+      return { title: 'Lofted Flange', fields: loftedFlangeFields() };
     case 'contourFlange':
       return { title: 'Contour Flange', fields: contourFlangeFields() };
     case 'sheetFold':

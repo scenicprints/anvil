@@ -86,6 +86,7 @@ import {
 import * as RC from '../src/renderer/recognise.js';
 import * as SEL from '../src/renderer/select.js';
 import * as PL from '../src/renderer/plastic.js';
+import * as AS from '../src/renderer/assembly.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
@@ -7268,6 +7269,238 @@ async function run() {
     const size = meshSize(mesh);
     near(size[0], 5, 0.01, 'pushed along the frame, which here is world x');
     out.dispose();
+  });
+
+  /* -------- hems -------- */
+
+  const SM_FRAME = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+
+  /** A flat plate as a sheet metal part, ready to have an edge folded. */
+  function hemPart(thickness = 1.5) {
+    const part = SM.newPart({ thickness, bendRadius: thickness, kFactor: 0.4 });
+    SM.addBasePanel(part, [[0, 0], [60, 0], [60, 40], [0, 40]], [], SM_FRAME, 'p0');
+    return part;
+  }
+
+  test('hem: each kind folds the number of times it should', () => {
+    const counts = { single: 1, teardrop: 2, rolled: 1, double: 2 };
+    for (const [kind, folds] of Object.entries(counts)) {
+      const part = hemPart();
+      const made = SM.addHem(part, 'p0', { a: [0, 40], b: [60, 40] }, {
+        kind,
+        thickness: 1.5,
+        radius: 1.5,
+        length: 6,
+        id: 'h'
+      });
+      assert(made && made.length === folds, `${kind} folds ${folds} times, got ${made?.length}`);
+      assert(part.panels.length === folds + 1, `${kind} leaves the right panels`);
+      assert(part.bends.length === folds, `${kind} leaves the right bends`);
+    }
+  });
+
+  test('hem: a single hem is folded right back on itself', () => {
+    const part = hemPart();
+    SM.addHem(part, 'p0', { a: [0, 40], b: [60, 40] }, {
+      kind: 'single',
+      thickness: 1.5,
+      radius: 1.5,
+      length: 6,
+      id: 'h'
+    });
+    near(part.bends[0].angle, Math.PI, 1e-9, 'half a turn is what makes it a hem');
+    const frames = SM.resolveFrames(part, 1.5, 0.4, {});
+    assert(frames.size === 2, 'and both panels are placed');
+    // Folded back means the hem lies parallel to the panel it came off, facing
+    // the other way.
+    const base = frames.get('p0');
+    const hem = frames.get('h:p0');
+    const dot = base.n[0] * hem.n[0] + base.n[1] * hem.n[1] + base.n[2] * hem.n[2];
+    near(dot, -1, 1e-6, 'the hem faces back at the panel');
+  });
+
+  test('hem: relief is cut where it leaves the panel, and only there', () => {
+    const part = hemPart();
+    SM.addHem(part, 'p0', { a: [0, 40], b: [60, 40] }, {
+      kind: 'double',
+      thickness: 1.5,
+      radius: 1.5,
+      length: 6,
+      relief: true,
+      id: 'h'
+    });
+    assert(part.bends[0].relief === true, 'the first fold gets relief');
+    assert(part.bends[1].relief === false, 'and the second does not, or it cuts the fold in half');
+  });
+
+  test('hem: a rolled hem turns further than a flat one', () => {
+    const part = hemPart();
+    SM.addHem(part, 'p0', { a: [0, 40], b: [60, 40] }, {
+      kind: 'rolled',
+      thickness: 1.5,
+      radius: 2,
+      length: 6,
+      angle: 270,
+      id: 'h'
+    });
+    near(part.bends[0].angle, (270 * Math.PI) / 180, 1e-9, 'three quarters of a turn');
+  });
+
+  test('hem: it flattens, which is the point of keeping it in the fold tree', () => {
+    const part = hemPart();
+    SM.addHem(part, 'p0', { a: [0, 40], b: [60, 40] }, {
+      kind: 'single',
+      thickness: 1.5,
+      radius: 1.5,
+      length: 6,
+      id: 'h'
+    });
+    const flat = SM.flatOutline(part, 1.5, 0.4);
+    assert(flat && flat.panels.length === 2, 'both panels are in the flat');
+    // Two lines for one fold, not one: a bend takes up a width of flat, and
+    // what is marked is where it starts and where it stops. A press brake needs
+    // both, and a single line down the middle is the commonest way a flat
+    // pattern gets folded in the wrong place.
+    assert(flat.bendLines.length === 2, `the fold is marked at both ends, got ${flat.bendLines.length}`);
+    const apart = Math.abs(flat.bendLines[1][0][1] - flat.bendLines[0][0][1]);
+    near(apart, SM.bendAllowance(Math.PI, 1.5, 1.5, 0.4), 1e-6, 'and they are the allowance apart');
+    // The flat is longer than the folded part by the hem, less what the bend
+    // eats, which is the whole reason a flat pattern is worked out rather than
+    // measured off the model.
+    const allow = SM.bendAllowance(Math.PI, 1.5, 1.5, 0.4);
+    assert(allow > 0 && allow < 12, `a sensible allowance, got ${allow.toFixed(3)}`);
+  });
+
+  test('lofted flange: a transition between two sections is a real solid', () => {
+    // Square at the bottom, smaller square at the top: a duct transition, which
+    // is the shape this feature exists for.
+    const doc = newDocument();
+    const square = (name, plane, half, z) => {
+      const sk = newSketch(plane, name);
+      sk.points = [
+        { x: -half, y: -half },
+        { x: half, y: -half },
+        { x: half, y: half },
+        { x: -half, y: half }
+      ];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      sk.plane = { base: 'XY', offset: String(z) };
+      return sk;
+    };
+    const low = square('Low', 'XY', 20, 0);
+    const high = square('High', 'XY', 10, 40);
+    doc.sketches[low.id] = low;
+    doc.sketches[high.id] = high;
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: low.id },
+      { id: uid('f'), type: 'sketch', sketch: high.id },
+      {
+        id: 'flf',
+        type: 'loftedFlange',
+        sketch: low.id,
+        sketchTo: high.id,
+        around: '24',
+        thickness: '1.5'
+      }
+    ];
+    const out = rebuild(doc);
+    const body = out.bodies.find((b) => b.solid);
+    assert(body, `it built something, errors: ${out.errors.map((e) => e.message).join('; ')}`);
+    const v = body.solid.volume();
+
+    // The wall area is roughly the average perimeter times the slant length,
+    // and the volume is that times the thickness. Near enough that a transition
+    // built at the wrong size or the wrong thickness would show.
+    const perimeter = (40 * 4 + 20 * 4) / 2;
+    const slant = Math.hypot(40, 10);
+    const want = perimeter * slant * 1.5;
+    assert(
+      Math.abs(v - want) < want * 0.25,
+      `about a wall of that area, got ${v.toFixed(0)} against ${want.toFixed(0)}`
+    );
+
+    // And it says out loud that it cannot be unfolded, rather than leaving
+    // somebody to find out at the press brake.
+    assert(
+      out.errors.some((e) => /no flat pattern/.test(e.message)),
+      'it says there is no flat pattern for it'
+    );
+    out.dispose();
+  });
+
+  /* -------- assembly constraints -------- */
+
+  test('constrain: mate turns a face to look at the one it meets', () => {
+    const child = { p: [0, 0, 0], axis: [0, 0, 1] };
+    const parent = { p: [10, 5, 20], axis: [0, 0, -1] };
+    const step = AS.constraintTransform('mate', child, parent, {});
+    assert(step, 'it worked one out');
+    const facing = AS.applyRotation(step.rotation, child.axis);
+    near(facing[2], 1, 1e-9, 'the child ends up facing into the parent');
+    // And its own point lands on the parent's.
+    const landed = AS.applyRotation(step.rotation, child.p).map((v, i) => v + step.translation[i]);
+    for (let i = 0; i < 3; i++) near(landed[i], parent.p[i], 1e-9, 'the faces touch');
+  });
+
+  test('constrain: flush leaves the two facing the same way', () => {
+    const child = { p: [0, 0, 0], axis: [0, 0, 1] };
+    const parent = { p: [0, 0, 0], axis: [0, 0, -1] };
+    const mate = AS.applyRotation(
+      AS.constraintTransform('mate', child, parent, {}).rotation,
+      child.axis
+    );
+    const flush = AS.applyRotation(
+      AS.constraintTransform('flush', child, parent, {}).rotation,
+      child.axis
+    );
+    near(mate[2], 1, 1e-9, 'mate turns it to face back');
+    near(flush[2], -1, 1e-9, 'and flush leaves it facing the same way');
+  });
+
+  test('constrain: an offset holds the two apart along the parent normal', () => {
+    const child = { p: [0, 0, 0], axis: [0, 0, 1] };
+    const parent = { p: [0, 0, 0], axis: [0, 0, 1] };
+    const step = AS.constraintTransform('mate', child, parent, { offset: 3 });
+    const landed = AS.applyRotation(step.rotation, child.p).map((v, i) => v + step.translation[i]);
+    near(landed[2], 3, 1e-9, 'three clear of the face, along its own normal');
+  });
+
+  test('constrain: concentric puts it on the axis and says nothing about where along', () => {
+    const child = { p: [3, 4, 7], axis: [1, 0, 0] };
+    const parent = { p: [0, 0, 0], axis: [0, 0, 1] };
+    const step = AS.constraintTransform('concentric', child, parent, {});
+    const landed = AS.applyRotation(step.rotation, child.p).map((v, i) => v + step.translation[i]);
+    near(Math.hypot(landed[0], landed[1]), 0, 1e-9, 'it is on the axis');
+    // How far along is left alone, which is what makes it a shaft in a bore
+    // rather than a shaft pushed home.
+    const facing = AS.applyRotation(step.rotation, child.axis);
+    near(Math.abs(facing[2]), 1, 1e-9, 'and pointing along it');
+  });
+
+  test('constrain: a face against itself is refused rather than turned inside out', () => {
+    assert(AS.constraintTransform('mate', null, { p: [0, 0, 0], axis: [0, 0, 1] }) === null, 'no child, no move');
+    assert(AS.constraintTransform('mate', { p: [0, 0, 0], axis: [0, 0, 0] }, { p: [0, 0, 0], axis: [0, 0, 1] }) === null, 'a face with no direction is refused');
+  });
+
+  test('constrain: turning a direction onto its opposite is a half turn about something square to it', () => {
+    const turn = AS.rotationBetween([0, 0, 1], [0, 0, -1]);
+    near(turn.angle, Math.PI, 1e-9, 'half a turn');
+    near(turn.axis[2], 0, 1e-9, 'about an axis square to the direction');
+    const back = AS.applyRotation(turn, [0, 0, 1]);
+    near(back[2], -1, 1e-9, 'and it really does land on the opposite');
+  });
+
+  test('constrain: a direction already right is no turn at all', () => {
+    const turn = AS.rotationBetween([0, 1, 0], [0, 1, 0]);
+    near(turn.angle, 0, 1e-12, 'nothing to do');
+    const same = AS.applyRotation(turn, [3, 4, 5]);
+    near(same[0], 3, 1e-12, 'and nothing is moved');
   });
 
   /* -------- plastic parts -------- */

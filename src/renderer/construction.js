@@ -359,6 +359,26 @@ function buildEntry(entry, ctx) {
       return { kind: 'point', p: scale(add(pa, pb), 0.5) };
     }
 
+    case 'jointOrigin': {
+      // Already captured when it was made, and deliberately not recomputed. The
+      // whole use of one is that it goes on meaning the same place after the
+      // face it came off has been replaced by a fillet, and a version that
+      // re-derived itself every rebuild would lose exactly that.
+      if (!entry.p || !entry.axis) return null;
+      const axis = norm(entry.axis);
+      if (len(axis) < 0.5) return null;
+      const basis = basisFor(axis);
+      return {
+        kind: 'jointOrigin',
+        p: entry.p.slice(),
+        origin: entry.p.slice(),
+        dir: axis,
+        x: entry.axis2 ? norm(entry.axis2) : basis.x,
+        y: basis.y,
+        n: axis
+      };
+    }
+
     case 'ucs': {
       // A frame of its own to work in. Fusion's version is the one Construct
       // command that is not a single formula: it is an origin and three
@@ -558,6 +578,7 @@ export function ucsParts(ucs, name) {
 }
 
 export const CONSTRUCTION_LABELS = {
+  jointOrigin: 'Joint Origin',
   ucs: 'Coordinate System',
   planePerpendicular: 'Plane Square Across an Axis',
   planeTwoEdges: 'Plane Through 2 Edges',

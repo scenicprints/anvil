@@ -282,6 +282,23 @@ export function solveAssembly(components, joints, scope, opts = {}) {
     tree.push(j);
   }
 
+  /**
+   * Every way out of the solver goes through here.
+   *
+   * Constraints are applied after the joints, not alongside them, and that is a
+   * decision rather than an accident. A joint says how two parts may move for
+   * ever after; a constraint says where a part goes now. Solving both at once
+   * would need one solver over two quite different things, and the result of
+   * getting it wrong is a part that will not stay where it was put. Applied
+   * afterwards, in order, each constraint simply moves what it was pointed at,
+   * and the last one wins, which is what somebody dragging parts together
+   * expects.
+   */
+  const finish = (result) => {
+    applyConstraints(result.transforms, list, tree, opts.constraints, result.errors);
+    return result;
+  };
+
   const values = {};
   applyMotionLinks(opts.motionLinks, all, scope, values);
 
@@ -324,7 +341,7 @@ export function solveAssembly(components, joints, scope, opts = {}) {
   if (!closing.length) {
     const out = place(values);
     for (const [k, v] of out) transforms.set(k, v);
-    return { transforms, errors, loops: 0 };
+    return finish({ transforms, errors, loops: 0 });
   }
 
   // Something has to give for the loop to close, and it is the joints round that
@@ -377,7 +394,7 @@ export function solveAssembly(components, joints, scope, opts = {}) {
         'These joints form a loop and every one of them is driven, so there is ' +
         'nothing left free to close it with'
     });
-    return { transforms, errors, loops: closing.length };
+    return finish({ transforms, errors, loops: closing.length });
   }
 
   const start = free.map(({ joint, name }) =>
@@ -414,13 +431,79 @@ export function solveAssembly(components, joints, scope, opts = {}) {
     });
   }
 
-  return {
+  return finish({
     transforms,
     errors,
     loops: closing.length,
     solvedValues: vals,
     residual: solved.norm
+  });
+}
+
+/**
+ * Move components to satisfy their constraints, in the order they were made.
+ *
+ * A constraint carries its two faces as a point and a direction in each
+ * component's own space, the same way a joint carries its origin, so it
+ * survives the parts being moved by anything else first.
+ *
+ * Whatever hangs off the child by a joint comes with it. Moving a bracket
+ * without the screw that is jointed into it would be a strange thing to do,
+ * and leaving the screw behind is the sort of bug that is noticed three
+ * assemblies later.
+ */
+function applyConstraints(transforms, list, tree, constraints, errors) {
+  if (!constraints?.length) return;
+  const known = new Set(list.map((c) => c.id));
+  const kids = new Map();
+  for (const j of tree || []) {
+    if (!kids.has(j.parent)) kids.set(j.parent, []);
+    kids.get(j.parent).push(j.child);
+  }
+  const withDescendants = (id) => {
+    const out = [id];
+    for (let i = 0; i < out.length && i < 4096; i++) {
+      for (const k of kids.get(out[i]) || []) if (!out.includes(k)) out.push(k);
+    }
+    return out;
   };
+
+  const worldFrame = (id, frame) => {
+    const m = transforms.get(id);
+    if (!m || !frame) return null;
+    const p = new THREE.Vector3(...(frame.p || [0, 0, 0])).applyMatrix4(m);
+    const n = new THREE.Vector3(...(frame.axis || [0, 0, 1]))
+      .transformDirection(m)
+      .normalize();
+    return { p: [p.x, p.y, p.z], axis: [n.x, n.y, n.z] };
+  };
+
+  for (const c of constraints) {
+    if (!c || !known.has(c.child) || !known.has(c.parent)) continue;
+    const childFrame = worldFrame(c.child, c.childFrame);
+    const parentFrame = worldFrame(c.parent, c.parentFrame);
+    const step = constraintTransform(c.kind, childFrame, parentFrame, {
+      offset: Number(c.offset) || 0,
+      flip: !!c.flip
+    });
+    if (!step) {
+      errors.push({
+        id: c.id,
+        message: 'Those two faces cannot be brought together. Check they are not the same face.'
+      });
+      continue;
+    }
+
+    const move = new THREE.Matrix4().makeRotationAxis(
+      new THREE.Vector3(...step.rotation.axis),
+      step.rotation.angle
+    );
+    move.premultiply(new THREE.Matrix4().makeTranslation(...step.translation));
+    for (const id of withDescendants(c.child)) {
+      const m = transforms.get(id);
+      if (m) transforms.set(id, m.clone().premultiply(move));
+    }
+  }
 }
 
 /**
@@ -626,6 +709,144 @@ export function limitByContact(from, to, overlapsAt, steps = 24) {
     if (Math.abs(bad - good) < 1e-4) break;
   }
   return good;
+}
+
+/* ------------------------------------------------------------------ */
+/* Constraints                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Where a component has to go to put one of its faces against another.
+ *
+ * This is the other way of assembling, and it is worth having alongside joints
+ * rather than instead of them. A joint says how two parts may move relative to
+ * each other for ever after. A constraint says where a part goes now: put this
+ * face flat on that one. Most of the time that is all anybody wants, and being
+ * made to define a joint origin first is why people give up and type
+ * coordinates.
+ *
+ * Three kinds, and each takes away something different:
+ *
+ * **Mate** puts two faces together, touching, facing into each other. That is
+ * what two parts bolted flat against each other are.
+ *
+ * **Flush** puts two faces in one plane facing the same way, which is what two
+ * parts lined up along an edge are. The difference from mate is the direction
+ * the second face ends up pointing, and getting it the wrong way round turns a
+ * part inside its neighbour, so the two are separate rather than one command
+ * with a tick box.
+ *
+ * **Concentric** puts two round faces on one axis, which is a shaft in a bore.
+ * It says nothing about how far along, on purpose: that is what is left free,
+ * and it is usually a mate on an end face that decides it.
+ *
+ * Each returns a transform to apply to the child, or null when the two frames
+ * cannot be brought together at all.
+ */
+export function constraintTransform(kind, childFrame, parentFrame, opts = {}) {
+  if (!childFrame || !parentFrame) return null;
+  const cn = unitOf(childFrame.axis || childFrame.normal);
+  const pn = unitOf(parentFrame.axis || parentFrame.normal);
+  if (!cn || !pn) return null;
+
+  const offset = opts.offset || 0;
+  const flip = !!opts.flip;
+  // Mate turns the child to face into the parent; flush turns it to face the
+  // same way. Which of those is wanted is the whole of the difference.
+  let want = kind === 'flush' ? pn.slice() : [-pn[0], -pn[1], -pn[2]];
+  if (kind === 'concentric') want = pn.slice();
+  if (flip) want = [-want[0], -want[1], -want[2]];
+
+  const turn = rotationBetween(cn, want);
+  if (!turn) return null;
+
+  // Where the child's own point lands once it has been turned.
+  const p = childFrame.p || childFrame.origin;
+  if (!p) return null;
+  const turned = applyRotation(turn, p);
+
+  let target;
+  if (kind === 'concentric') {
+    // Onto the parent's axis, keeping wherever it already sits along that axis.
+    // A shaft slid into a bore has not been told how far in to go.
+    const q = parentFrame.p || parentFrame.origin;
+    const d = [turned[0] - q[0], turned[1] - q[1], turned[2] - q[2]];
+    const along = d[0] * want[0] + d[1] * want[1] + d[2] * want[2];
+    target = [
+      q[0] + want[0] * along,
+      q[1] + want[1] * along,
+      q[2] + want[2] * along
+    ];
+  } else {
+    const q = parentFrame.p || parentFrame.origin;
+    // An offset holds the two apart along the parent's own normal, which is
+    // what a shim or a running clearance is.
+    target = [q[0] + pn[0] * offset, q[1] + pn[1] * offset, q[2] + pn[2] * offset];
+  }
+
+  return {
+    rotation: turn,
+    translation: [target[0] - turned[0], target[1] - turned[1], target[2] - turned[2]]
+  };
+}
+
+/**
+ * The shortest turn that takes one direction onto another.
+ *
+ * Rodrigues, with the two degenerate cases written out. Already pointing the
+ * right way is no turn at all. Pointing exactly the wrong way has no shortest
+ * turn, because every half turn about every direction square to it does the
+ * job, so one such direction is picked and the ambiguity is stated here rather
+ * than left to surface as a part that flips when a number is nudged.
+ */
+export function rotationBetween(from, to) {
+  const a = unitOf(from);
+  const b = unitOf(to);
+  if (!a || !b) return null;
+  const d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  if (d > 1 - 1e-12) return { axis: [0, 0, 1], angle: 0 };
+  if (d < -1 + 1e-12) {
+    const seed = Math.abs(a[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const axis = unitOf(crossOf(a, seed));
+    return axis ? { axis, angle: Math.PI } : null;
+  }
+  const axis = unitOf(crossOf(a, b));
+  return axis ? { axis, angle: Math.acos(Math.max(-1, Math.min(1, d))) } : null;
+}
+
+/** One point through a turn about an axis through the origin. */
+export function applyRotation(turn, p) {
+  if (!turn || !turn.angle) return [p[0], p[1], p[2]];
+  const k = turn.axis;
+  const c = Math.cos(turn.angle);
+  const s = Math.sin(turn.angle);
+  const kd = k[0] * p[0] + k[1] * p[1] + k[2] * p[2];
+  const kx = crossOf(k, p);
+  return [
+    p[0] * c + kx[0] * s + k[0] * kd * (1 - c),
+    p[1] * c + kx[1] * s + k[1] * kd * (1 - c),
+    p[2] * c + kx[2] * s + k[2] * kd * (1 - c)
+  ];
+}
+
+/** What a constraint leaves free, said the way the joint list says it. */
+export function constraintDof(kind) {
+  if (kind === 'concentric') return { slide: 1, turn: 1 };
+  return { slide: 2, turn: 1 };
+}
+
+function unitOf(v) {
+  if (!v) return null;
+  const l = Math.hypot(v[0], v[1], v[2]);
+  return l > 1e-12 ? [v[0] / l, v[1] / l, v[2] / l] : null;
+}
+
+function crossOf(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
 }
 
 /** A joint's origin, captured from where the parts currently sit. */

@@ -307,6 +307,94 @@ export function addFlangePanel(part, parentId, line, opts) {
 }
 
 /**
+ * A hem: an edge folded back on itself.
+ *
+ * What it is for is not decoration. A raw sheet edge is sharp, it is weak, and
+ * on a panel anyone will ever touch it has to go somewhere. Folding it back
+ * doubles the thickness at the edge, which stiffens it, and buries the cut.
+ *
+ * All four kinds are the same thing said with different numbers, so none of
+ * them needs new machinery: a hem is one or two flanges chained off the edge,
+ * and the panel and bend tree already knows how to fold, unfold and flatten
+ * those. The second flange's bend line is known without looking at any
+ * geometry, because a flange panel's own outline is a rectangle this file wrote
+ * itself: the far edge is at x equal to the height, every time.
+ *
+ * The inner radius matters more here than anywhere else. Folded to nothing the
+ * metal cracks, so the radius is never allowed below a thousandth and defaults
+ * to one thickness, which is about the tightest a bend brake will do without
+ * marking the outside.
+ */
+export function addHem(part, parentId, line, opts = {}) {
+  const parent = panelById(part, parentId);
+  if (!parent) return null;
+
+  const t = Math.max(1e-6, opts.thickness ?? 1);
+  const r = Math.max(1e-6, opts.radius ?? t);
+  const length = Math.max(1e-6, opts.length ?? t * 4);
+  const kind = opts.kind || 'single';
+  const relief = opts.relief !== false;
+  const id = opts.id || 'hem';
+
+  // Each entry is one fold: how far round, and how much flat after it.
+  const folds = [];
+  if (kind === 'teardrop') {
+    // Round past halfway and then back on itself, which leaves the teardrop
+    // shaped void the name comes from and brings the cut edge home to the
+    // panel it started on.
+    const first = ((opts.angle1 ?? 135) * Math.PI) / 180;
+    const second = ((opts.angle2 ?? 90) * Math.PI) / 180;
+    folds.push({ angle: first, radius: r, height: Math.max(1e-6, length * 0.6) });
+    folds.push({ angle: second, radius: r, height: Math.max(1e-6, length * 0.4) });
+  } else if (kind === 'rolled') {
+    // One long turn rather than two, which is a curl and is what an edge gets
+    // when it has to be safe to run a hand along.
+    folds.push({
+      angle: ((opts.angle ?? 270) * Math.PI) / 180,
+      radius: Math.max(r, opts.rollRadius ?? r),
+      height: length
+    });
+  } else if (kind === 'double') {
+    // Folded, then the doubled edge folded again, so the cut ends up inside
+    // two thicknesses of metal rather than one.
+    folds.push({ angle: Math.PI, radius: r, height: length * 2 });
+    folds.push({ angle: Math.PI, radius: r, height: length });
+  } else {
+    folds.push({ angle: Math.PI, radius: r, height: length });
+  }
+
+  const made = [];
+  let onPanel = parentId;
+  let onLine = line;
+
+  folds.forEach((fold, i) => {
+    const res = addFlangePanel(part, onPanel, onLine, {
+      angle: fold.angle,
+      radius: fold.radius,
+      height: fold.height,
+      panelId: `${id}:p${i}`,
+      bendId: `${id}:b${i}`,
+      // Relief is cut where the hem leaves the parent and nowhere else. A
+      // relief notch in the middle of a hem would cut the fold in half.
+      relief: relief && i === 0
+    });
+    if (!res) return;
+    made.push(res);
+    onPanel = res.panel.id;
+    // The next fold happens at the far edge of the flange just made. Its
+    // outline was written here, so where that edge is is known rather than
+    // looked for: out from the bend line by the height.
+    const far = fold.height - fold.radius;
+    onLine = {
+      a: [Math.max(1e-6, far), res.bend.v0],
+      b: [Math.max(1e-6, far), res.bend.v1]
+    };
+  });
+
+  return made.length ? made : null;
+}
+
+/**
  * Split a panel along a line and fold one half.
  *
  * This is Fusion's Fold. The stationary side keeps the panel and its frame; the

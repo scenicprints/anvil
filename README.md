@@ -708,6 +708,49 @@ change of shape rather than a repair. A cage with nothing wrong with it comes
 back untouched and says so, rather than being quietly rebuilt: a rebuild
 renumbers the points and takes every crease and selection with it.
 
+**Hem** folds an edge back on itself. A raw sheet edge is sharp, it is weak, and
+on a panel anyone will ever touch it has to go somewhere; folding it back
+doubles the thickness there and buries the cut. Four kinds, and none of them
+needs machinery of its own: a hem is one or two flanges chained off the edge,
+and the panel and bend tree already knows how to fold, unfold and flatten those.
+Single is folded flat back, teardrop curls round past halfway and brings the cut
+edge home, rolled is one long turn, and double folds twice so the cut ends up
+inside two thicknesses. Relief is cut where the hem leaves the panel and nowhere
+else, because a relief notch in the middle of a hem cuts the fold in half.
+Folded to nothing the metal cracks, so the inner radius never goes below a
+thousandth and defaults to one thickness.
+
+**Lofted Flange** is the one sheet metal feature that is not a fold. A
+transition from a square duct to a round one has no bend line anywhere on it, so
+it cannot go in the panel and bend tree and it has no flat pattern here. That is
+said out loud rather than left to be discovered at the press brake: the part is
+real and correct as a solid, and it is not something this can unfold.
+
+A flat pattern that has been **exported as a DXF** remembers the shape it had
+when it went out, and the tree says so the moment the model moves away from it.
+Somebody cutting from that file has no other way to know, and the cost of
+finding out late is a sheet of metal. The signature is rounded to a thousandth,
+because a rebuild can move a point by a rounding error without the part being
+any different, and warning about that is the fastest way to have the warning
+ignored.
+
+**Joint Origin** captures a place on the model that joints and constraints can
+be pointed at afterwards. It is captured once and kept, deliberately not
+recomputed: the whole use of one is that it goes on meaning the same place after
+the face it came off has been replaced by a fillet.
+
+**Constrain Components** is the other way of assembling, and it is worth having
+alongside joints rather than instead of them. A joint says how two parts may
+move relative to each other for ever after; a constraint says where a part goes
+now. Most of the time that is all anybody wants, and being made to define a
+joint origin first is why people give up and type coordinates. **Mate** puts two
+faces together facing into each other, **Flush** puts them in one plane facing
+the same way, and **Concentric** puts two round faces on one axis and says
+nothing about how far along, which is what makes it a shaft in a bore rather
+than a shaft pushed home. Constraints are applied after the joints, in order,
+and the last one wins, which is what somebody dragging parts together expects.
+Whatever is jointed to the part being moved comes with it.
+
 ## Plastic parts
 
 Four features that all stand on a face, because that is what they have in
@@ -1257,7 +1300,7 @@ model file can never execute anything.
 npm test
 ```
 
-450 tests in a hidden window, checking measured quantities: volumes against
+463 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1291,7 +1334,9 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-plastic.js` makes a plate and puts a ribbed boss, a sunken rest, a snap
+drilled plate. `demo-batch20a.js` folds a hem on a sheet metal plate, takes a flat pattern,
+fakes a DXF export and checks the tree notices when the model moves past it, and
+captures a joint origin. `demo-plastic.js` makes a plate and puts a ribbed boss, a sunken rest, a snap
 fit and a lip on it, measuring the volume before and after each, which is the
 one thing a picture of a boss cannot tell you. `demo-mesh17.js` tessellates a
 solid and runs Stitch, Patch and Direct Edit over
