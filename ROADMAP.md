@@ -1527,10 +1527,19 @@ volume test passed and the model was wrong. And a snap catch has to run into the
 material rather than out of it, or cutting it from the face the hook stands on
 removes nothing at all.
 
-**Batch 20. Assembly and insertion.** Ten. Assemble: As-Built Joint, Joint
-Origin, Constrain Components. Insert: Insert Component from a file, Insert
+**Batch 20. Assembly and insertion.** Nine, not ten: **As-Built Joint is already
+built** and was counted against Fusion's page rather than checked in the source.
+Checked in the source on 2026-09-07, the real list is:
+
+Assemble: Joint Origin as a command of its own (the capture function exists and
+is used by the joint picker, but there is no way to place one and reference it
+later), Constrain Components. Insert: Insert Component from a file, Insert
 Derive, Decal, Canvas. Sheet Metal: Hem, Lofted Flange, and a flat pattern that
 tracks whether it is out of date.
+
+The Insert four are the interesting half. Insert Component and Derive both mean
+one document reading another, which is the first thing here that needs a
+document to know about a file it does not own.
 
 **Batch 20b. Configurations and document history.** The local half of section
 6b, and larger than it looks. The Configuration Table with its eleven
