@@ -37,6 +37,7 @@ import {
   uid
 } from './features.js';
 import { recognise } from './recognise.js';
+import * as SEL from './select.js';
 import { readSTEP } from './stepread.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
 import * as SM from './sheetmetal.js';
@@ -161,11 +162,13 @@ async function boot() {
   state.vp.onPointerMove = (e) => {
     if (state.editForm?.drag && editFormPointerMove(e)) return true;
     if (state.pullDrag && pullPointerMove(e)) return true;
+    if (state.band && bandPointerMove(e)) return true;
     return handleViewportMove(e);
   };
   state.vp.onPointerUp = (e) => {
     if (state.editForm?.drag && editFormPointerUp(e)) return true;
     if (state.pullDrag && pullPointerUp(e)) return true;
+    if (state.band && bandPointerUp(e)) return true;
     return state.sketcher.onPointerUp(e);
   };
   state.vp.onContextMenu = (e) => showMarkingMenu(e);
@@ -439,8 +442,26 @@ function round(v, n = 4) {
  * What a click is allowed to select right now. Feature dialogs narrow this so
  * that, for instance, a fillet only ever picks up edges.
  */
+/**
+ * What a click is allowed to land on.
+ *
+ * A dialog waiting to be pointed at sets this for itself and is always obeyed.
+ * Otherwise it is whatever priority is in force, which is a setting rather than
+ * a mode: on a part where the faces are small and the edges are everywhere,
+ * being able to say "edges only" for a while is the difference between picking
+ * what you meant and picking eleven times.
+ */
 function activeFilter() {
-  return state.picking?.filter || { faces: true, edges: true, bodies: true, profiles: true };
+  if (state.picking?.filter) return state.picking.filter;
+  const p = state.selectPriority || 'auto';
+  if (p === 'auto') return { faces: true, edges: true, bodies: true, profiles: true };
+  return {
+    faces: p === 'face',
+    edges: p === 'edge',
+    bodies: p === 'body' || p === 'component',
+    profiles: false,
+    wholeBody: p === 'component'
+  };
 }
 
 function handleViewportDown(e) {
@@ -498,6 +519,8 @@ function handleViewportDown(e) {
         'path',
         'rail',
         'constructPath',
+        'constructEdgeA',
+        'constructEdgeB',
         'jointAxis2',
         'surfaceCurves',
         'sheetEdges'
@@ -534,7 +557,16 @@ function handleViewportDown(e) {
 
   const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: filter.edges !== false });
   if (!hit) {
-    if (!e.shiftKey && !state.picking) clearGeometrySelection();
+    // Nothing under the pointer, so a drag from here is a selection box rather
+    // than a miss. Dragged rightwards it takes what is wholly inside; dragged
+    // leftwards it takes anything it touches, which is the convention every
+    // CAD package shares and the one people already have in their hands.
+    if (!state.picking) {
+      if (!e.shiftKey) clearGeometrySelection();
+      startBand(e);
+      return true;
+    }
+    if (!e.shiftKey) clearGeometrySelection();
     return false;
   }
 
@@ -1652,6 +1684,45 @@ async function runCommand(cmd) {
       break;
     case 'recognise':
       cmdRecognise();
+      break;
+    case 'selectInvert':
+      cmdSelectInvert();
+      break;
+    case 'selectGrow':
+      cmdSelectGrow(1);
+      break;
+    case 'selectShrink':
+      cmdSelectShrink();
+      break;
+    case 'selectTangent':
+      cmdSelectTangent();
+      break;
+    case 'selectSimilar':
+      cmdSelectSimilar();
+      break;
+    case 'selectSeedBoundary':
+      cmdSeedAndBoundary();
+      break;
+    case 'selectBySize':
+      cmdSelectBySize();
+      break;
+    case 'isolate':
+      cmdIsolate();
+      break;
+    case 'unisolate':
+      cmdUnisolate();
+      break;
+    case 'priorityAuto':
+      cmdSelectPriority('auto');
+      break;
+    case 'priorityBody':
+      cmdSelectPriority('body');
+      break;
+    case 'priorityFace':
+      cmdSelectPriority('face');
+      break;
+    case 'priorityEdge':
+      cmdSelectPriority('edge');
       break;
     case 'faceGroups':
       cmdFaceGroups();
@@ -5020,6 +5091,23 @@ const RIBBON_MENUS = {
     ['insertSvg', 'Insert SVG'],
     ['insertDxf', 'Insert DXF']
   ],
+  selectMore: [
+    ['selectGrow', 'Grow'],
+    ['selectShrink', 'Shrink'],
+    ['selectInvert', 'Invert Selection'],
+    ['selectTangent', 'Tangent Run'],
+    ['selectSimilar', 'Select Similar'],
+    ['selectSeedBoundary', 'Seed And Boundary'],
+    ['selectBySize', 'Select By Size'],
+    ['isolate', 'Isolate'],
+    ['unisolate', 'Show All Again']
+  ],
+  selectPriority: [
+    ['priorityAuto', 'Anything'],
+    ['priorityFace', 'Faces only'],
+    ['priorityEdge', 'Edges only'],
+    ['priorityBody', 'Bodies only']
+  ],
   faceGroups: [
     ['faceGroups', 'Generate Face Groups'],
     ['createFaceGroup', 'Create Face Group'],
@@ -6756,7 +6844,10 @@ function startConstruction() {
     ['planeAlongPath', 'Plane Along a Path'],
     ['planeTangentPoint', 'Plane Tangent at a Point'],
     ['pointAlongPath', 'Point Along a Path'],
-    ['pointThreePlanes', 'Point Where 3 Planes Meet']
+    ['pointThreePlanes', 'Point Where 3 Planes Meet'],
+    ['planePerpendicular', 'Plane Square Across an Axis'],
+    ['planeTwoEdges', 'Plane Through 2 Edges'],
+    ['pointTwoEdges', 'Point Where 2 Edges Meet']
   ];
 
   const entry = {
@@ -6827,6 +6918,39 @@ function startConstruction() {
       type: 'select',
       options: axisOptions(),
       showIf: (f) => ['planeAngle', 'pointAxisPlane'].includes(f.entry.type),
+      get: (f) => optionForAxis(f.entry.axis),
+      set: (f, v) => {
+        f.entry.axis = axisSpecFromOption(v);
+      }
+    },
+    {
+      key: '__edgeA',
+      label: 'First edge',
+      type: 'pick',
+      pick: 'constructEdgeA',
+      showIf: (f) => ['planeTwoEdges', 'pointTwoEdges'].includes(f.entry.type),
+      summary: (f) => (f.entry.edgeA ? 'chosen' : 'none yet'),
+      clear: (f) => {
+        f.entry.edgeA = null;
+      }
+    },
+    {
+      key: '__edgeB',
+      label: 'Second edge',
+      type: 'pick',
+      pick: 'constructEdgeB',
+      showIf: (f) => ['planeTwoEdges', 'pointTwoEdges'].includes(f.entry.type),
+      summary: (f) => (f.entry.edgeB ? 'chosen' : 'none yet'),
+      clear: (f) => {
+        f.entry.edgeB = null;
+      }
+    },
+    {
+      key: '__acrossAxis',
+      label: 'Square across',
+      type: 'select',
+      options: axisOptions(),
+      showIf: (f) => f.entry.type === 'planePerpendicular',
       get: (f) => optionForAxis(f.entry.axis),
       set: (f, v) => {
         f.entry.axis = axisSpecFromOption(v);
@@ -6944,6 +7068,11 @@ function attachSelectionToConstruction(entry) {
   if (entry.type === 'axisEdge' || entry.type === 'pointCentre') {
     const first = [...edges.values()][0];
     if (first && first[0]) entry.edge = first[0];
+  }
+  if (entry.type === 'planeTwoEdges' || entry.type === 'pointTwoEdges') {
+    const all = [...edges.values()].flat();
+    if (all[0]) entry.edgeA = all[0];
+    if (all[1]) entry.edgeB = all[1];
   }
   if (entry.type === 'planeThreePoints' || entry.type === 'axisTwoPoints') {
     const pts = [];
@@ -8639,6 +8768,14 @@ function pickIntoEdit(hit) {
     } else {
       return true;
     }
+    ed.pickInto = null;
+  } else if (ed.pickInto === 'constructEdgeA' || ed.pickInto === 'constructEdgeB') {
+    if (hit.kind !== 'edge') return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
+    if (!edge) return true;
+    const which = ed.pickInto === 'constructEdgeA' ? 'edgeA' : 'edgeB';
+    f.entry[which] = edgeReference(edge, record.topology);
     ed.pickInto = null;
   } else if (ed.pickInto === 'constructPath') {
     // A sketch curve or a model edge; both come back as a run of points when
@@ -10623,6 +10760,390 @@ function cmdConvertMesh() {
  * What comes back is a reading, and it says which. Nothing is changed on the
  * model by looking at it.
  */
+/* ------------------------------------------------------------------ */
+/* Choosing things by dragging over them                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A selection box, and the paint mode that shares its machinery.
+ *
+ * Clicking one face at a time is the reason a model with four hundred of them
+ * is abandoned rather than edited. A drag over the ones you want is the answer,
+ * and the only real question is what "over" means: everything wholly inside the
+ * box, or everything it touches. Both, decided by which way the drag went, the
+ * way every other package decides it.
+ */
+function startBand(e) {
+  const wrap = document.getElementById('viewwrap');
+  const box = document.createElement('div');
+  box.className = 'sk-band';
+  wrap.appendChild(box);
+  state.band = {
+    x0: e.clientX,
+    y0: e.clientY,
+    x1: e.clientX,
+    y1: e.clientY,
+    el: box,
+    add: e.shiftKey,
+    pointerId: e.pointerId
+  };
+  try {
+    state.vp.canvas.setPointerCapture(e.pointerId);
+  } catch {
+    /* capture is a convenience */
+  }
+}
+
+function bandPointerMove(e) {
+  const b = state.band;
+  if (!b) return false;
+  b.x1 = e.clientX;
+  b.y1 = e.clientY;
+
+  const r = document.getElementById('viewwrap').getBoundingClientRect();
+  const left = Math.min(b.x0, b.x1) - r.left;
+  const top = Math.min(b.y0, b.y1) - r.top;
+  b.el.style.left = `${left}px`;
+  b.el.style.top = `${top}px`;
+  b.el.style.width = `${Math.abs(b.x1 - b.x0)}px`;
+  b.el.style.height = `${Math.abs(b.y1 - b.y0)}px`;
+  // Rightwards is solid and takes what is inside; leftwards is dashed and
+  // takes what it touches. The band says which it is while it is being drawn.
+  b.el.classList.toggle('crossing', b.x1 < b.x0);
+  return true;
+}
+
+function bandPointerUp(e) {
+  const b = state.band;
+  if (!b) return false;
+  state.band = null;
+  b.el.remove();
+  try {
+    state.vp.canvas.releasePointerCapture(b.pointerId ?? e?.pointerId);
+  } catch {
+    /* already let go */
+  }
+
+  const w = Math.abs(b.x1 - b.x0);
+  const h = Math.abs(b.y1 - b.y0);
+  // A press that barely moved was a click on nothing, which clears and is
+  // already done.
+  if (w < 4 && h < 4) return true;
+
+  const rect = {
+    lo: [Math.min(b.x0, b.x1), Math.min(b.y0, b.y1)],
+    hi: [Math.max(b.x0, b.x1), Math.max(b.y0, b.y1)]
+  };
+  const crossing = b.x1 < b.x0;
+  const filter = activeFilter();
+  let took = 0;
+
+  for (const record of state.records || []) {
+    if (!record.topology || !record.visible) continue;
+    if (filter.faces !== false) {
+      for (const face of record.topology.faces) {
+        if (!facingUs(face)) continue;
+        if (!inBand(facePoints(record, face), rect, crossing)) continue;
+        state.selection.faces.add(`${record.id}:${face.id}`);
+        took++;
+      }
+    }
+    if (filter.edges !== false) {
+      for (const edge of record.topology.edges) {
+        if (edge.tangent) continue;
+        if (!inBand(edge.points, rect, crossing)) continue;
+        state.selection.edges.add(`${record.id}:${edge.id}`);
+        took++;
+      }
+    }
+  }
+
+  state.vp.setSelection(state.selection.bodies);
+  refreshHighlight();
+  refreshPullHandle();
+  renderTree();
+  updateHints();
+  setStatus(
+    took
+      ? `${took} ${crossing ? 'touched by' : 'inside'} the box.`
+      : 'Nothing in the box.'
+  );
+  return true;
+}
+
+/** Is this face turned towards the camera? A box should not take the back. */
+function facingUs(face) {
+  const cam = state.vp.camera.position;
+  const toEye = [
+    cam.x - face.centre[0],
+    cam.y - face.centre[1],
+    cam.z - face.centre[2]
+  ];
+  return (
+    face.normal[0] * toEye[0] + face.normal[1] * toEye[1] + face.normal[2] * toEye[2] > 0
+  );
+}
+
+/**
+ * Where a face is, in enough places to judge it.
+ *
+ * Its own corners rather than its centre, because a long face can have its
+ * middle inside the box and both ends far outside it. Sampled rather than taken
+ * whole: a face of four thousand triangles does not need four thousand tests to
+ * answer this question.
+ */
+function facePoints(record, face) {
+  const mesh = record.mesh;
+  const stride = mesh.numProp;
+  const out = [];
+  const step = Math.max(1, Math.floor(face.tris.length / 24));
+  for (let i = 0; i < face.tris.length; i += step) {
+    const t = face.tris[i];
+    for (let k = 0; k < 3; k++) {
+      const v = mesh.triVerts[t * 3 + k] * stride;
+      out.push([mesh.vertProperties[v], mesh.vertProperties[v + 1], mesh.vertProperties[v + 2]]);
+    }
+  }
+  return out;
+}
+
+/** Wholly inside the box, or touching it, according to which was asked for. */
+function inBand(points, rect, crossing) {
+  if (!points?.length) return false;
+  let any = false;
+  for (const p of points) {
+    const s = state.vp.worldToScreen(p[0], p[1], p[2]);
+    if (!s || s.behind) {
+      if (!crossing) return false;
+      continue;
+    }
+    const inside =
+      s.clientX >= rect.lo[0] &&
+      s.clientX <= rect.hi[0] &&
+      s.clientY >= rect.lo[1] &&
+      s.clientY <= rect.hi[1];
+    if (inside) {
+      if (crossing) return true;
+      any = true;
+    } else if (!crossing) {
+      return false;
+    }
+  }
+  return crossing ? false : any;
+}
+
+/* ------------------------------------------------------------------ */
+/* Choosing things                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The body whose faces are selected, and which faces they are.
+ *
+ * Every rule below works within one body, because a face index means nothing
+ * without the topology it came from. Where faces from several bodies are
+ * selected the first is used and the rest are said to be ignored, which is
+ * honest and rare.
+ */
+function selectedFaceContext() {
+  const byBody = new Map();
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    if (!byBody.has(bodyId)) byBody.set(bodyId, []);
+    byBody.get(bodyId).push(index);
+  }
+  if (!byBody.size) return null;
+  const [bodyId, faces] = [...byBody][0];
+  const record = (state.records || []).find((r) => r.id === bodyId);
+  if (!record?.topology) return null;
+  return { record, faces, spread: byBody.size > 1 };
+}
+
+/** Put a set of face indices on one body into the selection. */
+function chooseFaces(record, indices, what) {
+  state.selection.faces.clear();
+  state.selection.edges.clear();
+  for (const i of indices) state.selection.faces.add(`${record.id}:${i}`);
+  refreshHighlight();
+  refreshPullHandle();
+  renderTree();
+  setStatus(`${indices.length} face${indices.length === 1 ? '' : 's'} ${what}.`);
+}
+
+/** One body's topology, whichever body is being talked about. */
+function soleRecord() {
+  const chosen = (state.records || []).filter((r) => state.selection.bodies.has(r.id));
+  const list = chosen.length ? chosen : (state.records || []).filter((r) => r.topology);
+  return list.length === 1 ? list[0] : null;
+}
+
+function cmdSelectInvert() {
+  const ctx = selectedFaceContext();
+  if (!ctx) {
+    setStatus('Select a face first. Invert needs something to turn inside out.');
+    return;
+  }
+  chooseFaces(
+    ctx.record,
+    SEL.invert(ctx.record.topology.faces.length, ctx.faces),
+    'selected, the rest of the body'
+  );
+}
+
+function cmdSelectGrow(rings = 1) {
+  const ctx = selectedFaceContext();
+  if (!ctx) {
+    setStatus('Select a face to grow from.');
+    return;
+  }
+  chooseFaces(ctx.record, SEL.grow(ctx.record.topology, ctx.faces, rings), 'after growing');
+}
+
+function cmdSelectShrink() {
+  const ctx = selectedFaceContext();
+  if (!ctx) {
+    setStatus('Select some faces to shrink.');
+    return;
+  }
+  const got = SEL.shrink(ctx.record.topology, ctx.faces);
+  if (!got.length) {
+    setStatus('Shrinking that leaves nothing. Every face of it is on the border.');
+    return;
+  }
+  chooseFaces(ctx.record, got, 'after shrinking');
+}
+
+function cmdSelectTangent() {
+  const ctx = selectedFaceContext();
+  if (!ctx) {
+    setStatus('Select a face. The run follows the surface it belongs to.');
+    return;
+  }
+  chooseFaces(
+    ctx.record,
+    SEL.tangentRun(ctx.record.topology, ctx.faces),
+    'in that smooth run'
+  );
+}
+
+function cmdSelectSimilar() {
+  const ctx = selectedFaceContext();
+  if (!ctx) {
+    setStatus('Select a face to match against.');
+    return;
+  }
+  chooseFaces(ctx.record, SEL.similarFaces(ctx.record.topology, ctx.faces), 'of that shape');
+}
+
+/**
+ * Everything reachable from what is selected without crossing a selected edge.
+ *
+ * The one that earns its keep on a shape nobody modelled: pick a face of a
+ * pocket, pick the rim round it, and the pocket comes whole however many faces
+ * it turns out to be made of.
+ */
+function cmdSeedAndBoundary() {
+  const ctx = selectedFaceContext();
+  if (!ctx) {
+    setStatus('Select a face to start from, and the edges to stop at.');
+    return;
+  }
+  const bounds = [];
+  for (const key of state.selection.edges) {
+    const { bodyId, index } = splitKey(key);
+    if (bodyId === ctx.record.id) bounds.push(index);
+  }
+  chooseFaces(
+    ctx.record,
+    SEL.seedAndBoundary(ctx.record.topology, ctx.faces, bounds),
+    bounds.length ? 'inside that boundary' : 'reachable, with no boundary set'
+  );
+}
+
+/**
+ * Faces under or over a size.
+ *
+ * The tool that makes an import workable. A downloaded model has a dozen faces
+ * worth caring about and hundreds of chips; this is how the chips get dealt
+ * with in one go instead of four hundred.
+ */
+function cmdSelectBySize() {
+  const record = soleRecord();
+  if (!record) {
+    setStatus('Select one body to choose faces on.');
+    return;
+  }
+  const range = SEL.sizeRange(record.topology);
+  showInspector(
+    'Select By Size',
+    [
+      {
+        key: '__range',
+        label: '',
+        type: 'note',
+        text:
+          `${record.topology.faces.length} faces, from ${round(range.min, 3)} to ` +
+          `${round(range.max, 1)} square ${displayUnit().label}.`
+      },
+      { key: 'min', label: 'At least', type: 'expr', value: '0' },
+      { key: 'max', label: 'At most', type: 'expr', value: String(round(range.max, 3)) },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Area, in the document units squared. Everything between the two is chosen.'
+      }
+    ],
+    (values) => {
+      const scope = resolveParameters(state.doc.parameters).scope;
+      const min = safeEval(values.min, scope, 0);
+      const max = safeEval(values.max, scope, Infinity);
+      const got = SEL.facesBySize(record.topology, { min, max });
+      if (!got.length) {
+        setStatus('Nothing is that size.');
+        return;
+      }
+      chooseFaces(record, got, `between ${round(min, 3)} and ${round(max, 3)}`);
+    }
+  );
+}
+
+/** Hide everything except what is selected, and put it back again. */
+function cmdIsolate() {
+  const keep = new Set(state.selection.bodies);
+  for (const key of state.selection.faces) keep.add(splitKey(key).bodyId);
+  for (const key of state.selection.edges) keep.add(splitKey(key).bodyId);
+  if (!keep.size) {
+    setStatus('Select something to isolate.');
+    return;
+  }
+  for (const r of state.records || []) {
+    if (!keep.has(r.id)) state.hiddenBodies.add(r.id);
+  }
+  rebuildAll();
+  setStatus(`Isolated ${keep.size} bod${keep.size === 1 ? 'y' : 'ies'}.`);
+}
+
+function cmdUnisolate() {
+  const n = state.hiddenBodies.size;
+  state.hiddenBodies.clear();
+  rebuildAll();
+  setStatus(n ? `Showed ${n} hidden bod${n === 1 ? 'y' : 'ies'}.` : 'Nothing was hidden.');
+}
+
+/** What a click may land on, until it is set back. */
+function cmdSelectPriority(kind) {
+  state.selectPriority = kind;
+  const said = {
+    auto: 'Anything',
+    body: 'Bodies only',
+    face: 'Faces only',
+    edge: 'Edges only',
+    component: 'Components only'
+  }[kind];
+  setStatus(`${said} can be selected now.`);
+  updateHints();
+}
+
 function cmdRecognise() {
   if (state.sketcher.active) finishSketch();
   const chosen = (state.result?.bodies || []).filter((b) =>

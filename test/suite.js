@@ -78,6 +78,7 @@ import {
   buildEdges
 } from '../src/renderer/meshutil.js';
 import * as RC from '../src/renderer/recognise.js';
+import * as SEL from '../src/renderer/select.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import { readSTEP } from '../src/renderer/stepread.js';
 import * as SH from '../src/renderer/sheet.js';
@@ -6431,6 +6432,287 @@ async function run() {
     });
     return part;
   }
+
+  /* -------- construction, the new kinds -------- */
+
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+
+  /** Build one construction entry against a box and hand back what it made. */
+  function builtConstruction(entry, size = 40) {
+    const doc = boxDoc(size, size, size);
+    doc.features.push({ id: uid('f'), type: 'construction', entry });
+    const res = rebuild(doc);
+    const got = res.construction?.get(entry.id) || null;
+    return { got, res, topo: buildTopology(K.meshData(res.bodies[0].solid)) };
+  }
+
+  test('construct: a plane square across an axis faces along it', () => {
+    const { got, res } = builtConstruction({
+      id: 'cx1',
+      type: 'planePerpendicular',
+      axis: { worldAxis: 'z' },
+      point: null
+    });
+    assert(got, 'it built');
+    assert(got.kind === 'plane', `a plane, got ${got.kind}`);
+    // Square across Z means its normal is Z, whatever else is true of it.
+    near(Math.abs(got.n[2]), 1, 1e-9, 'facing along the axis');
+    near(got.n[0], 0, 1e-9, 'and along nothing else');
+    near(got.n[1], 0, 1e-9, 'in either direction');
+    // The two in-plane directions have to be square to it and to each other,
+    // or a sketch on this plane comes out sheared.
+    near(dot3(got.x, got.n), 0, 1e-9, 'x lies in the plane');
+    near(dot3(got.y, got.n), 0, 1e-9, 'y lies in the plane');
+    near(dot3(got.x, got.y), 0, 1e-9, 'and they are square to each other');
+    res.dispose();
+  });
+
+  test('construct: a plane through two edges holds both of them', () => {
+    // Two edges of the box top. They meet at a corner, so there is exactly one
+    // plane through them and it is the top face's own.
+    const first = rebuild(boxDoc(40, 40, 40)).bodies[0];
+    const topo0 = buildTopology(K.meshData(first.solid));
+    const top = topo0.faces.reduce((b, f, i) => (f.centre[2] > topo0.faces[b].centre[2] ? i : b), 0);
+    const rim = topo0.edges.filter((e) => e.faceA === top || e.faceB === top);
+    assert(rim.length >= 2, 'the top has edges');
+
+    const { got, res } = builtConstruction({
+      id: 'cx2',
+      type: 'planeTwoEdges',
+      edgeA: edgeReference(rim[0], topo0),
+      edgeB: edgeReference(rim[1], topo0)
+    });
+    assert(got, 'it built');
+    assert(got.kind === 'plane', `a plane, got ${got.kind}`);
+    // Both edges lie in it, which is the whole claim.
+    for (const e of [rim[0], rim[1]]) {
+      for (const p of e.points) {
+        const off = dot3([p[0] - got.origin[0], p[1] - got.origin[1], p[2] - got.origin[2]], got.n);
+        near(off, 0, 1e-4, 'the edge lies in the plane');
+      }
+    }
+    res.dispose();
+  });
+
+  test('construct: skew edges share no plane, and it says so', () => {
+    // The top front edge and the bottom right edge of a box never meet and are
+    // not parallel. Any plane through both would be a lie.
+    const first = rebuild(boxDoc(40, 40, 40)).bodies[0];
+    const topo0 = buildTopology(K.meshData(first.solid));
+    const lines = topo0.edges.filter((e) => e.kind === 'line');
+    let a = null;
+    let b = null;
+    for (const x of lines) {
+      for (const y of lines) {
+        if (x === y) continue;
+        const par = Math.abs(dot3(x.dir, y.dir));
+        if (par > 0.99) continue;
+        // Not touching: every end of one is far from every end of the other.
+        const ends = (e) => [e.points[0], e.points[e.points.length - 1]];
+        const far = ends(x).every((p) =>
+          ends(y).every((q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) > 1)
+        );
+        if (far) {
+          a = x;
+          b = y;
+          break;
+        }
+      }
+      if (a) break;
+    }
+    assert(a && b, 'found two edges that neither meet nor run parallel');
+
+    const { got, res } = builtConstruction({
+      id: 'cx3',
+      type: 'planeTwoEdges',
+      edgeA: edgeReference(a, topo0),
+      edgeB: edgeReference(b, topo0)
+    });
+    assert(!got, 'skew edges are refused rather than averaged');
+    res.dispose();
+  });
+
+  test('construct: a point where two edges meet is the corner', () => {
+    // Two edges of one face share a corner, and that corner is a vertex of the
+    // box, so the answer is known to the millimetre before the test runs.
+    const first = rebuild(boxDoc(40, 40, 40)).bodies[0];
+    const topo0 = buildTopology(K.meshData(first.solid));
+    const lines = topo0.edges.filter((e) => e.kind === 'line');
+    const endsOf = (e) => [e.points[0], e.points[e.points.length - 1]];
+
+    let a = null;
+    let b = null;
+    let corner = null;
+    for (const x of lines) {
+      for (const y of lines) {
+        if (x === y || Math.abs(dot3(x.dir, y.dir)) > 0.01) continue;
+        for (const p of endsOf(x)) {
+          for (const q of endsOf(y)) {
+            if (Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < 1e-6) {
+              a = x;
+              b = y;
+              corner = p;
+            }
+          }
+        }
+        if (a) break;
+      }
+      if (a) break;
+    }
+    assert(a && b, 'found two edges meeting at a corner');
+
+    const { got, res } = builtConstruction({
+      id: 'cx4',
+      type: 'pointTwoEdges',
+      edgeA: edgeReference(a, topo0),
+      edgeB: edgeReference(b, topo0)
+    });
+    assert(got && got.kind === 'point', 'it built a point');
+    for (let i = 0; i < 3; i++) {
+      near(got.p[i], corner[i], 1e-4, `on the corner, axis ${i}`);
+    }
+    res.dispose();
+  });
+
+  /* -------- selection -------- */
+
+  test('select: by size picks the small faces and leaves the big ones', () => {
+    // A plate with two bores. The six flats and the two bores are large; the
+    // question is whether asking for everything under a threshold answers with
+    // exactly the faces under it, which is the whole of what the tool is.
+    const doc = boxDoc(80, 60, 10);
+    doc.features.push({
+      ...prim('cylinder', { diameter: '6', height: '40', x: '-20' }), op: 'cut', targets: 'all'
+    });
+    const res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+
+    const range = SEL.sizeRange(topo);
+    assert(range.max > range.min, 'the faces are not all one size');
+
+    const small = SEL.facesBySize(topo, { max: range.min * 1.001 });
+    assert(small.length >= 1, 'at least the smallest');
+    for (const i of small) {
+      assert(topo.faces[i].area <= range.min * 1.001, 'and nothing above the line');
+    }
+
+    // Everything, when the range is everything.
+    assert(
+      SEL.facesBySize(topo, { min: 0, max: Infinity }).length === topo.faces.length,
+      'no bound excludes nothing'
+    );
+    res.dispose();
+  });
+
+  test('select: invert is what was not chosen', () => {
+    const doc = rebuild(boxDoc(40, 40, 40));
+    const topo = buildTopology(K.meshData(doc.bodies[0].solid));
+    const some = [0, 2];
+    const rest = SEL.invert(topo.faces.length, some);
+    assert(rest.length === topo.faces.length - 2, `four left, got ${rest.length}`);
+    assert(!rest.includes(0) && !rest.includes(2), 'and not the two it started with');
+    assert(
+      SEL.invert(topo.faces.length, rest).sort().join() === some.sort().join(),
+      'inverting twice is where you began'
+    );
+    doc.dispose();
+  });
+
+  test('select: grow takes the ring around, shrink gives it back', () => {
+    const doc = rebuild(boxDoc(40, 40, 40));
+    const topo = buildTopology(K.meshData(doc.bodies[0].solid));
+    // Every face of a box touches four others, so one ring out from any face
+    // is five, and the sixth is the one opposite it.
+    const one = SEL.grow(topo, [0], 1);
+    assert(one.length === 5, `five after one ring, got ${one.length}`);
+    const two = SEL.grow(topo, [0], 2);
+    assert(two.length === 6, `the whole box after two, got ${two.length}`);
+    // Shrinking the whole box drops nothing, because nothing is on a border.
+    assert(SEL.shrink(topo, two).length === 6, 'a closed set has no border');
+    assert(SEL.shrink(topo, one).length < one.length, 'and an open one does');
+    doc.dispose();
+  });
+
+  test('select: seed and boundary fills to the rim and stops', () => {
+    // A box with a step cut into it. Seeded on the top and bounded by the
+    // edges around it, the fill must not run down the sides.
+    const doc = rebuild(boxDoc(40, 40, 20));
+    const topo = buildTopology(K.meshData(doc.bodies[0].solid));
+    const top = topo.faces.reduce(
+      (best, f, i) => (f.centre[2] > topo.faces[best].centre[2] ? i : best),
+      0
+    );
+    const rim = topo.edges.filter((e) => e.faceA === top || e.faceB === top).map((e) => e.id);
+
+    const held = SEL.seedAndBoundary(topo, [top], rim);
+    assert(held.length === 1, `the rim held it to one face, got ${held.length}`);
+
+    // With no boundary at all it runs over the whole body, which is the same
+    // walk with nothing stopping it.
+    const all = SEL.seedAndBoundary(topo, [top], []);
+    assert(all.length === topo.faces.length, `all six with no rim, got ${all.length}`);
+    doc.dispose();
+  });
+
+  test('select: a tangent run is the whole of one smooth surface', () => {
+    // Four upright edges rounded. Seeded on a flat, the run should take the
+    // fillets either side of it, because those meet it without a crease, and
+    // stop at the top and bottom faces, which do not.
+    const first = rebuild(boxDoc(40, 40, 40)).bodies[0];
+    const uprights = buildTopology(K.meshData(first.solid))
+      .edges.filter((e) => e.kind === 'line' && e.convex && Math.abs(e.dir[2]) > 0.99)
+      .map((e) => edgeReference(e));
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({
+      id: uid('f'), type: 'fillet', bodies: 'all', sets: [{ edges: uprights, radius: '4' }]
+    });
+    const res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+
+    const side = topo.faces.findIndex(
+      (f) => f.planar && Math.abs(f.normal[2]) < 0.01
+    );
+    assert(side >= 0, 'found an upright flat');
+
+    const run = SEL.tangentRun(topo, [side]);
+    // The four walls and the four fillets between them: the whole band round
+    // the box, and neither the top nor the bottom.
+    assert(run.length === 8, `the band is eight faces, got ${run.length}`);
+    for (const i of run) {
+      assert(Math.abs(topo.faces[i].normal[2]) < 0.5, 'nothing facing up or down');
+    }
+    res.dispose();
+  });
+
+  test('select: similar finds the faces that match the one picked', () => {
+    // Four bores of one size and one of another. Picking one of the four
+    // should offer the other three and not the odd one.
+    const doc = boxDoc(80, 80, 10);
+    for (const [x, y] of [[-25, -25], [25, -25], [-25, 25], [25, 25]]) {
+      doc.features.push({
+        ...prim('cylinder', { diameter: '6', height: '40', x: String(x), y: String(y) }),
+        op: 'cut', targets: 'all'
+      });
+    }
+    doc.features.push({
+      ...prim('cylinder', { diameter: '16', height: '40' }), op: 'cut', targets: 'all'
+    });
+    const res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+
+    const smallBore = topo.faces.findIndex(
+      (f) => f.cylinder && Math.abs(f.cylinder.radius - 3) < 0.3
+    );
+    assert(smallBore >= 0, 'found one of the small bores');
+
+    const like = SEL.similarFaces(topo, [smallBore]);
+    assert(like.length === 4, `the four that match, got ${like.length}`);
+    for (const i of like) {
+      near(topo.faces[i].cylinder.radius, 3, 0.3, 'all of them three across');
+    }
+    res.dispose();
+  });
 
   /* -------- STEP -------- */
 

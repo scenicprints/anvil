@@ -624,6 +624,30 @@ inserted mesh is held apart from the solids until you ask for it to cross over,
 which keeps a two million triangle scan out of the kernel until that is what you
 want, and Convert Mesh is where it crosses.
 
+**Choosing things** is its own set of tools, because every command begins by
+choosing something and clicking one face at a time is the reason a model with
+four hundred of them gets abandoned rather than edited.
+
+**Drag a box** over the model. Rightwards takes what is wholly inside it and
+draws solid; leftwards takes anything it touches and draws dashed, which is the
+convention every package shares. Only faces turned towards you are taken, so a
+box does not quietly grab the back of the part as well.
+
+**Select By Size** is the one that earns its place on an import: a downloaded
+model has a dozen faces worth caring about and hundreds of chips, and
+everything under two square millimetres selects the rest of them in one go.
+**Seed And Boundary** takes a face and the rim around it and fills to the rim,
+so a pocket comes whole however many faces it turns out to be made of.
+**Tangent Run** takes the whole of one smooth surface, stopping where there is
+a crease. **Select Similar** matches what was picked: pick one M3 bore and the
+other three come with it. **Grow**, **Shrink** and **Invert** do the obvious.
+
+**Priority** is a setting rather than a mode: faces only, edges only, bodies
+only, or anything. On a part where the edges are everywhere and the faces are
+small, being able to say "edges only" for a while is the difference between
+picking what you meant and picking eleven times. **Isolate** hides everything
+but what is selected.
+
 **Recognise** reads a body back as features, whatever it arrived as. This is
 where the mesh kernel stops being a compromise and starts being an advantage.
 A boundary representation package treats an imported mesh as a foreign object it
@@ -1001,7 +1025,7 @@ model file can never execute anything.
 npm test
 ```
 
-348 tests in a hidden window, checking measured quantities: volumes against
+358 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1031,7 +1055,10 @@ a rigid group and a motion link. `demo-inspect.js` shells a box, weighs it, chec
 through its wall, colours its draft and cuts it open, `demo-project.js` draws a
 tangent arc, projects a face both linked and as a
 copy, and sections a body, checking that the linked ones move when the model
-does, `demo-step.js` writes a STEP file entity by entity, reads it back, and checks
+does, `demo-select.js` drills a plate with five bores and works through every rule:
+similar picks the four that match, grow and shrink go out and back, by size
+takes the small ones, and a box dragged each way takes what it should.
+`demo-step.js` writes a STEP file entity by entity, reads it back, and checks
 the solid it makes measures exactly what the file described. `demo-recognise.js` drills a plate, reads it back as four holes in two sizes,
 clicks a size to select it, then exports the same body to STL and reads it again
 with no history at all to check it says the same thing. `demo-pull.js` clicks a face, drags the arrow that appears, checks the body grew

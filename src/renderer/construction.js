@@ -287,6 +287,66 @@ function buildEntry(entry, ctx) {
       return at ? { kind: 'point', p: at.p } : null;
     }
 
+    case 'planePerpendicular': {
+      // Square across an axis, at a point on it. What you want before cutting
+      // a slot across a shaft: the plane the cut lies in is decided by the
+      // shaft, not by the world.
+      const axis = ctx.axisOf(entry.axis);
+      const at = ctx.pointOf(entry.point);
+      if (!axis) return null;
+      // Without a point it sits where the axis starts, which is at least
+      // somewhere on the axis rather than nowhere.
+      const origin = at || axis.origin;
+      const basis = basisFor(axis.dir);
+      return { kind: 'plane', origin, x: basis.x, y: basis.y, n: axis.dir };
+    }
+
+    case 'planeTwoEdges': {
+      // The plane two straight edges share. Two lines lie in one plane when
+      // they meet or when they are parallel, and in neither case does the
+      // plane need anything else said about it.
+      const a = ctx.edgeFor(entry.edgeA);
+      const b = ctx.edgeFor(entry.edgeB);
+      if (!a || !b || a.kind !== 'line' || b.kind !== 'line') return null;
+
+      let n = cross(a.dir, b.dir);
+      if (len(n) < 1e-6) {
+        // Parallel: the plane is the one holding both, so its normal is square
+        // to the direction they share and to the gap between them.
+        const across = sub(b.start, a.start);
+        n = cross(a.dir, across);
+        if (len(n) < 1e-6) return null;
+      } else {
+        // Crossing or skew. Skew lines share no plane, and saying so is better
+        // than quietly building one through the middle of them.
+        const gap = sub(b.start, a.start);
+        const offAxis = Math.abs(dot(gap, norm(n)));
+        const scale2 = Math.max(len(gap), 1);
+        if (offAxis > 1e-4 * scale2) return null;
+      }
+      const unit = norm(n);
+      const basis = basisFor(unit);
+      return { kind: 'plane', origin: a.start, x: basis.x, y: basis.y, n: unit };
+    }
+
+    case 'pointTwoEdges': {
+      // Where two straight edges meet. Where they only nearly meet, the point
+      // halfway along the shortest line between them is the honest answer and
+      // is what every measurement of a real part gives anyway.
+      const a = ctx.edgeFor(entry.edgeA);
+      const b = ctx.edgeFor(entry.edgeB);
+      if (!a || !b || a.kind !== 'line' || b.kind !== 'line') return null;
+      const w = sub(a.start, b.start);
+      const dd = dot(a.dir, b.dir);
+      const denom = 1 - dd * dd;
+      if (Math.abs(denom) < 1e-9) return null;
+      const sa = (dd * dot(w, b.dir) - dot(w, a.dir)) / denom;
+      const sb = (dot(w, b.dir) - dd * dot(w, a.dir)) / denom;
+      const pa = add(a.start, scale(a.dir, sa));
+      const pb = add(b.start, scale(b.dir, sb));
+      return { kind: 'point', p: scale(add(pa, pb), 0.5) };
+    }
+
     case 'pointThreePlanes': {
       const a = ctx.planeOf(entry.planeA);
       const b = ctx.planeOf(entry.planeB);
@@ -420,6 +480,9 @@ function twoPlanePoint(a, b, dir) {
 }
 
 export const CONSTRUCTION_LABELS = {
+  planePerpendicular: 'Plane Square Across an Axis',
+  planeTwoEdges: 'Plane Through 2 Edges',
+  pointTwoEdges: 'Point Where 2 Edges Meet',
   planeOffset: 'Offset Plane',
   planeAngle: 'Plane at Angle',
   planeThreePoints: 'Plane Through 3 Points',

@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.10.0**. 348 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
+Current version: **2.11.0**. 358 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
 
 ---
 
@@ -1422,7 +1422,12 @@ The old plan here said "Batch 14, the commands" and listed seventeen. Walking
 every panel found sixty six, so one batch was never the right shape. Ordered by
 what is felt soonest per hour spent, not by where things sit in the menus.
 
-**Batch 14. Select.** Thirteen commands, and the highest value block on the
+**Batch 14. Select. Shipped in v2.11.0.** Box selection both ways, by size,
+seed and boundary, tangent run, similar, grow, shrink, invert, priority
+filters, isolate. What is still missing from the panel: freeform lasso, paint,
+and select by name.
+
+Thirteen commands, and the highest value block on the
 whole list. Window, freeform and paint dragging; select by name, by size, by
 boundary; seed and boundary; invert; priority filters for body, face, edge and
 component; isolate and unisolate. On a fifty thousand triangle import, "select
@@ -1446,8 +1451,11 @@ Appearance, Compute All. Direct Edit belongs with the import work and could
 move there.
 
 **Batch 18. The geometry singles.** Fifteen, all small and unrelated to each
-other. Construct: Perpendicular Plane, Plane Through Two Edges, Point Through
-Two Edges, User Coordinate System. Sketch: 3-Point Circle, Spun Profile,
+other. **Three of the four Construct ones shipped in v2.11.0**: a plane square
+across an axis, a plane through two edges, and the point where two edges meet.
+Skew edges are refused rather than averaged into a plane that is a lie. The
+User Coordinate System is the one left, and it is the only one of the four that
+is not a single formula. Sketch: 3-Point Circle, Spun Profile,
 Collinear, Curvature, Blend Curve. Surface: Untrim, Merge. Inspect: Isocurve
 Analysis, Design Advice. Form: Repair Body. Make: 3D Print, meaning a send to a
 slicer rather than an export.
