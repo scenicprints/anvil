@@ -197,6 +197,10 @@ async function runShot() {
 // Set once the answer is in, so the second close attempt goes straight through.
 let closing = false;
 
+// When this process last wrote the open document, so a change made somewhere
+// else can be told from one of our own.
+let lastWrittenAt = null;
+
 /** Ask about unsaved work, then close. Any failure closes anyway. */
 async function confirmClose() {
   // Asking the page whether it is dirty must never be what keeps the window
@@ -384,13 +388,65 @@ ipcMain.handle('doc:save', async (_e, { data, saveAs }) => {
     file = res.filePath;
   }
   try {
-    await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf8');
+    await writeAtomic(file, JSON.stringify(data, null, 2));
     currentPath = file;
+    lastWrittenAt = await modifiedAt(file);
     setTitle();
     return { ok: true, path: file };
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+/**
+ * Write a document without ever leaving a half written one on disk.
+ *
+ * Writing in place has two ways to lose a model, and a folder that syncs to
+ * somewhere else makes both of them likely rather than rare. A crash partway
+ * through leaves the file truncated, and that is the only copy. A sync client
+ * watching the folder can upload the file while it is still being written and
+ * push the truncated version everywhere.
+ *
+ * Writing beside it and renaming over the top closes both. A rename within a
+ * directory either happens or does not, so a reader sees the old file or the
+ * new one and never something in between.
+ */
+async function writeAtomic(file, text) {
+  const temp = `${file}.writing`;
+  const handle = await fs.open(temp, 'w');
+  try {
+    await handle.writeFile(text, 'utf8');
+    // On disk, not merely handed to the operating system, before the rename
+    // makes it the document of record.
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await fs.rename(temp, file);
+}
+
+/** When a file last changed, or null if it is not there. */
+async function modifiedAt(file) {
+  try {
+    const st = await fs.stat(file);
+    return st.mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Has this document changed underneath us since we last wrote it?
+ *
+ * The question a synced folder makes worth asking: the same file may have been
+ * edited on another machine and pulled down while it sat open here. Answering
+ * it is what turns silent loss into a choice.
+ */
+ipcMain.handle('doc:changedOnDisk', async () => {
+  if (!currentPath || lastWrittenAt === null) return { changed: false };
+  const now = await modifiedAt(currentPath);
+  if (now === null) return { changed: false, missing: true };
+  return { changed: now > lastWrittenAt + 1, at: now, path: currentPath };
 });
 
 ipcMain.handle('doc:currentPath', async () => currentPath);

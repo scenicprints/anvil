@@ -1224,6 +1224,26 @@ paragraph was wrong as well as thin. Lumping everything Fusion delivers over a
 network into "not for us" hid several features that need no network at all.
 Three buckets, and only the first is genuinely out.
 
+**6z. A synced folder is the hub.** His idea, and better than anything that was
+on this list. Google Drive, or any folder that syncs, already provides storage,
+sync across machines, file version history, sharing by link and permissions.
+Those are the expensive parts of a hub and they are done. What it does not give
+is a comment pinned to a face, a merge of two edits, or a viewer for a file
+nobody else has the application for.
+
+What it needs from this end is safety, not features, because a folder that
+syncs turns rare failures into likely ones:
+
+- **Atomic writes. Done in v2.10.1.** Saving wrote the document in place, so a
+  crash halfway left it truncated and a sync client could upload a half written
+  file. It writes beside and renames now, which either happens or does not.
+- **Noticing a change made elsewhere. Done in v2.10.1.** The same file edited on
+  another machine and pulled down while it sat open here used to be overwritten
+  in silence. Saving over it is now a choice with Save a copy offered.
+- **Still to do:** exporting a viewable form beside the document so a share link
+  opens for someone without Anvil, and a lock file so two machines editing at
+  once is noticed at the start rather than at the save.
+
 **6a. Needs a server. Out, and not a judgement call.**
 
 Hubs. Joining a hub by invitation or approval. Projects as shared spaces.

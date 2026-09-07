@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('anvil', {
     ipcRenderer.invoke('export:mesh', { suggestedName, ext, data }),
   importVector: (kind) => ipcRenderer.invoke('import:vector', kind),
   importBinary: (kind) => ipcRenderer.invoke('import:binary', kind),
+  changedOnDisk: () => ipcRenderer.invoke('doc:changedOnDisk'),
   showItem: (file) => ipcRenderer.invoke('shell:showItem', file),
   message: (opts) => ipcRenderer.invoke('dialog:message', opts)
 });

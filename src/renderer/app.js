@@ -2006,6 +2006,26 @@ async function cmdOpen() {
 }
 
 async function cmdSave(saveAs) {
+  // A document kept in a folder that syncs, which is the cheapest hub there
+  // is, can be edited on another machine and pulled down while it sits open
+  // here. Saving over that without asking is silent loss, and the only moment
+  // it can be caught is now.
+  if (!saveAs && (await changedElsewhere())) {
+    const choice = await window.anvil.message({
+      type: 'warning',
+      title: 'Changed somewhere else',
+      message: 'This file has changed on disk since you opened it.',
+      detail:
+        'Another machine, or another copy of Anvil, has written to it. Saving ' +
+        'now replaces that version with yours.',
+      buttons: ['Save anyway', 'Save a copy', 'Cancel'],
+      defaultId: 1,
+      cancelId: 2
+    });
+    if (choice?.response === 2) return false;
+    if (choice?.response === 1) saveAs = true;
+  }
+
   const res = await window.anvil.save(state.doc, saveAs);
   if (!res.ok) {
     if (res.error) setStatus(`Could not save: ${res.error}`);
@@ -2016,6 +2036,17 @@ async function cmdSave(saveAs) {
   el.docname.textContent = res.path.split(/[\\/]/).pop();
   setStatus(`Saved ${el.docname.textContent}`);
   return true;
+}
+
+/** Has the open document been written by something else since we last saw it? */
+async function changedElsewhere() {
+  try {
+    const got = await window.anvil.changedOnDisk?.();
+    return !!got?.changed;
+  } catch {
+    // A check that cannot run must never be the reason a save does not.
+    return false;
+  }
 }
 
 async function cmdExport(ext) {
