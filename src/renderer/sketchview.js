@@ -28,6 +28,7 @@ import {
 import { sketchToWorld, worldToSketch, resolveDimensionExprs } from './features.js';
 import { safeEval } from './expr.js';
 import { textContours } from './textoutline.js';
+import { endFrame, blendControls } from './blend.js';
 
 /**
  * The point indices an entity is built from, and the one place that knows it.
@@ -299,6 +300,9 @@ export class SketchEditor {
       rectangle3: 'Click two corners of one edge, then the width.',
       conic: 'Click both ends, then the vertex their tangents meet at.',
       splineCP: 'Click control points. The curve is pulled towards them.',
+      circle3: 'Click three points the circle should pass through.',
+      blendCurve: 'Click the loose end of one curve, then of another.',
+      blendCurveG1: 'Click the loose end of one curve, then of another.',
       circleTan2: 'Click two lines, then where the circle goes.',
       circleTan3: 'Click three lines it should touch.',
       tangentArc: 'Click the end of a curve, then where the arc should finish.'
@@ -1510,6 +1514,70 @@ export class SketchEditor {
       return;
     }
 
+    if (T === 'blendCurve' || T === 'blendCurveG1') {
+      // The loose end nearest the click, rather than whatever the snap made of
+      // it. A blend has to attach to geometry that is already there, so putting
+      // a new point down when the click missed would leave a stray point and no
+      // blend, which is the worst of both.
+      const idx = this.looseEndNear(pos);
+      const owner = idx === null ? null : this.curveEndAt(idx);
+      if (!owner) {
+        this.status('That is not the end of a curve. Click one of the two ends to join.');
+        return;
+      }
+      if (!this.pending) {
+        this.pending = { tool: T, ends: [{ idx, ent: owner }] };
+        this.status('Now the end of the other curve.');
+        return;
+      }
+      const first = this.pending.ends[0];
+      this.pending = null;
+      if (first.idx === idx) {
+        this.status('Those are the same end.');
+        this.finishStep();
+        return;
+      }
+      this.buildBlendCurve(first, { idx, ent: owner }, T === 'blendCurve' ? 'G2' : 'G1');
+      this.finishStep();
+      return;
+    }
+
+    if (T === 'circle3') {
+      // Three points on the rim. The one case where the circle is known by
+      // where it goes rather than by where its middle is, which is how a bore
+      // gets matched to three measured points off a real part.
+      if (!this.pending) {
+        const idx = this.resolvePoint(pos, snap);
+        this.pending = { tool: T, points: [idx] };
+        this.maybeAnchor(idx, snap);
+        return;
+      }
+      if (this.pending.points.length === 1) {
+        this.pending.points.push(this.resolvePoint(pos, snap));
+        return;
+      }
+      const a = this.sketch.points[this.pending.points[0]];
+      const b = this.sketch.points[this.pending.points[1]];
+      const circ = circleThrough(a, b, pos);
+      if (!circ) {
+        this.status('Those three points lie on a line, so there is no circle through them.');
+        this.pending = null;
+        this.finishStep();
+        return;
+      }
+      const c = this.addPoint(circ.x, circ.y);
+      const r = Math.hypot(a.x - circ.x, a.y - circ.y);
+      const circle = this.addEntity({ type: 'circle', c, r });
+      // The two points that were clicked stay on it, so moving one moves the
+      // circle rather than leaving a point stranded beside it.
+      for (const i of this.pending.points) {
+        this.addConstraint({ type: 'pointOnCircle', point: i, entity: circle.id });
+      }
+      this.pending = null;
+      this.finishStep();
+      return;
+    }
+
     if (T === 'arc3') {
       if (!this.pending) {
         const idx = this.resolvePoint(pos, snap);
@@ -1955,6 +2023,73 @@ export class SketchEditor {
     this.addConstraint({ type: 'parallel', entities: [e0.id, e2.id] });
     this.addConstraint({ type: 'parallel', entities: [e1.id, e3.id] });
     this.addConstraint({ type: 'perpendicular', entities: [e0.id, e1.id] });
+  }
+
+  /** The nearest loose curve end to a point, within reach of a click. */
+  looseEndNear(pos) {
+    const reach = this.pixelScale() * SNAP_PX * 3;
+    let best = null;
+    for (const ent of this.sketch.entities) {
+      if (ent.construction) continue;
+      const ends = entityEndpoints(ent);
+      if (!ends) continue;
+      for (const i of ends) {
+        const p = this.sketch.points[i];
+        if (!p) continue;
+        const d = Math.hypot(p.x - pos.x, p.y - pos.y);
+        if (d > reach) continue;
+        if (!best || d < best.d) best = { d, i };
+      }
+    }
+    return best ? best.i : null;
+  }
+
+  /**
+   * The curve a point is the loose end of, if it is one.
+   *
+   * Loose matters: joining onto the middle of a curve, or onto an end that is
+   * already joined to something, gives a curve that leaves at a tangent nothing
+   * else agrees with. So an end that two curves already share is not offered.
+   */
+  curveEndAt(idx) {
+    const owners = [];
+    for (const ent of this.sketch.entities) {
+      if (ent.construction) continue;
+      const ends = entityEndpoints(ent);
+      if (ends && ends.includes(idx)) owners.push(ent);
+    }
+    return owners.length === 1 ? owners[0] : null;
+  }
+
+  /**
+   * Join two loose ends with a spline that does not show the join.
+   *
+   * The end points are the sketch's own, not copies, so dragging the curve that
+   * was blended drags the blend with it and the join stays closed. What the
+   * join cannot keep on its own is the direction and the curvature, which are
+   * built in rather than constrained: nothing in a 2D solver expresses "leaves
+   * this end at this curvature", and pretending otherwise with a chain of
+   * construction lines would be worse than saying so.
+   */
+  buildBlendCurve(first, second, continuity) {
+    const a = endFrame(this.sketch, first.ent, first.idx);
+    const b = endFrame(this.sketch, second.ent, second.idx);
+    if (!a || !b) {
+      this.status('Could not read the ends of those curves.');
+      return;
+    }
+    const ctrl = blendControls(a, b, { continuity, bias: this.blendBias || 1 });
+    if (!ctrl || ctrl.length < 3) {
+      this.status('Those two ends are on top of each other.');
+      return;
+    }
+    const inner = ctrl.slice(1, -1).map((c) => this.addPoint(c.x, c.y));
+    this.addEntity({ type: 'bspline', p: [first.idx, ...inner, second.idx] });
+    this.status(
+      continuity === 'G2'
+        ? 'Blended, matching direction and curvature at both ends.'
+        : 'Blended, matching direction at both ends.'
+    );
   }
 
   /**
@@ -2857,6 +2992,17 @@ export class SketchEditor {
         }
         break;
 
+      case 'collinear':
+        if (ents.length < 2) return need(2, 'two lines');
+        if (ents.some((e) => e.type !== 'line')) {
+          this.status('Collinear is for lines.');
+          return;
+        }
+        for (let i = 1; i < ents.length; i++) {
+          this.addConstraint({ type, entities: [ents[0].id, ents[i].id] });
+        }
+        break;
+
       case 'parallel':
       case 'perpendicular':
       case 'equal':
@@ -3698,6 +3844,7 @@ const CONSTRAINT_GLYPHS = {
   horizontal: '—',
   vertical: '|',
   parallel: '∥',
+  collinear: '≡',
   perpendicular: '⊥',
   tangent: 'T',
   equal: '=',

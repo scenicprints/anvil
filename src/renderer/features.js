@@ -1101,6 +1101,14 @@ export function rebuild(doc, options = {}) {
           doExtendSurface(feature, doc, scope, scopeObj, errors);
           break;
 
+        case 'untrimSurface':
+          doUntrimSurface(feature, doc, scope, scopeObj, errors);
+          break;
+
+        case 'mergeSurface':
+          doMergeSurface(feature, doc, scope, scopeObj, errors);
+          break;
+
         case 'stitch':
           doStitch(feature, doc, scope, scopeObj, errors);
           break;
@@ -5276,6 +5284,85 @@ export function rebuild(doc, options = {}) {
   }
 
   /**
+   * Put back what a trim took away.
+   *
+   * The common case on an imported surface is a hole cut through it by
+   * something that is no longer in the document, so there is no trim in the
+   * timeline to suppress and the hole has to be filled rather than undone.
+   * Squaring the outer edge off is the second half of the same job, and it only
+   * means anything on a flat surface, so on a curved one it says so instead of
+   * quietly doing nothing.
+   */
+  function doUntrimSurface(feature, doc, scope, ks, errs) {
+    const targets = pickSheets(feature);
+    if (!targets.length) throw new Error('Untrim needs a surface');
+    const wantOuter = feature.outer !== false;
+    const margin = safeEval(feature.margin, scope, 0);
+
+    let changed = 0;
+    for (const t of targets) {
+      const out = SH.untrimSheet(t.sheet, { outer: wantOuter, margin });
+      if (!out.sheet?.triVerts?.length) {
+        errs.push({ feature: feature.id, message: 'Untrim produced nothing' });
+        continue;
+      }
+      if (!out.holes && !out.squared) {
+        errs.push({
+          feature: feature.id,
+          message: 'That surface has nothing trimmed out of it to put back.'
+        });
+        continue;
+      }
+      if (wantOuter && !out.flat) {
+        errs.push({
+          feature: feature.id,
+          message: `Holes filled, but ${
+            out.holes ? 'the' : 'that'
+          } surface is curved, so its outer edge was left where it is.`
+        });
+      } else if (!out.exact) {
+        errs.push({
+          feature: feature.id,
+          message: 'That surface is curved, so the fill is a patch across the hole rather than the curve carried on.'
+        });
+      }
+      replaceBody(bodies, t, { sheet: out.sheet });
+      changed++;
+    }
+    if (!changed) errs.push({ feature: feature.id, message: 'Untrim changed nothing' });
+  }
+
+  /**
+   * Make several surfaces into one, and leave it a surface.
+   *
+   * Stitch asks whether the result closed and hands back a solid when it did.
+   * Merge does not ask. Sometimes what is wanted is one surface body to offset
+   * or thicken or trim as a piece, and being handed a solid halfway through
+   * that is the wrong answer.
+   */
+  function doMergeSurface(feature, doc, scope, ks, errs) {
+    const targets = pickSheets(feature);
+    if (targets.length < 2) throw new Error('Merge needs two or more surfaces');
+    const tol = safeEval(feature.tolerance, scope, 0.01);
+
+    const { sheet, openEdges } = SH.stitchSheets(
+      targets.map((b) => b.sheet),
+      Math.max(1e-6, tol)
+    );
+    if (!sheet?.triVerts?.length) throw new Error('Merge produced nothing');
+
+    const name = targets[0].name;
+    for (const t of targets) bodies.splice(bodies.indexOf(t), 1);
+    addSheetBody(feature, sheet, name);
+    if (openEdges === 0) {
+      errs.push({
+        feature: feature.id,
+        message: 'Those surfaces close on themselves. Stitch would make a solid out of them.'
+      });
+    }
+  }
+
+  /**
    * Weld surfaces together, and make a solid if they closed.
    *
    * Whether they closed is the whole question, and it is answered here before
@@ -7113,6 +7200,8 @@ export const FEATURE_LABELS = {
   offsetSurface: 'Offset Surface',
   trimSurface: 'Trim Surface',
   extendSurface: 'Extend Surface',
+  untrimSurface: 'Untrim Surface',
+  mergeSurface: 'Merge Surfaces',
   stitch: 'Stitch',
   unstitch: 'Unstitch',
   reverseNormal: 'Reverse Normal',

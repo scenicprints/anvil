@@ -550,6 +550,319 @@ function combSpike(a, b, c, scale) {
 }
 
 /**
+ * A ray caster over one mesh, with the mesh unpacked once.
+ *
+ * The general one in `sheet.js` rebuilds its point list on every call, which is
+ * right for a handful of rays and ruinous for the thousands a thickness sweep
+ * sends. Here the triangles are flattened into one typed array up front and the
+ * inner loop touches nothing but numbers.
+ */
+export function rayCaster(mesh) {
+  const stride = mesh.numProp;
+  const vp = mesh.vertProperties;
+  const tv = mesh.triVerts;
+  const n = tv.length / 3;
+  const T = new Float64Array(n * 9);
+  for (let t = 0; t < n; t++) {
+    for (let k = 0; k < 3; k++) {
+      const v = tv[t * 3 + k] * stride;
+      T[t * 9 + k * 3] = vp[v];
+      T[t * 9 + k * 3 + 1] = vp[v + 1];
+      T[t * 9 + k * 3 + 2] = vp[v + 2];
+    }
+  }
+
+  return (ox, oy, oz, dx, dy, dz) => {
+    let best = Infinity;
+    for (let i = 0; i < T.length; i += 9) {
+      const ax = T[i];
+      const ay = T[i + 1];
+      const az = T[i + 2];
+      const e1x = T[i + 3] - ax;
+      const e1y = T[i + 4] - ay;
+      const e1z = T[i + 5] - az;
+      const e2x = T[i + 6] - ax;
+      const e2y = T[i + 7] - ay;
+      const e2z = T[i + 8] - az;
+      const px = dy * e2z - dz * e2y;
+      const py = dz * e2x - dx * e2z;
+      const pz = dx * e2y - dy * e2x;
+      const det = e1x * px + e1y * py + e1z * pz;
+      if (det > -1e-12 && det < 1e-12) continue;
+      const inv = 1 / det;
+      const tx = ox - ax;
+      const ty = oy - ay;
+      const tz = oz - az;
+      const u = (tx * px + ty * py + tz * pz) * inv;
+      if (u < -1e-9 || u > 1 + 1e-9) continue;
+      const qx = ty * e1z - tz * e1y;
+      const qy = tz * e1x - tx * e1z;
+      const qz = tx * e1y - ty * e1x;
+      const v = (dx * qx + dy * qy + dz * qz) * inv;
+      if (v < -1e-9 || u + v > 1 + 1e-9) continue;
+      const hit = (e2x * qx + e2y * qy + e2z * qz) * inv;
+      if (hit > 1e-7 && hit < best) best = hit;
+    }
+    return best;
+  };
+}
+
+/**
+ * Wall thickness under a point on a surface, measured by looking through it.
+ *
+ * A ray sent straight into the material comes out the other side, and how far
+ * it went is the thickness there. This is the honest measure rather than an
+ * offset test: it reads a rib, a boss wall and the web between two pockets the
+ * same way, and it needs nothing to be recognised first.
+ *
+ * It reads through a hole as well, which is why the caller samples a face in
+ * several places and keeps the smallest sensible reading rather than the
+ * smallest of all of them.
+ */
+export function thicknessAt(mesh, point, normal) {
+  const cast = typeof mesh === 'function' ? mesh : rayCaster(mesh);
+  const dx = -normal[0];
+  const dy = -normal[1];
+  const dz = -normal[2];
+  return cast(
+    point[0] + dx * 1e-4,
+    point[1] + dy * 1e-4,
+    point[2] + dz * 1e-4,
+    dx,
+    dy,
+    dz
+  );
+}
+
+/** A few points spread over a face, for sampling it rather than its centre. */
+function faceSamples(mesh, face, want = 3) {
+  const stride = mesh.numProp;
+  const out = [];
+  const step = Math.max(1, Math.floor(face.tris.length / want));
+  for (let i = 0; i < face.tris.length; i += step) {
+    const t = face.tris[i];
+    const at = [0, 0, 0];
+    for (let k = 0; k < 3; k++) {
+      const v = mesh.triVerts[t * 3 + k] * stride;
+      at[0] += mesh.vertProperties[v] / 3;
+      at[1] += mesh.vertProperties[v + 1] / 3;
+      at[2] += mesh.vertProperties[v + 2] / 3;
+    }
+    out.push(at);
+  }
+  return out;
+}
+
+/**
+ * Everything about a design that is likely to give trouble downstream.
+ *
+ * Fusion calls this Design Advice and mostly points at moulding. This points at
+ * the two things a part here actually meets: a printer and, sometimes, a cutter.
+ * Every finding names where it is, so it can be selected rather than hunted
+ * for, and every threshold is a setting rather than a rule, because a 0.4 nozzle
+ * and a 0.8 nozzle disagree about almost all of them.
+ *
+ * Nothing here is a verdict. A thin wall is a finding, not an error: plenty of
+ * parts are meant to have one.
+ */
+export function designAdvice(entries, opts = {}) {
+  const up = opts.up || [0, 0, 1];
+  const minWall = opts.minWall ?? 1.2;
+  const minFeature = opts.minFeature ?? 0.8;
+  const overhang = opts.overhang ?? 45;
+  const sharpAt = opts.sharpAt ?? 60;
+  const findings = [];
+
+  for (const { id, name, mesh, topo } of entries) {
+    if (!mesh || !topo) continue;
+    const label = name || 'body';
+
+    // ---- thin walls
+    const cast = rayCaster(mesh);
+    let thinnest = null;
+    for (const face of topo.faces) {
+      if (face.area < minFeature * minFeature) continue;
+      let here = Infinity;
+      for (const at of faceSamples(mesh, face, 3)) {
+        const t = thicknessAt(cast, at, face.normal);
+        if (t < here) here = t;
+      }
+      if (here < minWall && (!thinnest || here < thinnest.thickness)) {
+        thinnest = { face: face.id, thickness: here, at: face.centre };
+      }
+    }
+    if (thinnest) {
+      findings.push({
+        kind: 'thinWall',
+        bodyId: id,
+        faceId: thinnest.face,
+        at: thinnest.at,
+        value: thinnest.thickness,
+        message: `${label} is ${thinnest.thickness.toFixed(2)} thick in places, under the ${minWall} asked for.`
+      });
+    }
+
+    // ---- gaps and bores too narrow to print
+    //
+    // The same ray, turned round. Sent out of a face it escapes into the air,
+    // unless the face is looking across a bore or a slot, in which case it
+    // lands on the other side of it and how far it went is the width. This
+    // reads a faceted bore, which a fit to a cylinder cannot: below about four
+    // millimetres a round hole comes out of the kernel as a handful of flats,
+    // and those are exactly the holes small enough to be worth warning about.
+    let narrowest = null;
+    for (const face of topo.faces) {
+      if (face.area < minFeature * minFeature * 0.25) continue;
+      for (const at of faceSamples(mesh, face, 2)) {
+        const gap = cast(
+          at[0] + face.normal[0] * 1e-4,
+          at[1] + face.normal[1] * 1e-4,
+          at[2] + face.normal[2] * 1e-4,
+          face.normal[0],
+          face.normal[1],
+          face.normal[2]
+        );
+        if (gap < minFeature * 2 && (!narrowest || gap < narrowest.gap)) {
+          narrowest = { gap, face: face.id, at: face.centre };
+        }
+      }
+    }
+    if (narrowest) {
+      findings.push({
+        kind: 'narrowGap',
+        bodyId: id,
+        faceId: narrowest.face,
+        at: narrowest.at,
+        value: narrowest.gap,
+        message: `A ${narrowest.gap.toFixed(2)} gap in ${label}. A ${minFeature} nozzle will close it up.`
+      });
+    }
+
+    // ---- sharp inside corners
+    let sharpLength = 0;
+    let sharpAtPoint = null;
+    for (const e of topo.edges) {
+      if (e.convex || e.dihedral < sharpAt) continue;
+      sharpLength += e.length || 0;
+      if (!sharpAtPoint) sharpAtPoint = e.points?.[Math.floor(e.points.length / 2)] || null;
+    }
+    if (sharpLength > 0) {
+      findings.push({
+        kind: 'sharpCorner',
+        bodyId: id,
+        at: sharpAtPoint,
+        value: sharpLength,
+        message: `${sharpLength.toFixed(1)} of sharp inside corner in ${label}. A fillet there is stronger and easier to cut.`
+      });
+    }
+
+    // ---- overhangs, and how much of it sits on the plate
+    //
+    // Per triangle rather than per face, because a face's average normal is
+    // no use for this: a sphere is one face and averages to nothing at all,
+    // and it is exactly the sphere that is all overhang.
+    const stride = mesh.numProp;
+    const vp = mesh.vertProperties;
+    const tv = mesh.triVerts;
+    const height = (x, y, z) => x * up[0] + y * up[1] + z * up[2];
+
+    let lowest = Infinity;
+    for (let v = 0; v < vp.length; v += stride) {
+      const h = height(vp[v], vp[v + 1], vp[v + 2]);
+      if (h < lowest) lowest = h;
+    }
+
+    let total = 0;
+    let overhangArea = 0;
+    let contact = 0;
+    const steep = Math.cos(((90 - overhang) * Math.PI) / 180);
+    for (let t = 0; t < tv.length; t += 3) {
+      const a = tv[t] * stride;
+      const b = tv[t + 1] * stride;
+      const c = tv[t + 2] * stride;
+      const ux = vp[b] - vp[a];
+      const uy = vp[b + 1] - vp[a + 1];
+      const uz = vp[b + 2] - vp[a + 2];
+      const wx = vp[c] - vp[a];
+      const wy = vp[c + 1] - vp[a + 1];
+      const wz = vp[c + 2] - vp[a + 2];
+      const nx = uy * wz - uz * wy;
+      const ny = uz * wx - ux * wz;
+      const nz = ux * wy - uy * wx;
+      const twice = Math.hypot(nx, ny, nz);
+      if (twice < 1e-12) continue;
+      const area = twice / 2;
+      total += area;
+      const down = -height(nx, ny, nz) / twice;
+      if (down <= 0) continue;
+
+      const top = Math.max(
+        height(vp[a], vp[a + 1], vp[a + 2]),
+        height(vp[b], vp[b + 1], vp[b + 2]),
+        height(vp[c], vp[c + 1], vp[c + 2])
+      );
+      // Resting on the plate is not an overhang, it is the part standing on
+      // something. Anything else facing down past the angle is.
+      if (down > 0.999 && top - lowest < 1e-3) contact += area;
+      else if (down > steep) overhangArea += area;
+    }
+
+    if (overhangArea > total * 0.02) {
+      findings.push({
+        kind: 'overhang',
+        bodyId: id,
+        value: overhangArea,
+        message: `${Math.round((100 * overhangArea) / total)} in a hundred of ${label} overhangs past ${overhang} degrees, so it needs support or turning over.`
+      });
+    }
+
+    if (contact < Math.max(25, total * 0.005)) {
+      findings.push({
+        kind: 'contact',
+        bodyId: id,
+        value: contact,
+        message: contact
+          ? `${label} touches the plate over ${contact.toFixed(1)} square. It will want a brim.`
+          : `${label} does not sit flat on anything. It will need support under all of it.`
+      });
+    }
+
+    // ---- does it fit
+    if (opts.bed) {
+      const size = meshSize(mesh);
+      const bed = opts.bed;
+      const fits =
+        (size[0] <= bed[0] && size[1] <= bed[1]) || (size[1] <= bed[0] && size[0] <= bed[1]);
+      if (!fits || size[2] > bed[2]) {
+        findings.push({
+          kind: 'bed',
+          bodyId: id,
+          value: size,
+          message: `${label} is ${size.map((n) => n.toFixed(0)).join(' by ')} and the bed is ${bed.join(' by ')}.`
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
+/** The box a mesh fills, as three lengths. */
+export function meshSize(mesh) {
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  const stride = mesh.numProp;
+  for (let i = 0; i < mesh.vertProperties.length; i += stride) {
+    for (let d = 0; d < 3; d++) {
+      const v = mesh.vertProperties[i + d];
+      if (v < lo[d]) lo[d] = v;
+      if (v > hi[d]) hi[d] = v;
+    }
+  }
+  return [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+}
+
+/**
  * The loops where two solids' surfaces meet, in world space.
  *
  * Taken from the solid they share: its surface is made partly of one body and

@@ -627,6 +627,25 @@ ipcMain.handle('export:mesh', async (_e, { suggestedName, ext, data }) => {
   }
 });
 
+/**
+ * Hand a finished print file to whatever the machine opens it with.
+ *
+ * Which is a slicer, on any machine that has one, and that is the whole point:
+ * exporting into a folder and then going and finding it is the step Fusion's
+ * own 3D Print command exists to remove.
+ *
+ * Only the two extensions this application writes are allowed through. Opening
+ * a file by shell is running whatever is registered for it, so the set has to
+ * be one that cannot be talked into being something else.
+ */
+ipcMain.handle('shell:launch', async (_e, file) => {
+  if (!file) return { ok: false, error: 'No file' };
+  if (!/\.(3mf|stl)$/i.test(file)) return { ok: false, error: 'Not a print file' };
+  const err = await shell.openPath(file);
+  if (err) return { ok: false, error: err };
+  return { ok: true };
+});
+
 ipcMain.handle('shell:showItem', async (_e, file) => {
   if (file) shell.showItemInFolder(file);
   return { ok: true };

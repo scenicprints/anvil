@@ -811,6 +811,149 @@ export function extendSheet(sheet, distance) {
 }
 
 /**
+ * The plane a sheet sits closest to.
+ *
+ * Area weighted, because a surface with one big face and forty slivers along a
+ * fillet is still facing the way the big face faces. Newell over a point list
+ * will not do here: these points are a cloud, not a ring.
+ */
+export function sheetPlane(sheet) {
+  const P = sheetPoints(sheet);
+  let n = [0, 0, 0];
+  const c = [0, 0, 0];
+  let weight = 0;
+  for (const [i, j, k] of sheetTris(sheet)) {
+    const f = cross(sub(P[j], P[i]), sub(P[k], P[i]));
+    const a = len(f) / 2;
+    if (a < EPS) continue;
+    n = add(n, f);
+    weight += a;
+    const mid = mul(add(add(P[i], P[j]), P[k]), a / 3);
+    c[0] += mid[0];
+    c[1] += mid[1];
+    c[2] += mid[2];
+  }
+  if (weight < EPS) return { origin: [0, 0, 0], n: [0, 0, 1], x: [1, 0, 0], y: [0, 1, 0] };
+  const dir = unit(n);
+  const origin = mul(c, 1 / weight);
+  const x = unit(Math.abs(dir[0]) < 0.9 ? cross(dir, [1, 0, 0]) : cross(dir, [0, 1, 0]));
+  return { origin, n: dir, x, y: cross(dir, x) };
+}
+
+/** Make every triangle wind the same way, and face the way asked for. */
+export function agreeSheet(sheet, reference) {
+  const tris = spreadWinding(sheetTris(sheet));
+  const P = sheetPoints(sheet);
+  let n = [0, 0, 0];
+  for (const [i, j, k] of tris) n = add(n, cross(sub(P[j], P[i]), sub(P[k], P[i])));
+  const out = reference && dot(n, reference) < 0 ? tris.map(([i, j, k]) => [i, k, j]) : tris;
+  const made = makeSheet(P, out);
+  if (sheet.grid) made.grid = sheet.grid;
+  return made;
+}
+
+/**
+ * Put back what a trim took away.
+ *
+ * A trimmed surface is a surface with holes cut in it and, usually, a ragged
+ * outer edge where something else crossed it. Untrim fills the holes back in,
+ * and on a flat surface will square the outer edge off to the rectangle the
+ * surface would have had if nothing had ever been cut from it.
+ *
+ * On a flat surface the fill is the surface itself, exactly. On a curved one it
+ * is a patch across the hole rather than a continuation of the curve, so the
+ * result says so and the caller can pass that on rather than pretending.
+ */
+export function untrimSheet(sheet, opts = {}) {
+  const welded = weldSheet(sheet, 1e-6);
+  const loops = boundaryLoops(welded);
+  if (!loops.length) {
+    return { sheet: welded, holes: 0, squared: false, flat: true, exact: true };
+  }
+
+  const P = sheetPoints(welded);
+  const pl = sheetPlane(welded);
+  const to2 = (p) => {
+    const d = sub(p, pl.origin);
+    return [dot(d, pl.x), dot(d, pl.y)];
+  };
+  const lift = (q) => add(add(pl.origin, mul(pl.x, q[0])), mul(pl.y, q[1]));
+
+  let off = 0;
+  for (const p of P) off = Math.max(off, Math.abs(dot(sub(p, pl.origin), pl.n)));
+  const span = spanOf(P) || 1;
+  const flat = off < Math.max(1e-4, 1e-3 * span);
+
+  // The boundary that goes furthest round is the outside of the surface. The
+  // rest are holes in it, and those are what a fill is for.
+  const ring2 = loops.map((l) => l.map((v) => to2(P[v])));
+  const area = (r) => {
+    let a = 0;
+    for (let i = 0; i < r.length; i++) {
+      const b = r[(i + 1) % r.length];
+      a += r[i][0] * b[1] - b[0] * r[i][1];
+    }
+    return a / 2;
+  };
+  const areas = ring2.map(area);
+  let outerAt = 0;
+  for (let i = 1; i < areas.length; i++) {
+    if (Math.abs(areas[i]) > Math.abs(areas[outerAt])) outerAt = i;
+  }
+
+  const interior = loops.filter((_, i) => i !== outerAt);
+
+  // Squaring off the outer edge only means anything where the surface has a
+  // natural extent to square off to, and on a triangle mesh that is the flat
+  // case. A trimmed cylinder has no rectangle to go back to.
+  if (opts.outer && flat) {
+    // The whole surface is the rectangle, so build the rectangle and keep
+    // nothing of what was there. Filling round the old edge instead would mean
+    // ear clipping a ring that touches its own boundary, which is the one case
+    // it cannot do, and the holes would have to be filled separately besides.
+    const lo = [Infinity, Infinity];
+    const hi = [-Infinity, -Infinity];
+    for (const q of P.map(to2)) {
+      for (let d = 0; d < 2; d++) {
+        if (q[d] < lo[d]) lo[d] = q[d];
+        if (q[d] > hi[d]) hi[d] = q[d];
+      }
+    }
+    const m = Math.max(0, opts.margin || 0);
+    const rect = [
+      [lo[0] - m, lo[1] - m],
+      [hi[0] + m, lo[1] - m],
+      [hi[0] + m, hi[1] + m],
+      [lo[0] - m, hi[1] + m]
+    ];
+    const flatSheet = makeSheet(rect.map(lift), fillLoops(rect));
+    return {
+      sheet: agreeSheet(flatSheet, pl.n),
+      holes: interior.length,
+      squared: true,
+      flat,
+      exact: true
+    };
+  }
+
+  const patches = [];
+  let holes = 0;
+  for (const loop of interior) {
+    const patch = patchLoops([loop.map((v) => P[v])]);
+    if (patch?.triVerts.length) {
+      patches.push(patch);
+      holes++;
+    }
+  }
+
+  if (!patches.length) {
+    return { sheet: welded, holes: 0, squared: false, flat, exact: flat };
+  }
+  const joined = stitchSheets([welded, ...patches], Math.max(1e-6, span * 1e-7)).sheet;
+  return { sheet: agreeSheet(joined, pl.n), holes, squared: false, flat, exact: flat };
+}
+
+/**
  * Cut a sheet where another surface crosses it, and keep one side.
  *
  * Every triangle is split against every cutter triangle it meets, then the
@@ -1030,11 +1173,7 @@ function pointOnBothPlanes(pa, na, pb, nb) {
  * the same direction settles it; the sign of the enclosed volume then says
  * whether the whole thing came out inside out.
  */
-export function orientMesh(sheet) {
-  const tris = sheetTris(sheet);
-  const P = sheetPoints(sheet);
-  if (!tris.length) return sheet;
-
+function spreadWinding(tris) {
   const ek = (a, b) => `${Math.min(a, b)}_${Math.max(a, b)}`;
   const across = new Map();
   tris.forEach((t, i) => {
@@ -1069,6 +1208,14 @@ export function orientMesh(sheet) {
       }
     }
   }
+  return tris;
+}
+
+export function orientMesh(sheet) {
+  const tris = sheetTris(sheet);
+  const P = sheetPoints(sheet);
+  if (!tris.length) return sheet;
+  spreadWinding(tris);
 
   let vol = 0;
   for (const [i, j, k] of tris) vol += dot(P[i], cross(P[j], P[k])) / 6;

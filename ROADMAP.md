@@ -8,7 +8,9 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.11.0**. 358 tests. **Every batch on this list has shipped, and so has everything that was left over after them.**
+Current version: **2.12.0**. 387 tests. Batches 11 to 14 and most of 18 have
+shipped. Batches 15, 16, 17, 19, 20, 20b and everything after them have not, and
+neither has the rest of 18. Each batch below says which.
 
 ---
 
@@ -1453,12 +1455,20 @@ move there.
 **Batch 18. The geometry singles.** Fifteen, all small and unrelated to each
 other. **Three of the four Construct ones shipped in v2.11.0**: a plane square
 across an axis, a plane through two edges, and the point where two edges meet.
-Skew edges are refused rather than averaged into a plane that is a lie. The
-User Coordinate System is the one left, and it is the only one of the four that
-is not a single formula. Sketch: 3-Point Circle, Spun Profile,
-Collinear, Curvature, Blend Curve. Surface: Untrim, Merge. Inspect: Isocurve
-Analysis, Design Advice. Form: Repair Body. Make: 3D Print, meaning a send to a
-slicer rather than an export.
+Skew edges are refused rather than averaged into a plane that is a lie.
+
+**Most of the rest shipped in v2.12.0**: Sketch 3-Point Circle, Collinear and
+Blend Curve; Surface Untrim and Merge; Inspect Design Advice; Make 3D Print,
+which writes a 3MF and hands it to the slicer rather than exporting into a
+folder to be found later.
+
+Two on the original list turned out to be there already and had been miscounted
+against the source rather than checked in it: sketch **Curvature** is the
+curvature comb under Analyse, and **Isocurve Analysis** is the Isoparametric
+Curve command, which extracts the curves rather than shading them over the
+surface. What is genuinely left of this batch: the **User Coordinate System**,
+the only one of the four Construct commands that is not a single formula;
+sketch **Spun Profile**; Form **Repair Body**.
 
 **Batch 19. Plastic parts.** Four. Boss, Snap Fit, Rest, Lip. They are one
 family and want doing together, and they are the four most likely of the lot to

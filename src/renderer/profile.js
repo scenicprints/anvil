@@ -342,7 +342,7 @@ export function conicPoints(sketch, ent) {
  * knots is what makes it start and end exactly on the first and last control
  * point, so it has real endpoints for a region to close on.
  */
-function bsplinePoints(ctrl, closed, perSpan = 12) {
+export function bsplinePoints(ctrl, closed, perSpan = 12) {
   const pts = closed ? [...ctrl, ctrl[0], ctrl[1], ctrl[2]] : ctrl;
   const n = pts.length;
   if (n < 3) return pts.map((p) => ({ x: p.x, y: p.y }));

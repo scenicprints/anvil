@@ -36,7 +36,10 @@ import {
   zebraColours,
   accessibilityColours,
   curvatureComb,
-  meshExtent
+  meshExtent,
+  designAdvice,
+  thicknessAt,
+  meshSize
 } from '../src/renderer/analysis.js';
 import { sectionedMesh } from '../src/renderer/features.js';
 import { buildTopology } from '../src/renderer/topology.js';
@@ -75,11 +78,14 @@ import {
   parse3MF,
   meshReaderFor,
   buildGeometry,
-  buildEdges
+  buildEdges,
+  to3MF,
+  zipStore
 } from '../src/renderer/meshutil.js';
 import * as RC from '../src/renderer/recognise.js';
 import * as SEL from '../src/renderer/select.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
+import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
 import * as SH from '../src/renderer/sheet.js';
 import * as SM from '../src/renderer/sheetmetal.js';
@@ -390,6 +396,173 @@ async function run() {
     const v = { x: sk.points[2].x - sk.points[1].x, y: sk.points[2].y - sk.points[1].y };
     near(u.x * v.x + u.y * v.y, 0, 1e-4, 'perpendicular dot product');
     near(Math.hypot(u.x, u.y), Math.hypot(v.x, v.y), 1e-4, 'equal lengths');
+  });
+
+  test('solver: collinear puts two lines on one line', () => {
+    // Two separate lines, the second offset and turned. Collinear has to bring
+    // it onto the first's line without joining them end to end: they stay two
+    // lines with a gap, which is the whole point of the constraint.
+    const sk = newSketch('XY');
+    sk.points = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 20, y: 4 },
+      { x: 32, y: 7 }
+    ];
+    sk.entities = [
+      { id: 1, type: 'line', p: [0, 1] },
+      { id: 2, type: 'line', p: [2, 3] }
+    ];
+    sk.constraints = [
+      { id: 'c1', type: 'fixed', point: 0, x: 0, y: 0 },
+      { id: 'c2', type: 'fixed', point: 1, x: 10, y: 0 },
+      { id: 'c3', type: 'collinear', entities: [1, 2] }
+    ];
+    solveSketch(sk);
+    near(sk.points[2].y, 0, 1e-4, 'the far line came onto the near one');
+    near(sk.points[3].y, 0, 1e-4, 'both ends of it');
+    assert(sk.points[2].x > 12, 'and it did not slide along to meet it');
+  });
+
+  test('solver: parallel lines are not collinear', () => {
+    // The check that the constraint is doing more than parallel does: two
+    // parallel lines a long way apart satisfy parallel and must not satisfy
+    // this.
+    const sk = newSketch('XY');
+    sk.points = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 20 },
+      { x: 10, y: 20 }
+    ];
+    sk.entities = [
+      { id: 1, type: 'line', p: [0, 1] },
+      { id: 2, type: 'line', p: [2, 3] }
+    ];
+    sk.constraints = [
+      { id: 'c1', type: 'fixed', point: 0, x: 0, y: 0 },
+      { id: 'c2', type: 'fixed', point: 1, x: 10, y: 0 },
+      { id: 'c3', type: 'parallel', entities: [1, 2] }
+    ];
+    solveSketch(sk);
+    assert(Math.abs(sk.points[2].y - 20) < 1e-6, 'parallel leaves it where it was');
+
+    sk.constraints.push({ id: 'c4', type: 'collinear', entities: [1, 2] });
+    solveSketch(sk);
+    near(sk.points[2].y, 0, 1e-4, 'and collinear brings it down');
+    near(sk.points[3].y, 0, 1e-4, 'all of it');
+  });
+
+  /* -------- blend curve -------- */
+
+  /**
+   * Two arcs of the same radius, pointing at each other across a gap.
+   *
+   * Both turn the same way, so a blend between them has a real curvature to
+   * match at each end rather than the trivial zero a pair of lines would give.
+   */
+  function facingArcs(radius = 20, gap = 40) {
+    const sk = newSketch('XY');
+    const put = (x, y) => sk.points.push({ x, y }) - 1;
+    // Left arc: centre below the left end, running up to its top.
+    const cL = put(0, 0);
+    const lStart = put(-radius, 0);
+    const lEnd = put(0, radius);
+    // Right arc: mirror of it, so its loose end faces back across the gap.
+    const cR = put(radius * 2 + gap, 0);
+    const rEnd = put(radius + gap, radius);
+    const rStart = put(radius * 2 + gap + radius, 0);
+    sk.entities = [
+      { id: 1, type: 'arc', c: cL, p: [lStart, lEnd], ccw: true },
+      { id: 2, type: 'arc', c: cR, p: [rEnd, rStart], ccw: true }
+    ];
+    sk.nextEntityId = 3;
+    return { sk, left: { ent: sk.entities[0], at: lEnd }, right: { ent: sk.entities[1], at: rEnd } };
+  }
+
+  test('blend: an end frame reads an arc exactly', () => {
+    const { sk, left } = facingArcs(20);
+    const f = BL.endFrame(sk, left.ent, left.at);
+    assert(f, 'it read the end');
+    near(f.p.x, 0, 1e-9, 'at the point that was asked for');
+    near(f.p.y, 20, 1e-9, 'both of it');
+    // Running anticlockwise about a centre below, the top of the arc heads
+    // left, and the turn is towards the centre, so a fifth of a unit of
+    // curvature at radius 20.
+    near(f.t.x, -1, 1e-9, 'heading the way the arc leaves');
+    near(f.t.y, 0, 1e-9, 'and only that way');
+    near(Math.abs(f.k), 1 / 20, 1e-9, 'one over the radius');
+  });
+
+  test('blend: a line has direction and no curvature', () => {
+    const sk = newSketch('XY');
+    sk.points = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+    sk.entities = [{ id: 1, type: 'line', p: [0, 1] }];
+    const f = BL.endFrame(sk, sk.entities[0], 1);
+    near(f.t.x, 1, 1e-9, 'out along the line');
+    near(f.k, 0, 1e-12, 'and dead straight');
+  });
+
+  test('blend: tangent continuous leaves both ends the right way', () => {
+    const { sk, left, right } = facingArcs();
+    const a = BL.endFrame(sk, left.ent, left.at);
+    const b = BL.endFrame(sk, right.ent, right.at);
+    const ctrl = BL.blendControls(a, b, { continuity: 'G1' });
+    assert(ctrl.length === 4, `a cubic, got ${ctrl.length} control points`);
+    const r = BL.blendReport(ctrl, a, b);
+    near(r.tangentA, 1, 1e-9, 'leaves the first curve along it');
+    near(r.tangentB, 1, 1e-9, 'and meets the second along it');
+    // And that is all it claims: the curvature jumps at the join.
+    assert(Math.abs(r.curvatureA - r.wantA) > 0.01, 'tangent alone leaves a curvature step');
+  });
+
+  test('blend: curvature continuous matches the curvature at both ends', () => {
+    const { sk, left, right } = facingArcs();
+    const a = BL.endFrame(sk, left.ent, left.at);
+    const b = BL.endFrame(sk, right.ent, right.at);
+    const ctrl = BL.blendControls(a, b, { continuity: 'G2' });
+    assert(ctrl.length === 6, `six control points, got ${ctrl.length}`);
+    const r = BL.blendReport(ctrl, a, b);
+    near(r.tangentA, 1, 1e-9, 'direction held at the first end');
+    near(r.tangentB, 1, 1e-9, 'and at the second');
+    // This is the whole claim of the command, so it is checked against the
+    // finished curve rather than against how it was built.
+    near(r.curvatureA, r.wantA, Math.abs(r.wantA) * 1e-3, 'curvature held at the first end');
+    near(r.curvatureB, r.wantB, Math.abs(r.wantB) * 1e-3, 'and at the second');
+  });
+
+  test('blend: it starts and ends exactly on the two ends it was given', () => {
+    const { sk, left, right } = facingArcs();
+    const a = BL.endFrame(sk, left.ent, left.at);
+    const b = BL.endFrame(sk, right.ent, right.at);
+    for (const how of ['G1', 'G2']) {
+      const ctrl = BL.blendControls(a, b, { continuity: how });
+      near(ctrl[0].x, a.p.x, 1e-12, `${how} starts on the first end`);
+      near(ctrl[0].y, a.p.y, 1e-12, `${how} starts on the first end`);
+      near(ctrl[ctrl.length - 1].x, b.p.x, 1e-12, `${how} finishes on the second`);
+      near(ctrl[ctrl.length - 1].y, b.p.y, 1e-12, `${how} finishes on the second`);
+    }
+  });
+
+  test('blend: a longer reach makes a fuller curve, not a different join', () => {
+    const { sk, left, right } = facingArcs();
+    const a = BL.endFrame(sk, left.ent, left.at);
+    const b = BL.endFrame(sk, right.ent, right.at);
+    const tight = BL.blendControls(a, b, { continuity: 'G2', bias: 0.6 });
+    const loose = BL.blendControls(a, b, { continuity: 'G2', bias: 1.6 });
+    const reach = (c) => Math.hypot(c[1].x - c[0].x, c[1].y - c[0].y);
+    assert(reach(loose) > reach(tight) * 2, 'the handle really does reach further');
+    for (const ctrl of [tight, loose]) {
+      const r = BL.blendReport(ctrl, a, b);
+      near(r.curvatureA, r.wantA, Math.abs(r.wantA) * 1e-3, 'and the join still holds');
+      near(r.curvatureB, r.wantB, Math.abs(r.wantB) * 1e-3, 'at both ends');
+    }
+  });
+
+  test('blend: two ends at the same place have no blend between them', () => {
+    const a = { p: { x: 5, y: 5 }, t: { x: 1, y: 0 }, k: 0 };
+    const b = { p: { x: 5, y: 5 }, t: { x: -1, y: 0 }, k: 0 };
+    assert(BL.blendControls(a, b) === null, 'it refuses rather than dividing by nothing');
   });
 
   test('solver: under-constrained sketch reports its freedom', () => {
@@ -6142,6 +6315,338 @@ async function run() {
     near(solids[0].solid.volume(), 8000, 1, 'and the block is unchanged');
   });
 
+  /* -------- untrim and merge -------- */
+
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  /** A 40 square plate with a 10 square hole and a bite out of one corner. */
+  function trimmedPlate(bend = 0) {
+    const outer = [[-20, -20], [20, -20], [20, 20], [5, 20], [5, 12], [-20, 12]];
+    const hole = [[-5, -5], [-5, 5], [5, 5], [5, -5]];
+    const tris = SH.fillLoops(outer, [hole]);
+    const points = [...outer, ...hole].map((q) => [q[0], q[1], bend * q[0] * q[0]]);
+    return SH.makeSheet(points, tris);
+  }
+
+  test('untrim: filling the holes puts back exactly what was cut out', () => {
+    const plate = trimmedPlate();
+    // 40 by 40 is 1600, less 200 for the corner bite, less 100 for the hole.
+    near(SH.sheetArea(plate), 1300, 1e-6, 'the plate starts trimmed');
+    assert(SH.boundaryLoops(plate).length === 2, 'an outside and a hole');
+
+    const out = SH.untrimSheet(plate, { outer: false });
+    assert(out.holes === 1, `one hole filled, got ${out.holes}`);
+    assert(out.exact, 'and on a flat surface the fill is the surface itself');
+    near(SH.sheetArea(out.sheet), 1400, 1e-6, 'the hole is back');
+    assert(SH.boundaryLoops(out.sheet).length === 1, 'and it is one boundary now');
+    assert(!out.squared, 'the outside was left where it was');
+  });
+
+  test('untrim: squaring the outside off gives the whole rectangle back', () => {
+    const out = SH.untrimSheet(trimmedPlate(), { outer: true });
+    assert(out.squared, 'it squared off');
+    near(SH.sheetArea(out.sheet), 1600, 1e-6, 'the full 40 by 40');
+    assert(SH.boundaryLoops(out.sheet).length === 1, 'one rim, no holes');
+    // And it still faces the way it did, or a thicken after this goes the
+    // wrong way.
+    const before = SH.sheetPlane(trimmedPlate());
+    const after = SH.sheetPlane(out.sheet);
+    assert(dot3(before.n, after.n) > 0.99, 'facing the way it faced');
+  });
+
+  test('untrim: extra all round goes on outside the rectangle', () => {
+    const out = SH.untrimSheet(trimmedPlate(), { outer: true, margin: 5 });
+    near(SH.sheetArea(out.sheet), 50 * 50, 1e-6, '5 more on every side');
+  });
+
+  test('untrim: a curved surface says the outside was left alone', () => {
+    // The same plate, bowed. There is no rectangle for a bowed surface to go
+    // back to, so squaring it off would be an invention.
+    const bowed = trimmedPlate(0.01);
+    const out = SH.untrimSheet(bowed, { outer: true });
+    assert(!out.flat, 'it knows the surface is curved');
+    assert(!out.squared, 'so it does not square anything off');
+    assert(out.holes === 1, 'but the hole is still filled');
+    assert(!out.exact, 'and it says the fill is a patch, not the curve carried on');
+    assert(SH.boundaryLoops(out.sheet).length === 1, 'one boundary left');
+    assert(SH.sheetArea(out.sheet) > SH.sheetArea(bowed) + 90, 'about a hole bigger');
+  });
+
+  test('untrim: a surface with nothing trimmed out of it is left alone', () => {
+    const square = [[-10, -10], [10, -10], [10, 10], [-10, 10]];
+    const flat = SH.makeSheet(square.map((q) => [q[0], q[1], 0]), SH.fillLoops(square));
+    const out = SH.untrimSheet(flat, { outer: false });
+    assert(out.holes === 0 && !out.squared, 'nothing to do');
+    near(SH.sheetArea(out.sheet), 400, 1e-6, 'and nothing done');
+  });
+
+  /** A plate 40 by 40 by 10 with a 10 bore through it, broken into faces. */
+  function boredPlateSheets() {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '10', centered: true }),
+      { ...prim('cylinder', { diameter: '20', height: '40', centered: true }), op: 'cut', targets: 'all' },
+      { id: 'unst', type: 'unstitch', bodies: 'all' }
+    ];
+    return { doc, out: rebuild(doc) };
+  }
+
+  test('untrim through the timeline: the bored face comes back solid', () => {
+    const { doc, out } = boredPlateSheets();
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    const sheets = out.bodies.filter((b) => !b.solid);
+    assert(sheets.length >= 3, `unstitched into faces, got ${sheets.length}`);
+
+    // The top of the plate: flat, facing up, and 1600 less the bore.
+    const bore = Math.PI * 100;
+    const top = sheets.find((b) => Math.abs(SH.sheetArea(b.sheet) - (1600 - bore)) < bore * 0.05);
+    assert(top, 'found the bored face');
+    const was = SH.sheetArea(top.sheet);
+    out.dispose();
+
+    doc.features.push({
+      id: 'untr',
+      type: 'untrimSurface',
+      surfaces: [top.id],
+      outer: false
+    });
+    const after = rebuild(doc);
+    assert(after.errors.length === 0, after.errors.map((e) => e.message).join('; '));
+    const now = after.bodies.find((b) => b.id === top.id);
+    assert(now && !now.solid, 'it is still that surface');
+    near(SH.sheetArea(now.sheet), was + bore, bore * 0.03, 'with the bore filled in');
+    assert(SH.boundaryLoops(now.sheet).length === 1, 'and no hole left');
+    after.dispose();
+  });
+
+  test('merge: several surfaces become one, and stay a surface', () => {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '10', centered: true }),
+      { id: 'unst', type: 'unstitch', bodies: 'all' }
+    ];
+    const first = rebuild(doc);
+    const sheets = first.bodies.filter((b) => !b.solid);
+    assert(sheets.length === 6, `six faces, got ${sheets.length}`);
+    const total = sheets.reduce((a, b) => a + SH.sheetArea(b.sheet), 0);
+    first.dispose();
+
+    doc.features.push({
+      id: 'mrg',
+      type: 'mergeSurface',
+      surfaces: sheets.map((b) => b.id),
+      tolerance: '0.01'
+    });
+    const out = rebuild(doc);
+    const left = out.bodies.filter((b) => !b.solid);
+    assert(left.length === 1, `one surface body, got ${left.length}`);
+    assert(!out.bodies.some((b) => b.solid), 'and no solid: merge is not stitch');
+    near(SH.sheetArea(left[0].sheet), total, 1e-6, 'the whole area came across');
+    // It did close, so it says so rather than leaving that a surprise.
+    assert(
+      out.errors.some((e) => /Stitch/.test(e.message)),
+      'and it points at Stitch for the solid'
+    );
+    out.dispose();
+  });
+
+  test('merge: one surface on its own is refused', () => {
+    const doc = newDocument();
+    const sk = openCurveSketch('XY');
+    doc.sketches[sk.id] = sk;
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: 'sx', type: 'surfaceExtrude', sketch: sk.id, distance: '10' },
+      { id: 'mrg', type: 'mergeSurface', surfaces: ['sx:0'], tolerance: '0.01' }
+    ];
+    const out = rebuild(doc);
+    assert(
+      out.errors.some((e) => /two or more/.test(e.message)),
+      `it says what it needs, got ${out.errors.map((e) => e.message).join('; ')}`
+    );
+    assert(out.bodies.filter((b) => !b.solid).length === 1, 'and the surface survives');
+    out.dispose();
+  });
+
+  /* -------- design advice and printing -------- */
+
+  /** A body, its mesh and its topology, in the shape the advice wants. */
+  function adviceEntry(doc, name = 'part') {
+    const out = rebuild(doc);
+    const body = out.bodies.find((b) => b.solid);
+    const mesh = K.meshData(body.solid);
+    return { out, entry: { id: body.id, name, mesh, topo: buildTopology(mesh) } };
+  }
+
+  test('advice: a thin wall is measured through the material', () => {
+    // A plate 40 by 40 by 1. Every reading through it is 1, so the thinnest
+    // wall is 1 and nothing else is.
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '40', height: '1', centered: true })];
+    const { out, entry } = adviceEntry(doc, 'plate');
+    const top = entry.topo.faces.reduce((b, f, i) =>
+      f.centre[2] > entry.topo.faces[b].centre[2] ? i : b, 0);
+    const face = entry.topo.faces[top];
+    near(thicknessAt(entry.mesh, face.centre, face.normal), 1, 0.01, 'straight through the plate');
+
+    const found = designAdvice([entry], { minWall: 2, minFeature: 0.4 });
+    const thin = found.find((f) => f.kind === 'thinWall');
+    assert(thin, `it flagged the wall, got ${found.map((f) => f.kind).join(', ') || 'nothing'}`);
+    near(thin.value, 1, 0.02, 'and said how thin');
+    out.dispose();
+  });
+
+  test('advice: a wall thick enough is not flagged', () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '40', height: '20', centered: true })];
+    const { out, entry } = adviceEntry(doc, 'block');
+    const found = designAdvice([entry], { minWall: 2, minFeature: 0.4 });
+    assert(!found.some((f) => f.kind === 'thinWall'), 'a 20 thick block is not a thin wall');
+    out.dispose();
+  });
+
+  test('advice: a bore too narrow to print is called out, faceted or not', () => {
+    // A 0.6 bore comes out of the kernel as a ring of flats rather than a
+    // cylinder, which is exactly why this is measured by looking across the
+    // hole rather than by recognising it as one.
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '10', centered: true }),
+      { ...prim('cylinder', { diameter: '0.6', height: '40', centered: true }), op: 'cut', targets: 'all' }
+    ];
+    const { out, entry } = adviceEntry(doc, 'plate');
+    assert(
+      !entry.topo.faces.some((f) => f.cylinder),
+      'the bore really is too small to read as a cylinder'
+    );
+    const found = designAdvice([entry], { minWall: 0.5, minFeature: 0.8 });
+    const small = found.find((f) => f.kind === 'narrowGap');
+    assert(small, `it found the bore, got ${found.map((f) => f.kind).join(', ') || 'nothing'}`);
+    assert(small.value < 0.62, `and measured it across, got ${small.value.toFixed(3)}`);
+    out.dispose();
+  });
+
+  test('advice: a bore wide enough is left alone', () => {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '10', centered: true }),
+      { ...prim('cylinder', { diameter: '8', height: '40', centered: true }), op: 'cut', targets: 'all' }
+    ];
+    const { out, entry } = adviceEntry(doc, 'plate');
+    const found = designAdvice([entry], { minWall: 0.5, minFeature: 0.8 });
+    assert(!found.some((f) => f.kind === 'narrowGap'), 'an 8 bore is not a narrow gap');
+    out.dispose();
+  });
+
+  test('advice: a box sitting on the plate has nothing to say about contact', () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '40', height: '20', centered: false })];
+    const { out, entry } = adviceEntry(doc, 'block');
+    const found = designAdvice([entry], { minWall: 1, minFeature: 0.4 });
+    assert(!found.some((f) => f.kind === 'contact'), 'a flat bottom is a flat bottom');
+    assert(!found.some((f) => f.kind === 'overhang'), 'and a box has no overhang');
+    out.dispose();
+  });
+
+  test('advice: a sphere is all overhang and touches nothing', () => {
+    const doc = newDocument();
+    doc.features = [prim('sphere', { diameter: '30' })];
+    const { out, entry } = adviceEntry(doc, 'ball');
+    const found = designAdvice([entry], { minWall: 1, minFeature: 0.4 });
+    assert(found.some((f) => f.kind === 'overhang'), 'the underside overhangs');
+    assert(found.some((f) => f.kind === 'contact'), 'and it balances on a point');
+    out.dispose();
+  });
+
+  test('advice: a part bigger than the bed says so, with the numbers', () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '400', depth: '40', height: '20', centered: true })];
+    const { out, entry } = adviceEntry(doc, 'beam');
+    const size = meshSize(entry.mesh);
+    near(size[0], 400, 1e-3, 'four hundred long');
+    const found = designAdvice([entry], { minWall: 1, minFeature: 0.4, bed: [256, 256, 256] });
+    const bed = found.find((f) => f.kind === 'bed');
+    assert(bed, 'it will not fit');
+    assert(/400/.test(bed.message), `and the message says how big: ${bed.message}`);
+
+    const fits = designAdvice([entry], { minWall: 1, minFeature: 0.4, bed: [500, 500, 500] });
+    assert(!fits.some((f) => f.kind === 'bed'), 'on a bigger bed it is not mentioned');
+    out.dispose();
+  });
+
+  test('advice: a turned box still fits a bed it fits diagonally along', () => {
+    // 300 by 40 does not fit 256 by 256 either way round, but 200 by 300 does
+    // once it is turned, and saying otherwise sends someone to cut a model up
+    // for no reason.
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '200', depth: '300', height: '20', centered: true })];
+    const { out, entry } = adviceEntry(doc, 'panel');
+    const found = designAdvice([entry], { minWall: 1, minFeature: 0.4, bed: [320, 220, 300] });
+    assert(!found.some((f) => f.kind === 'bed'), 'turned round, it fits');
+    out.dispose();
+  });
+
+  await asyncTest('3MF: what is written comes back the same', async () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '20', depth: '30', height: '40', centered: true })];
+    const out = rebuild(doc);
+    const mesh = K.meshData(out.bodies[0].solid);
+    const bytes = to3MF([mesh], ['Block']);
+    assert(bytes[0] === 0x50 && bytes[1] === 0x4b, 'it is a zip');
+
+    const back = await parse3MF(bytes);
+    assert(
+      back.triVerts.length === mesh.triVerts.length,
+      `same triangles, ${back.triVerts.length / 3} against ${mesh.triVerts.length / 3}`
+    );
+    const size = meshSize(back);
+    near(size[0], 20, 1e-3, 'and the same size in x');
+    near(size[1], 30, 1e-3, 'y');
+    near(size[2], 40, 1e-3, 'z');
+    out.dispose();
+  });
+
+  await asyncTest('3MF: two bodies stay two objects with their own names', async () => {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '10', depth: '10', height: '10', centered: true }),
+      prim('sphere', { diameter: '10' })
+    ];
+    const out = rebuild(doc);
+    const solids = out.bodies.filter((b) => b.solid);
+    assert(solids.length === 2, `two bodies, got ${solids.length}`);
+    const bytes = to3MF(solids.map((b) => K.meshData(b.solid)), ['Cube', 'Ball']);
+    const text = new TextDecoder().decode(bytes);
+    assert(text.includes('name="Cube"'), 'the first name went in');
+    assert(text.includes('name="Ball"'), 'and the second');
+    assert(text.includes('unit="millimeter"'), 'and it says what unit it is in');
+    out.dispose();
+  });
+
+  await asyncTest('3MF: a name with an ampersand in it does not break the file', async () => {
+    const mesh = {
+      numProp: 3,
+      vertProperties: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+      triVerts: new Uint32Array([0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3])
+    };
+    const bytes = to3MF([mesh], ['Bracket & Pin <left>']);
+    const text = new TextDecoder().decode(bytes);
+    assert(!/name="[^"]*&(?!amp;|lt;|gt;|quot;|apos;)/.test(text), 'the ampersand was escaped');
+    const back = await parse3MF(bytes);
+    assert(back.triVerts.length === 12, 'and it still reads back');
+  });
+
+  test('zip: a stored archive has the sizes and the checksum in it', () => {
+    const bytes = zipStore([{ name: 'a.txt', data: 'hello' }]);
+    const dv = new DataView(bytes.buffer, bytes.byteOffset);
+    assert(dv.getUint32(0, true) === 0x04034b50, 'a local header first');
+    assert(dv.getUint16(8, true) === 0, 'stored, not deflated');
+    assert(dv.getUint32(18, true) === 5, 'five bytes compressed');
+    assert(dv.getUint32(22, true) === 5, 'and five uncompressed');
+    // The CRC32 of "hello" is a fixed number, so a wrong table shows up here.
+    assert(dv.getUint32(14, true) === 0x3610a686, 'and the checksum is right');
+  });
+
   test('surfaces are listed apart from solids', () => {
     const doc = newDocument();
     const sk = openCurveSketch('XY');
@@ -6434,8 +6939,6 @@ async function run() {
   }
 
   /* -------- construction, the new kinds -------- */
-
-  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 
   /** Build one construction entry against a box and hand back what it made. */

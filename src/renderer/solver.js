@@ -171,6 +171,30 @@ export function buildResiduals(sketch, layout, opts = {}) {
         break;
       }
 
+      case 'collinear': {
+        // Two lines on one infinite line. Parallel is not enough on its own:
+        // two rails are parallel and are not collinear. Both ends of the second
+        // line have to sit on the first, and that says the whole thing at once.
+        const e1 = entityById(sketch, c.entities[0]);
+        const e2 = entityById(sketch, c.entities[1]);
+        if (!e1 || !e2 || e1.type !== 'line' || e2.type !== 'line') break;
+        const [a, b] = e1.p;
+        const [d, e] = e2.p;
+        const vars = [
+          ...pointVars(L, a), ...pointVars(L, b),
+          ...pointVars(L, d), ...pointVars(L, e)
+        ];
+        add(vars, (v) => {
+          const ux = px(v, L, b) - px(v, L, a);
+          const uy = py(v, L, b) - py(v, L, a);
+          const lu = Math.hypot(ux, uy) || 1;
+          const off = (i) =>
+            (ux * (py(v, L, i) - py(v, L, a)) - uy * (px(v, L, i) - px(v, L, a))) / lu;
+          return [off(d), off(e)];
+        });
+        break;
+      }
+
       case 'perpendicular': {
         const e1 = entityById(sketch, c.entities[0]);
         const e2 = entityById(sketch, c.entities[1]);

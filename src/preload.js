@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('anvil', {
   changedOnDisk: () => ipcRenderer.invoke('doc:changedOnDisk'),
   heldByOther: () => ipcRenderer.invoke('doc:heldByOther'),
   showItem: (file) => ipcRenderer.invoke('shell:showItem', file),
+  launchFile: (file) => ipcRenderer.invoke('shell:launch', file),
   message: (opts) => ipcRenderer.invoke('dialog:message', opts)
 });
 

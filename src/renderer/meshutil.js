@@ -396,6 +396,182 @@ export function parseOBJ(text) {
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Writing a 3MF                                                       */
+/* ------------------------------------------------------------------ */
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * A zip with everything stored rather than compressed.
+ *
+ * Deflating would need a compressor bundled, and there is nothing here worth
+ * bundling one for: a 3MF of a printed part is a few hundred kilobytes of XML
+ * and the file goes straight into a slicer on the same machine. Stored entries
+ * are part of the format, and every reader accepts them.
+ */
+export function zipStore(entries) {
+  const enc = new TextEncoder();
+  const locals = [];
+  const central = [];
+  let offset = 0;
+
+  for (const { name, data } of entries) {
+    const nameBytes = enc.encode(name);
+    const body = data instanceof Uint8Array ? data : enc.encode(data);
+    const crc = crc32(body);
+
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true); // version needed
+    lv.setUint16(6, 0, true); // flags
+    lv.setUint16(8, 0, true); // stored
+    lv.setUint16(10, 0, true); // time
+    lv.setUint16(12, 0x21, true); // date, 1 Jan 1996, fixed so the file is reproducible
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, body.length, true);
+    lv.setUint32(22, body.length, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);
+    local.set(nameBytes, 30);
+    locals.push(local, body);
+
+    const dir = new Uint8Array(46 + nameBytes.length);
+    const dv = new DataView(dir.buffer);
+    dv.setUint32(0, 0x02014b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 20, true);
+    dv.setUint16(8, 0, true);
+    dv.setUint16(10, 0, true);
+    dv.setUint16(12, 0, true);
+    dv.setUint16(14, 0x21, true);
+    dv.setUint32(16, crc, true);
+    dv.setUint32(20, body.length, true);
+    dv.setUint32(24, body.length, true);
+    dv.setUint16(28, nameBytes.length, true);
+    dv.setUint32(42, offset, true);
+    dir.set(nameBytes, 46);
+    central.push(dir);
+
+    offset += local.length + body.length;
+  }
+
+  const dirSize = central.reduce((n, d) => n + d.length, 0);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, entries.length, true);
+  ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, dirSize, true);
+  ev.setUint32(16, offset, true);
+
+  const total =
+    locals.reduce((n, b) => n + b.length, 0) + dirSize + end.length;
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const b of [...locals, ...central, end]) {
+    out.set(b, at);
+    at += b.length;
+  }
+  return out;
+}
+
+/** XML text with the five characters that cannot appear raw taken out. */
+function xmlText(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * A 3MF from a set of meshes.
+ *
+ * Worth having over an STL for three reasons that all matter to a printed
+ * part: it says what unit the numbers are in, so a part never arrives at a
+ * twenty-fifth of its size; it keeps the bodies apart and named, so a print
+ * with four parts on the plate is still four parts; and it is a tenth the size.
+ */
+export function to3MF(meshes, names = [], opts = {}) {
+  const unit = opts.unit || 'millimeter';
+  const objects = [];
+  const items = [];
+
+  meshes.forEach((mesh, i) => {
+    const stride = mesh.numProp;
+    const vp = mesh.vertProperties;
+    const tv = mesh.triVerts;
+    const verts = [];
+    for (let v = 0; v < vp.length; v += stride) {
+      verts.push(
+        `<vertex x="${trim(vp[v])}" y="${trim(vp[v + 1])}" z="${trim(vp[v + 2])}"/>`
+      );
+    }
+    const tris = [];
+    for (let t = 0; t < tv.length; t += 3) {
+      tris.push(`<triangle v1="${tv[t]}" v2="${tv[t + 1]}" v3="${tv[t + 2]}"/>`);
+    }
+    const id = i + 1;
+    objects.push(
+      `<object id="${id}" type="model" name="${xmlText(names[i] || `Body ${id}`)}">` +
+        `<mesh><vertices>${verts.join('')}</vertices>` +
+        `<triangles>${tris.join('')}</triangles></mesh></object>`
+    );
+    items.push(`<item objectid="${id}"/>`);
+  });
+
+  const model =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    `<model unit="${unit}" xml:lang="en-US" ` +
+    'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
+    '<metadata name="Application">Anvil</metadata>' +
+    `<resources>${objects.join('')}</resources>` +
+    `<build>${items.join('')}</build></model>`;
+
+  const types =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>' +
+    '</Types>';
+
+  const rels =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Target="/3D/3dmodel.model" Id="rel0" ' +
+    'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>' +
+    '</Relationships>';
+
+  return zipStore([
+    { name: '[Content_Types].xml', data: types },
+    { name: '_rels/.rels', data: rels },
+    { name: '3D/3dmodel.model', data: model }
+  ]);
+}
+
+/** A number written short: printers do not care past a thousandth. */
+function trim(n) {
+  const r = Math.round(n * 1000) / 1000;
+  return Object.is(r, -0) ? '0' : String(r);
+}
+
 /**
  * A 3MF, which is a zip of XML.
  *

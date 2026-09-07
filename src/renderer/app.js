@@ -15,6 +15,7 @@ import { SketchEditor } from './sketchview.js';
 import {
   toBinarySTL,
   toOBJ,
+  to3MF,
   parseSTL,
   parseOBJ,
   parse3MF,
@@ -69,7 +70,9 @@ import {
   minimumRadiusColours,
   zebraColours,
   accessibilityColours,
-  curvatureComb
+  curvatureComb,
+  designAdvice,
+  meshSize
 } from './analysis.js';
 
 /* ------------------------------------------------------------------ */
@@ -1237,6 +1240,7 @@ const TOOL_NAMES = {
   rectangle3: 'draw a rectangle',
   circle: 'draw a circle',
   circleDia: 'draw a circle',
+  circle3: 'draw a circle',
   circleTan2: 'draw a circle',
   circleTan3: 'draw a circle',
   arc: 'draw an arc',
@@ -1255,6 +1259,8 @@ const TOOL_NAMES = {
   spline: 'draw a spline',
   splineCP: 'draw a spline',
   conic: 'draw a conic',
+  blendCurve: 'blend two curve ends',
+  blendCurveG1: 'blend two curve ends',
   text: 'place text',
   fillet: 'round a corner',
   chamfer: 'cut a corner',
@@ -1579,6 +1585,12 @@ async function runCommand(cmd) {
       break;
     case 'extendSurface':
       cmdExtendSurface();
+      break;
+    case 'untrimSurface':
+      cmdUntrimSurface();
+      break;
+    case 'mergeSurface':
+      cmdMergeSurface();
       break;
     case 'stitch':
       cmdStitch();
@@ -1942,6 +1954,12 @@ async function runCommand(cmd) {
       break;
     case 'curvatureComb':
       startCurvatureComb();
+      break;
+    case 'designAdvice':
+      startDesignAdvice();
+      break;
+    case 'print3D':
+      cmdPrint3D();
       break;
     case 'clearAnalysis':
       clearAnalysis();
@@ -5026,6 +5044,7 @@ const RIBBON_MENUS = {
   circle: [
     ['tool:circle', 'Centre Diameter Circle'],
     ['tool:circleDia', 'Two Point Circle'],
+    ['tool:circle3', 'Three Point Circle'],
     ['tool:circleTan2', 'Two Tangent Circle'],
     ['tool:circleTan3', 'Three Tangent Circle']
   ],
@@ -5049,7 +5068,9 @@ const RIBBON_MENUS = {
   spline: [
     ['tool:spline', 'Fit Point Spline'],
     ['tool:splineCP', 'Control Point Spline'],
-    ['tool:conic', 'Conic Curve']
+    ['tool:conic', 'Conic Curve'],
+    ['tool:blendCurve', 'Blend Curve, Curvature Continuous'],
+    ['tool:blendCurveG1', 'Blend Curve, Tangent Continuous']
   ],
   assemble: [
     ['newComponent', 'New Component'],
@@ -5075,6 +5096,7 @@ const RIBBON_MENUS = {
     ['zebraAnalysis', 'Zebra'],
     ['environmentMap', 'Environment Map'],
     ['accessibility', 'Accessibility'],
+    ['designAdvice', 'Design Advice'],
     ['clearAnalysis', 'Clear Analysis']
   ],
   project: [
@@ -6645,6 +6667,218 @@ function startInterference() {
     () => {}
   );
   setStatus(`${hits.length} overlap${hits.length === 1 ? '' : 's'} found.`);
+}
+
+/**
+ * Everything about the model that is likely to give trouble later.
+ *
+ * The thresholds are asked for rather than assumed, because there is no such
+ * thing as a thin wall in the abstract: it depends on the nozzle, and a 0.4 and
+ * a 0.8 disagree about most of a part. What comes back is a list of findings,
+ * not a verdict, and clicking one selects the geometry it is about so it can be
+ * looked at rather than hunted for.
+ */
+function startDesignAdvice() {
+  if (state.sketcher.active) finishSketch();
+  if (!state.result?.bodies.length) {
+    setStatus('Nothing to advise on yet.');
+    return;
+  }
+  const kept = state.advice || {
+    minWall: '1.2',
+    minFeature: '0.8',
+    overhang: '45',
+    bed: '256, 256, 256'
+  };
+
+  showInspector(
+    'Design Advice',
+    [
+      { key: 'minWall', label: 'Thinnest wall to allow', type: 'expr', value: kept.minWall },
+      { key: 'minFeature', label: 'Nozzle, or smallest feature', type: 'expr', value: kept.minFeature },
+      { key: 'overhang', label: 'Steepest overhang, degrees', type: 'expr', value: kept.overhang },
+      { key: 'bed', label: 'Bed, X Y Z, blank for none', type: 'text', value: kept.bed },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Nothing here changes the model. A finding is something to look at, not an error.'
+      }
+    ],
+    (v) => {
+      state.advice = { ...v };
+      const scope = resolveParameters(state.doc.parameters);
+      const bed = String(v.bed || '')
+        .split(/[\s,x]+/)
+        .map((n) => parseFloat(n))
+        .filter((n) => Number.isFinite(n) && n > 0);
+
+      const entries = [];
+      for (const record of state.records || []) {
+        if (!record.topology || !record.mesh) continue;
+        if (state.hiddenBodies.has(record.id)) continue;
+        // A surface has no inside, so a ray sent into it to measure a wall
+        // never comes out and every reading would be infinite.
+        if (record.sheet) continue;
+        entries.push({
+          id: record.id,
+          name: record.name,
+          mesh: record.mesh,
+          topo: record.topology
+        });
+      }
+      if (!entries.length) {
+        setStatus('Every body is hidden.');
+        return;
+      }
+
+      const found = designAdvice(entries, {
+        minWall: safeEval(v.minWall, scope, 1.2),
+        minFeature: safeEval(v.minFeature, scope, 0.8),
+        overhang: safeEval(v.overhang, scope, 45),
+        bed: bed.length === 3 ? bed : null
+      });
+
+      if (!found.length) {
+        showInspector(
+          'Design Advice',
+          [
+            {
+              key: '__ok',
+              label: '',
+              type: 'note',
+              text: `${entries.length} bod${entries.length === 1 ? 'y' : 'ies'} checked. Nothing to flag.`
+            }
+          ],
+          () => {}
+        );
+        setStatus('Nothing to flag.');
+        return;
+      }
+
+      state.adviceFound = found;
+      showInspector(
+        'Design Advice',
+        found.slice(0, 14).map((f, i) => ({
+          key: `__f${i}`,
+          label: '',
+          type: 'note',
+          text: f.message
+        })),
+        () => {}
+      );
+      // The first finding is selected, so the part turns up under the pointer
+      // rather than being described and left to be found.
+      const first = found.find((f) => f.faceId !== undefined);
+      if (first) {
+        clearGeometrySelection();
+        state.selection.faces.add(`${first.bodyId}:${first.faceId}`);
+        refreshHighlight();
+        renderTree();
+      }
+      setStatus(`${found.length} thing${found.length === 1 ? '' : 's'} to look at.`);
+    }
+  );
+}
+
+/**
+ * Write the model out for a printer, and hand it to the slicer.
+ *
+ * 3MF rather than STL by default, and the reason is not size. An STL says
+ * nothing about what unit its numbers are in, so every slicer guesses, and a
+ * part arriving at a twenty-fifth of its size is the commonest thing that goes
+ * wrong between here and a printer. A 3MF says millimetres, keeps the bodies
+ * apart, and keeps their names.
+ */
+async function cmdPrint3D() {
+  if (state.sketcher.active) finishSketch();
+  const solids = (state.result?.bodies || []).filter(
+    (b) => b.solid && !state.hiddenBodies.has(b.id)
+  );
+  if (!solids.length) {
+    setStatus('Nothing solid to print. A surface has no thickness.');
+    return;
+  }
+  const chosen = state.selection.bodies.size
+    ? solids.filter((b) => state.selection.bodies.has(b.id))
+    : solids;
+
+  const kept = state.print3d || { format: '3mf', bed: '256, 256, 256', open: true };
+  const meshes = chosen.map((b) => K.meshData(b.solid));
+  const sizes = meshes.map(meshSize);
+  const worst = [0, 1, 2].map((d) => Math.max(...sizes.map((s) => s[d])));
+
+  showInspector(
+    'Make 3D Print',
+    [
+      {
+        key: 'format',
+        label: 'Format',
+        type: 'select',
+        value: kept.format,
+        options: [
+          ['3mf', '3MF, with units and names'],
+          ['stl', 'STL, one lump of triangles']
+        ]
+      },
+      { key: 'bed', label: 'Bed, X Y Z', type: 'text', value: kept.bed },
+      { key: 'open', label: 'Open it in the slicer', type: 'bool', value: kept.open },
+      {
+        key: '__what',
+        label: '',
+        type: 'note',
+        text: `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'}, biggest ${worst
+          .map((n) => n.toFixed(1))
+          .join(' by ')}.`
+      }
+    ],
+    async (v) => {
+      state.print3d = { ...v };
+      const bed = String(v.bed || '')
+        .split(/[\s,x]+/)
+        .map((n) => parseFloat(n))
+        .filter((n) => Number.isFinite(n) && n > 0);
+
+      if (bed.length === 3) {
+        const tooBig = sizes.filter(
+          (s) =>
+            !((s[0] <= bed[0] && s[1] <= bed[1]) || (s[1] <= bed[0] && s[0] <= bed[1])) ||
+            s[2] > bed[2]
+        );
+        if (tooBig.length) {
+          setStatus(
+            `${tooBig.length} of ${sizes.length} will not fit a ${bed.join(' by ')} bed. Writing it anyway.`
+          );
+        }
+      }
+
+      const base = (state.docPath ? state.docPath.split(/[\\/]/).pop() : 'Untitled').replace(
+        /\.anvil$/i,
+        ''
+      );
+      const names = chosen.map((b) => b.name);
+      const data = v.format === 'stl' ? toBinarySTL(meshes) : to3MF(meshes, names);
+
+      const res = await window.anvil.exportMesh(`${base}.${v.format}`, v.format, data);
+      if (!res.ok) {
+        if (res.error) setStatus(`Could not write it: ${res.error}`);
+        return;
+      }
+      const file = res.path.split(/[\\/]/).pop();
+      if (v.open) {
+        const launched = await window.anvil.launchFile?.(res.path);
+        if (launched?.ok) {
+          setStatus(`${file} handed to the slicer.`);
+          return;
+        }
+        window.anvil.showItem(res.path);
+        setStatus(`${file} written. Nothing on this machine opens a ${v.format}.`);
+        return;
+      }
+      window.anvil.showItem(res.path);
+      setStatus(`${file} written.`);
+    }
+  );
 }
 
 /**
@@ -9388,6 +9622,37 @@ function cmdExtendSurface() {
   openFeatureEditor(feature, 'Extend Surface', extendSurfaceFields());
 }
 
+function cmdUntrimSurface() {
+  if (state.sketcher.active) finishSketch();
+  if (!surfaceBodies().length) {
+    setStatus('Untrim needs a surface.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'untrimSurface',
+    surfaces: pickedSurfaceIds(),
+    outer: true,
+    margin: '0'
+  };
+  openFeatureEditor(feature, 'Untrim Surface', untrimSurfaceFields());
+}
+
+function cmdMergeSurface() {
+  if (state.sketcher.active) finishSketch();
+  if (surfaceBodies().length < 2) {
+    setStatus('Merge needs two or more surfaces.');
+    return;
+  }
+  const feature = {
+    id: uid('f'),
+    type: 'mergeSurface',
+    surfaces: pickedSurfaceIds(),
+    tolerance: '0.01'
+  };
+  openFeatureEditor(feature, 'Merge Surfaces', mergeSurfaceFields());
+}
+
 function cmdStitch() {
   if (state.sketcher.active) finishSketch();
   const sheets = surfaceBodies();
@@ -9657,6 +9922,18 @@ function trimSurfaceFields() {
 
 function extendSurfaceFields() {
   return [surfaceField(), { key: 'distance', label: 'Distance', type: 'expr' }];
+}
+
+function untrimSurfaceFields() {
+  return [
+    surfaceField(),
+    { key: 'outer', label: 'Square the outside off too', type: 'bool' },
+    { key: 'margin', label: 'Extra all round', type: 'expr' }
+  ];
+}
+
+function mergeSurfaceFields() {
+  return [surfaceField(), { key: 'tolerance', label: 'Gap to close', type: 'expr' }];
 }
 
 function stitchFields() {
@@ -12890,6 +13167,10 @@ function describeFeature(feature) {
       return { title: 'Trim Surface', fields: trimSurfaceFields() };
     case 'extendSurface':
       return { title: 'Extend Surface', fields: extendSurfaceFields() };
+    case 'untrimSurface':
+      return { title: 'Untrim Surface', fields: untrimSurfaceFields() };
+    case 'mergeSurface':
+      return { title: 'Merge Surfaces', fields: mergeSurfaceFields() };
     case 'stitch':
       return { title: 'Stitch', fields: stitchFields() };
     case 'unstitch':

@@ -73,6 +73,26 @@ through them, which is the other of the two things "spline" means in CAD and
 the one that behaves when a point is dragged hard. Its ends are pinned to the
 first and last point so a region can still close on it.
 
+A **three point circle** is given by three points on its rim rather than by its
+middle, which is how a bore gets matched to three points measured off a real
+part. The two that were clicked stay on it, so moving one moves the circle
+rather than leaving a point stranded beside it.
+
+**Blend Curve** joins the loose ends of two curves with a spline that does not
+show the join. Tangent continuity is the easy half and is where most packages
+stop; it is not enough, because two arcs joined only tangentially still show a
+break in a reflection where the curvature jumps. The curvature continuous
+version sets the curvature at each end as well, and the check that it worked is
+made against the finished curve rather than against how it was built. It ends on
+the two curves' own points, so dragging one of them takes the blend with it.
+What it cannot hold on its own is the direction and the curvature: nothing in a
+2D solver says "leaves this end at this curvature", and building a chain of
+construction lines to fake one would be worse than saying so plainly.
+
+**Collinear** puts two lines on one infinite line. Parallel is not the same
+thing and is the reason this is its own constraint: two rails are parallel and
+are not collinear.
+
 A **circumscribed** polygon is measured to the middle of an edge rather than to
 a corner, which is the one that matters when it has to clear a spanner or hold
 a nut. The **five slots** differ only in which points you click: between the arc
@@ -517,6 +537,18 @@ edges are still open when they do not; **Unstitch** breaks a body back into one
 surface per face; **Reverse** turns one inside out, which is what decides which
 way it thickens; and **Thicken** makes it a solid.
 
+**Untrim** puts back what a trim took away. On an imported surface the hole was
+usually cut by something that is no longer in the document, so there is no trim
+in the timeline to suppress and the hole has to be filled rather than undone. On
+a flat surface it will also square the outer edge off to the rectangle the
+surface would have had if nothing had ever been cut from it; on a curved one
+there is no rectangle to go back to, so it fills the holes and says it left the
+outside where it was. **Merge** makes several surfaces into one and leaves it a
+surface. Stitch asks whether the result closed and hands back a solid when it
+did; merge does not ask, because sometimes what is wanted is one surface body to
+offset or thicken as a piece and a solid halfway through that is the wrong
+answer.
+
 An offset mitres. A vertex where two faces meet has a normal halfway between
 them, and stepping along that by the distance wanted lands short of both, so the
 point is solved for directly instead: the one that is the offset distance clear
@@ -647,6 +679,33 @@ only, or anything. On a part where the edges are everywhere and the faces are
 small, being able to say "edges only" for a while is the difference between
 picking what you meant and picking eleven times. **Isolate** hides everything
 but what is selected.
+
+**Design Advice** measures everything about a part that is likely to give
+trouble downstream. Fusion's version mostly points at moulding; this one points
+at the two things a part here actually meets, a printer and sometimes a cutter.
+Wall thickness is measured by sending a ray into the material and seeing how far
+it goes, which reads a rib, a boss wall and the web between two pockets the same
+way and needs nothing to be recognised first. The same ray turned round finds
+gaps too narrow to print: it escapes into the air out of an outside face, and
+lands on the far side of a bore or a slot out of an inside one. That matters
+because below about four millimetres a round hole comes out of the kernel as a
+handful of flats rather than a cylinder, and those are exactly the holes worth
+warning about. Overhang and plate contact are counted per triangle rather than
+per face, because a sphere is one face whose average normal is nothing at all
+and it is exactly the sphere that is all overhang. Every threshold is asked for
+rather than assumed: there is no such thing as a thin wall in the abstract, and
+a 0.4 nozzle and a 0.8 disagree about most of a part. Nothing it says is a
+verdict. A thin wall is a finding, not an error, and plenty of parts are meant
+to have one.
+
+**3D Print** writes the model out and hands it to whatever the machine opens it
+with, which is a slicer on any machine that has one. It writes 3MF by default,
+and the reason is not size. An STL says nothing about what unit its numbers are
+in, so every slicer guesses, and a part arriving at a twenty-fifth of its size is
+the commonest thing that goes wrong between a model and a printer. A 3MF says
+millimetres, keeps the bodies apart, and keeps their names. The zip it is built
+on stores rather than deflates: there is nothing here worth bundling a
+compressor for, and stored entries are part of the format.
 
 **Recognise** reads a body back as features, whatever it arrived as. This is
 where the mesh kernel stops being a compromise and starts being an advantage.
@@ -1025,7 +1084,7 @@ model file can never execute anything.
 npm test
 ```
 
-358 tests in a hidden window, checking measured quantities: volumes against
+387 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1055,7 +1114,11 @@ a rigid group and a motion link. `demo-inspect.js` shells a box, weighs it, chec
 through its wall, colours its draft and cuts it open, `demo-project.js` draws a
 tangent arc, projects a face both linked and as a
 copy, and sections a body, checking that the linked ones move when the model
-does, `demo-select.js` drills a plate with five bores and works through every rule:
+does, `demo-blend.js` draws a three point circle, makes two lines collinear and
+blends two arcs, then reads the curvature on both sides of the join;
+`demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
+Design Advice through the Analyse menu, and untrims and merges the faces of a
+drilled plate. `demo-select.js` drills a plate with five bores and works through every rule:
 similar picks the four that match, grow and shrink go out and back, by size
 takes the small ones, and a box dragged each way takes what it should.
 `demo-step.js` writes a STEP file entity by entity, reads it back, and checks

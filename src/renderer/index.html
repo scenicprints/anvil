@@ -123,6 +123,12 @@
             </div>
 
             <div class="group">
+              <span class="glabel">Make</span>
+              <button data-cmd="print3D" class="big" title="Write it for a printer and open it in the slicer">
+                <span class="ico">&#9636;</span><span class="lbl">3D Print</span></button>
+            </div>
+
+            <div class="group">
               <span class="glabel">Construct</span>
               <button data-cmd="construct" class="big" title="Planes, axes and points to build on">
                 <span class="ico">&#9645;</span><span class="lbl">Geometry</span></button>
@@ -165,7 +171,7 @@
               <button data-tool="point" class="big tool"><span class="ico">&#8226;</span><span class="lbl">Point</span></button>
               <button data-tool="ellipse" class="big tool" title="Centre, long axis, then width">
                 <span class="ico">&#11053;</span><span class="lbl">Ellipse</span></button>
-              <button data-menu="spline" class="big tool-menu" title="Fit point, control point, or conic" data-tools="spline,splineCP,conic">
+              <button data-menu="spline" class="big tool-menu" title="Fit point, control point, or conic" data-tools="spline,splineCP,conic,blendCurve,blendCurveG1">
                 <span class="ico">&#8767;</span><span class="lbl">Spline &#9662;</span></button>
               <button data-tool="text" class="big tool" title="Text as sketch outlines">
                 <span class="ico">A</span><span class="lbl">Text</span></button>
@@ -222,6 +228,7 @@
                 <button data-con="vertical" title="Vertical">|</button>
                 <button data-con="parallel" title="Parallel">&#8741;</button>
                 <button data-con="perpendicular" title="Perpendicular">&#8869;</button>
+                <button data-con="collinear" title="Collinear, on one line">&#8801;</button>
                 <button data-con="tangent" title="Tangent">T</button>
                 <button data-con="equal" title="Equal">=</button>
                 <button data-con="concentric" title="Concentric">&#9678;</button>
@@ -265,6 +272,10 @@
                 <span class="ico">&#9986;</span><span class="lbl">Trim</span></button>
               <button data-cmd="extendSurface" class="big" title="Carry a surface past its own edge">
                 <span class="ico">&#8596;</span><span class="lbl">Extend</span></button>
+              <button data-cmd="untrimSurface" class="big" title="Put back what a trim took out of a surface">
+                <span class="ico">&#9723;</span><span class="lbl">Untrim</span></button>
+              <button data-cmd="mergeSurface" class="big" title="Make several surfaces into one, still a surface">
+                <span class="ico">&#9707;</span><span class="lbl">Merge</span></button>
               <button data-cmd="stitch" class="big" title="Weld surfaces, and make a solid if they close">
                 <span class="ico">&#9868;</span><span class="lbl">Stitch</span></button>
               <button data-cmd="unstitch" class="big" title="Break a body into one surface per face">
