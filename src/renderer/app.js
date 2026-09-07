@@ -342,7 +342,7 @@ function rebuildAll() {
   if (!state.pullDrag) refreshPullHandle();
 
   const ms = Math.round(performance.now() - t0);
-  const errCount = res.errors.length + Object.keys(res.paramErrors).length;
+  const errCount = visibleErrors().length + Object.keys(res.paramErrors).length;
   if (errCount) {
     setSolveState('err', `${errCount} problem${errCount > 1 ? 's' : ''}`);
   } else {
@@ -2651,7 +2651,7 @@ function insertFeature(feature) {
 function renderTimeline() {
   el.timeline.innerHTML = '';
   const rollback = currentRollback();
-  const errorIds = new Set(state.result?.errors.map((e) => e.feature) || []);
+  const errorIds = new Set(visibleErrors().map((e) => e.feature));
 
   const icons = {
     sketch: '✎',
@@ -3020,9 +3020,10 @@ function renderTree() {
     for (const b of formList) bodyNode(b);
   }
 
-  if (state.result?.errors.length) {
+  const problems = visibleErrors();
+  if (problems.length) {
     addNode('Problems', { head: true });
-    for (const e of state.result.errors) {
+    for (const e of problems) {
       addNode(e.message, { child: true, error: e.message });
     }
   }
@@ -11035,6 +11036,12 @@ function refreshPullHandle() {
   // session. Swept up here rather than at each exit, because it was the exits
   // that were missed: only the dialog's own OK and Cancel ever cleared it.
   if (!state.pullDrag && !state.editing) hidePullValue();
+
+  // The callout steps aside for the arrow, and the arrow has just changed, so
+  // it has to be told now rather than at the next pointer move. Otherwise it
+  // sits on top of the arrow from the moment the arrow appears until the mouse
+  // is moved, which is exactly the moment somebody is looking for it.
+  placeCallout();
 }
 
 /** A press on the arrow starts a pull. Returns true when it took the click. */
@@ -11427,6 +11434,39 @@ function pickCountText(armed, f) {
  * Sit the callout beside the cursor, inside the viewport. It is flipped rather
  * than clamped near an edge, so it never covers the thing being pointed at.
  */
+/**
+ * Where the pull arrow lies on screen, in the viewport wrapper's coordinates,
+ * with a margin round it. Null when there is no arrow or it is behind the eye.
+ */
+function pullArrowArea(r) {
+  const f = state.pullHandle?.frame;
+  if (!f) return null;
+  const len = state.vp.pixelSize() * 95;
+  const a = state.vp.worldToScreen(f.origin[0], f.origin[1], f.origin[2]);
+  const b = state.vp.worldToScreen(
+    f.origin[0] + f.z[0] * len,
+    f.origin[1] + f.z[1] * len,
+    f.origin[2] + f.z[2] * len
+  );
+  if (!a || !b || a.behind || b.behind) return null;
+  const m = 16;
+  return {
+    x0: Math.min(a.clientX, b.clientX) - r.left - m,
+    x1: Math.max(a.clientX, b.clientX) - r.left + m,
+    y0: Math.min(a.clientY, b.clientY) - r.top - m,
+    y1: Math.max(a.clientY, b.clientY) - r.top + m
+  };
+}
+
+/**
+ * Put the callout near the cursor, and off the arrow.
+ *
+ * It follows the pointer, which is right where the arrow is standing, so it
+ * covered the arrow completely. It passes clicks through, so the arrow could
+ * still be grabbed the whole time, which is worse rather than better: a panel
+ * saying "click the profiles to use", sitting on top of the one thing on screen
+ * that would have said what to do next.
+ */
 function placeCallout() {
   const box = $('#pickcallout');
   if (!box || box.classList.contains('hidden')) return;
@@ -11436,14 +11476,37 @@ function placeCallout() {
   const w = box.offsetWidth || 180;
   const h = box.offsetHeight || 62;
   const pad = 8;
-  // Above the cursor rather than below it, so it does not cover the very thing
-  // being pointed at, and flipped down only when there is no room above.
-  let x = p.x - r.left + 18;
-  let y = p.y - r.top - h - 14;
-  if (x + w > r.width - pad) x = p.x - r.left - w - 18;
-  if (y < pad) y = p.y - r.top + 20;
-  box.style.left = `${Math.max(pad, Math.min(x, r.width - w - pad))}px`;
-  box.style.top = `${Math.max(pad, Math.min(y, r.height - h - pad))}px`;
+  const px = p.x - r.left;
+  const py = p.y - r.top;
+  const arrow = pullArrowArea(r);
+
+  // Above the cursor first, because below it covers the thing being pointed at,
+  // then the other three corners, then out past whichever end of the arrow has
+  // the room. The last of these always clears it, so there is always an answer.
+  const spots = [
+    [px + 18, py - h - 14],
+    [px - w - 18, py - h - 14],
+    [px + 18, py + 20],
+    [px - w - 18, py + 20]
+  ];
+  if (arrow) {
+    spots.push(
+      [arrow.x1 + 12, py - h / 2],
+      [arrow.x0 - w - 12, py - h / 2],
+      [px - w / 2, arrow.y1 + 12],
+      [px - w / 2, arrow.y0 - h - 12]
+    );
+  }
+
+  const inside = ([x, y]) =>
+    x >= pad && y >= pad && x + w <= r.width - pad && y + h <= r.height - pad;
+  const clear = ([x, y]) =>
+    !arrow || x > arrow.x1 || x + w < arrow.x0 || y > arrow.y1 || y + h < arrow.y0;
+
+  const at =
+    spots.find((s) => inside(s) && clear(s)) || spots.find(clear) || spots[0];
+  box.style.left = `${Math.max(pad, Math.min(at[0], r.width - w - pad))}px`;
+  box.style.top = `${Math.max(pad, Math.min(at[1], r.height - h - pad))}px`;
 }
 
 function syncPickBar() {
@@ -11836,6 +11899,27 @@ function renderFields() {
  * decides whether the feature has a problem, so the message has to be updated
  * separately or a dialog still says "select a profile" after one was picked.
  */
+/**
+ * The problems worth calling problems.
+ *
+ * A dialog that has just opened and has not been given its number yet is not a
+ * failure, it is a dialog waiting to be finished. Extrude opens with a distance
+ * of zero and nothing pointed at, on purpose, so pressing the button used to
+ * put "Extrude has nothing to work from" in the browser under Problems, a red
+ * exclamation beside it, and "1 problem" in the corner, before anything had
+ * been done wrong. The dialog says what it still needs, in its own footer,
+ * which is where that belongs. Everywhere else it reads as broken.
+ *
+ * Only while the dialog is open and only for a feature it is creating. Editing
+ * an existing feature into a state that will not build is a real problem, and
+ * so is that same feature the moment OK is pressed.
+ */
+function visibleErrors() {
+  const editing = state.editing;
+  const pending = editing?.isNew ? editing.feature?.id : null;
+  return (state.result?.errors || []).filter((e) => !pending || e.feature !== pending);
+}
+
 function syncDialogError() {
   const box = document.getElementById('dialogErr');
   if (!box) return;

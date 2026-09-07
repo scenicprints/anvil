@@ -126,6 +126,28 @@ const centre = dev.state.vp.worldToScreen(0, 0, 0);
 await clickAt(centre.clientX, centre.clientY);
 await wait(500);
 report.afterPointing = { ...onScreen(), ...model(), arrow: arrow()?.len ?? 0 };
+
+// The callout follows the pointer, and the pointer is where the arrow has just
+// stood up, so it covered the arrow completely. It passes clicks through, so
+// the arrow could still be grabbed the whole time, which is worse rather than
+// better: a panel saying "click the profiles to use", sitting on top of the one
+// thing on screen that would have said what to do next.
+{
+  const f = dev.state.pullHandle?.frame;
+  const box = document.getElementById('pickcallout')?.getBoundingClientRect();
+  const ref = dev.state.vp.pixelSize() * 95;
+  const a = f && dev.state.vp.worldToScreen(f.origin[0], f.origin[1], f.origin[2]);
+  const b =
+    f && dev.state.vp.worldToScreen(f.origin[0] + f.z[0] * ref, f.origin[1] + f.z[1] * ref, f.origin[2] + f.z[2] * ref);
+  report.calloutClearsTheArrow =
+    !!a &&
+    !!b &&
+    !!box &&
+    (box.left > Math.max(a.clientX, b.clientX) ||
+      box.right < Math.min(a.clientX, b.clientX) ||
+      box.top > Math.max(a.clientY, b.clientY) ||
+      box.bottom < Math.min(a.clientY, b.clientY));
+}
 // The arrow is the point. Chosen but with nothing to drag is where this dead
 // ended: a dialog holding a zero and no way on screen to change it.
 report.pointingStandsAnArrowUp = report.afterPointing.chosen === 1 && report.afterPointing.arrow > 40;

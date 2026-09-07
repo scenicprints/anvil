@@ -1684,6 +1684,23 @@ as a click on what is underneath rather than a drag of nothing, which is what
 lets the same profile be clicked again to let go of it: the arrow the first
 click puts up is standing exactly where the second click has to land.
 
+**The callout steps aside for the arrow.** It follows the pointer, and the
+pointer is exactly where the arrow has just stood up, so it covered the arrow
+completely. It passes clicks through, so the arrow could be grabbed the whole
+time, which is worse rather than better: a panel reading "click the profiles to
+use", sitting on top of the one thing on screen that would have said what to do
+next. It now takes the first of eight positions round the cursor that clears the
+arrow's span, and it is told to move the moment the arrow appears rather than at
+the next mouse move.
+
+**An unfinished dialog is not a problem.** Extrude opens with a distance of zero
+and nothing pointed at, deliberately, so pressing the button used to put "Extrude
+has nothing to work from" in the browser under Problems, with a red mark beside
+it, and "1 problem" in the corner, before anything had been done wrong. A new
+feature's complaints stay in its own dialog footer, which is where they belong,
+until OK is pressed. Editing an *existing* feature into a state that will not
+build is a real problem and still reads as one.
+
 **Reaching for a tool starts the sketch.** Clicking Rectangle on the Sketch tab
 with nothing open asks which plane to put it on and then opens the sketch with
 the rectangle already in hand. It used to say "start a sketch first" and do

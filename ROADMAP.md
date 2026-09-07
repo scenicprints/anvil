@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.24.0**. 516 tests.
+Current version: **2.24.1**. 516 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
@@ -74,6 +74,26 @@ Three fixes, and the second and third only exist because the first was made:
   floating by the pointer, with no dialog behind it, for the rest of the session.
 
 `tools/demo-extrude.js` covers all of it, from an empty document.
+
+**And then it still was not there**, because the arrow was under the callout.
+The callout follows the pointer, and the pointer is exactly where the arrow has
+just stood up. It passes clicks through, so the arrow was grabbable the whole
+time, which made it worse rather than better: nothing on screen said there was
+anything to grab. It now takes the first position round the cursor that clears
+the arrow's span, and `refreshPullHandle` tells it to move the moment the arrow
+appears rather than at the next mouse move. The demo measures the two rectangles
+and asserts they do not overlap.
+
+The same screenshot showed the second half of it: "Extrude has nothing to work
+from" under **Problems** in the browser, a red mark beside it, and "1 problem"
+in the corner, all from pressing the button. A new feature's dialog that has not
+been given its number yet is not a failure, and `visibleErrors()` keeps those
+out of the browser, the timeline and the corner. They stay in the dialog's own
+footer. An existing feature edited into a state that will not build is a real
+problem and still reads as one.
+
+That is the same lesson a third time: **look at the screen, not at the state.**
+Every one of these was invisible to a check that asks the app how it is doing.
 
 A fourth rule, then, and it is the one that would have caught all four:
 **walk the path a person walks on the day they open it.** Every demo before
