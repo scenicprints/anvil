@@ -1357,18 +1357,68 @@ thousands of facets, and it is editable because it was never triangles.
   cylinder. This is what makes an STL editable rather than merely usable, and
   it is where the recognition work already points.
 
-### The Fusion gaps, from the audit
+### The Fusion gaps, as batches
 
-Ordered as they would be felt, not as they appear in the menus.
+The old plan here said "Batch 14, the commands" and listed seventeen. Walking
+every panel found sixty six, so one batch was never the right shape. Ordered by
+what is felt soonest per hour spent, not by where things sit in the menus.
 
-**Batch 14. The commands.** Untrim, Blend Curve, Hem, Lofted Flange, Mesh
-Stitch, Patch and Direct Edit, Boss, Snap Fit, Rest, Lip, Perpendicular Plane,
-Plane Through Two Edges, Point Through Two Edges, User Coordinate System,
-As-Built Joint, Isocurve Analysis.
+**Batch 14. Select.** Thirteen commands, and the highest value block on the
+whole list. Window, freeform and paint dragging; select by name, by size, by
+boundary; seed and boundary; invert; priority filters for body, face, edge and
+component; isolate and unisolate. On a fifty thousand triangle import, "select
+every face under two square millimetres" is the difference between a model you
+can work on and one you cannot. It also makes every other batch cheaper,
+because every one of them begins by choosing something.
 
-**Batch 15 and beyond. The workspaces he ruled in.** Render, Animation,
+**Batch 15. Form Modify.** Twelve. The thirteen already here are the
+topological verbs, insert edge, subdivide, weld, crease, bridge. The missing
+twelve are the sculpting ones: Bevel Edge, Slide Edge, Match, Interpolate,
+Cylindrify, Straighten, Smooth, Merge Edge, Erase and Fill, Edit By Curve,
+Freeze, Unfreeze. That is the difference between editing a cage and shaping one.
+
+**Batch 16. Form Create.** Six. Extrude, Revolve, Sweep and Loft in the Form
+environment, building a T-Spline rather than a solid, plus the Pipe and Face
+primitives. The solid versions already exist, so this is the same intent
+against a different output.
+
+**Batch 17. Mesh.** Six. Direct Edit, Stitch, Patch, Physical Material,
+Appearance, Compute All. Direct Edit belongs with the import work and could
+move there.
+
+**Batch 18. The geometry singles.** Fifteen, all small and unrelated to each
+other. Construct: Perpendicular Plane, Plane Through Two Edges, Point Through
+Two Edges, User Coordinate System. Sketch: 3-Point Circle, Spun Profile,
+Collinear, Curvature, Blend Curve. Surface: Untrim, Merge. Inspect: Isocurve
+Analysis, Design Advice. Form: Repair Body. Make: 3D Print, meaning a send to a
+slicer rather than an export.
+
+**Batch 19. Plastic parts.** Four. Boss, Snap Fit, Rest, Lip. They are one
+family and want doing together, and they are the four most likely of the lot to
+matter to a printed part.
+
+**Batch 20. Assembly and insertion.** Ten. Assemble: As-Built Joint, Joint
+Origin, Constrain Components. Insert: Insert Component from a file, Insert
+Derive, Decal, Canvas. Sheet Metal: Hem, Lofted Flange, and a flat pattern that
+tracks whether it is out of date.
+
+**Batches 21 and beyond. The workspaces he ruled in.** Render, Animation,
 Simulation, Generative Design. Each is a project rather than a batch. Cost
 Simulation and Generative Design in front of him before starting either.
+
+**Not scheduled, deliberately:** the twelve library and cloud backed commands
+listed with the inventory, and everything in section 6 of it.
+
+### Reading the order
+
+Import first because he asked for it and because it is the one thing here that
+beats Fusion rather than catching up with it. Then Select, because everything
+else starts by choosing something and it is the largest hole. Then the Form
+sculpting verbs, which is the biggest single block of real modelling capability
+missing. Then the long tail, which is mostly a session each.
+
+The workspaces are last not because they matter least but because each is
+months, and three of the four have no user waiting on them yet.
 
 ### What STEP taught
 
