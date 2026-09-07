@@ -90,6 +90,7 @@ import * as AS from '../src/renderer/assembly.js';
 import { decalMesh } from '../src/renderer/decal.js';
 import * as CF from '../src/renderer/configure.js';
 import * as AM from '../src/renderer/animation.js';
+import * as FE from '../src/renderer/fea.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
@@ -7272,6 +7273,304 @@ async function run() {
     const size = meshSize(mesh);
     near(size[0], 5, 0.01, 'pushed along the frame, which here is world x');
     out.dispose();
+  });
+
+  /* -------- stress analysis -------- */
+
+  /**
+   * A beam as a closed triangle mesh, written out rather than built.
+   *
+   * Written out because the whole point of these tests is comparing a solver
+   * against arithmetic anybody can check, and a beam whose length is whatever
+   * the kernel made it is not that.
+   */
+  function beamMesh(L, W, H) {
+    return {
+      numProp: 3,
+      vertProperties: new Float32Array([
+        0, 0, 0, L, 0, 0, L, W, 0, 0, W, 0,
+        0, 0, H, L, 0, H, L, W, H, 0, W, H
+      ]),
+      triVerts: new Uint32Array([
+        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7,
+        0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5,
+        2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7
+      ])
+    };
+  }
+
+  /** Hold one end of a beam, push the other, and report what happened. */
+  function loadedBeam(L, W, H, across, load, opts = {}) {
+    const grid = FE.voxelise(beamMesh(L, W, H), { across });
+    const nodes = FE.nodesOf(grid);
+    const material = FE.stiffnessOf(opts.material || 'steel');
+    const Ke = FE.hexStiffness(material.modulus, material.poisson, grid.size, {
+      plain: !!opts.plain
+    });
+    const root = FE.nodesNear(nodes, { origin: [0, 0, 0], normal: [1, 0, 0] }, grid.size * 0.4);
+    const tip = FE.nodesNear(nodes, { origin: [L, 0, 0], normal: [1, 0, 0] }, grid.size * 0.4);
+    const res = FE.solve(nodes, nodes.elements, Ke, {
+      fixed: FE.dofsOf(root),
+      forces: FE.spreadForce(tip, load, nodes.elements)
+    });
+    if (!res.ok) return { grid, nodes, res };
+    return {
+      grid,
+      nodes,
+      res,
+      material,
+      out: FE.stresses(nodes, nodes.elements, res.displacement, material, grid.size)
+    };
+  }
+
+  test('fea: a box fills its grid completely, whatever the resolution', () => {
+    // The one that caught a real bug. A ray landing exactly on the diagonal
+    // between two triangles is counted by both, the crossings pair up into two
+    // intervals of no length, and the whole row reads as empty. On a part made
+    // of flat faces that is not a rare accident, it is every square face.
+    for (const across of [5, 8, 10, 16, 20]) {
+      const grid = FE.voxelise(beamMesh(100, 10, 10), { across });
+      assert(grid, `a grid at ${across}`);
+      const cells = grid.n[0] * grid.n[1] * grid.n[2];
+      assert(grid.filled === cells, `all ${cells} cells at ${across}, got ${grid.filled}`);
+    }
+  });
+
+  test('fea: the grid lands on the part rather than half a cell off it', () => {
+    const grid = FE.voxelise(beamMesh(100, 10, 10), { across: 10 });
+    near(grid.origin[0], 0, 1e-9, 'it starts where the part starts');
+    near(grid.size, 10, 1e-9, 'ten cubes along a hundred is ten across');
+    assert(grid.n[0] === 10, `ten along, got ${grid.n[0]}`);
+    // A grid half a cell out has no node on the end faces, so nothing can be
+    // held and nothing can be pushed.
+    const nodes = FE.nodesOf(grid);
+    const root = FE.nodesNear(nodes, { origin: [0, 0, 0], normal: [1, 0, 0] }, 1e-6);
+    assert(root.length === 4, `four nodes on the end face, got ${root.length}`);
+  });
+
+  test('fea: sizing by the thin direction gets the section right, every time', () => {
+    // The fault this is the cure for is quiet and enormous. Cubes sized to
+    // divide the long side will not divide the short one, so a 10 millimetre
+    // section comes out 12.5, and stiffness in bending goes as the thickness
+    // cubed: two and a half times too stiff, with every other number looking
+    // perfectly reasonable.
+    const bad = FE.voxelise(beamMesh(100, 10, 10), { across: 24 });
+    assert(Math.abs(FE.volumeError(bad, 10000).percent) > 20, 'sized by the long side it is much too fat');
+
+    for (const through of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const grid = FE.voxelise(beamMesh(100, 10, 10), { through });
+      const v = FE.volumeError(grid, 100 * 10 * 10);
+      assert(v.ok, `at ${through} through, volume is out by ${v.percent.toFixed(1)} per cent`);
+      assert(grid.n[1] === through && grid.n[2] === through, `and it really is ${through} across`);
+    }
+  });
+
+  test('fea: a cell centre landing on a face diagonal does not lose the row', () => {
+    // Cell centres land on the diagonal of a square face far more often than
+    // chance suggests, because both sit on the same regular spacing. On that
+    // line the edge rule has to break a tie by an exact comparison, which in
+    // floating point is decided at random: sometimes both triangles claim the
+    // point, sometimes neither, and a whole row of cells comes out wrong.
+    //
+    // Odd numbers are where it bites, because they put a cell centre exactly on
+    // the middle of the face.
+    for (const through of [1, 3, 5, 7, 9, 11]) {
+      const grid = FE.voxelise(beamMesh(60, 12, 12), { through });
+      const want = grid.n[0] * grid.n[1] * grid.n[2];
+      assert(grid.filled === want, `${through} through: ${grid.filled} of ${want} cells`);
+    }
+  });
+
+  test('fea: the volume error is what says whether the grid describes the part', () => {
+    const grid = FE.voxelise(beamMesh(100, 10, 10), { through: 4 });
+    const exact = FE.volumeError(grid, 100 * 10 * 10);
+    near(exact.percent, 0, 1e-6, 'a grid that divides the part exactly is exact');
+    assert(exact.ok, 'and it says so');
+
+    // Told the part is bigger than it is, it notices.
+    const wrong = FE.volumeError(grid, 100 * 10 * 10 * 1.5);
+    assert(!wrong.ok, 'a third out is not all right');
+    assert(wrong.percent < 0, 'and it says which way');
+  });
+
+  test('fea: a grid asked for more cubes than is sensible is made coarser', () => {
+    const grid = FE.voxelise(beamMesh(100, 10, 10), { through: 40, most: 5000 });
+    assert(grid.capped, 'it says it capped it');
+    const cells = grid.n[0] * grid.n[1] * grid.n[2];
+    assert(cells < 5000 * 2, `and really did, ${cells} cells`);
+  });
+
+  test('fea: a bar in tension stretches by exactly as much as it should', () => {
+    // The check that the assembly and the solve are right. Any correct element
+    // gets pure tension exactly, at any resolution, so anything off here is a
+    // fault in the machinery rather than in the element.
+    const L = 100;
+    const W = 10;
+    const H = 10;
+    const P = 10000;
+    for (const across of [10, 20]) {
+      const r = loadedBeam(L, W, H, across, [P, 0, 0]);
+      assert(r.res.ok, r.res.reason || 'it solved');
+      const exact = (P * L) / (W * H * r.material.modulus);
+      near(r.out.maxMove, exact, exact * 0.02, `stretch at ${across} across`);
+    }
+  });
+
+  test('fea: a cantilever deflects by what the beam formula says', () => {
+    // PL cubed over 3EI, which is the number every engineer knows. Getting
+    // this right at one element through the depth is the whole reason the
+    // element has the extra bending shapes in it.
+    const L = 100;
+    const W = 10;
+    const H = 10;
+    const P = 100;
+    const I = (W * H * H * H) / 12;
+    for (const across of [10, 20, 40]) {
+      const r = loadedBeam(L, W, H, across, [0, 0, -P]);
+      assert(r.res.ok, r.res.reason || 'it solved');
+      const exact = (P * L * L * L) / (3 * r.material.modulus * I);
+      near(r.out.maxMove, exact, exact * 0.05, `tip deflection at ${across} across`);
+    }
+  });
+
+  test('fea: without the bending shapes the same beam comes out far too stiff', () => {
+    // This is what those shapes are worth. A plain trilinear cube cannot bend,
+    // so it shears instead, and shearing takes more force.
+    const r = loadedBeam(100, 10, 10, 10, [0, 0, -100], { plain: true });
+    const good = loadedBeam(100, 10, 10, 10, [0, 0, -100]);
+    const exact = (100 * 1e6) / (3 * r.material.modulus * ((10 * 1000) / 12));
+    assert(r.out.maxMove < exact * 0.8, `plain is stiff, got ${(r.out.maxMove / exact).toFixed(2)} of it`);
+    near(good.out.maxMove, exact, exact * 0.02, 'and with them it is right');
+  });
+
+  test('fea: bending stress is read at the surface, not at the middle', () => {
+    // Mc over I. Read at the middle of each element a cube reads zero for a
+    // beam at yield, because the middle of a section in bending has no stress
+    // in it. Under-reading a stress is how a part gets signed off and breaks.
+    const L = 100;
+    const W = 10;
+    const H = 10;
+    const P = 100;
+    const I = (W * H * H * H) / 12;
+    const exact = ((P * L) * (H / 2)) / I;
+    for (const across of [10, 20, 40]) {
+      const r = loadedBeam(L, W, H, across, [0, 0, -P]);
+      near(r.out.maxStress, exact, exact * 0.12, `bending stress at ${across} across`);
+    }
+  });
+
+  test('fea: the safety factor is the yield over the stress', () => {
+    const r = loadedBeam(100, 10, 10, 20, [0, 0, -100]);
+    near(r.out.factor, r.material.yield / r.out.maxStress, 1e-9, 'that is all it is');
+    assert(r.out.factor > 1, 'and this beam is not at yield');
+  });
+
+  test('fea: a softer material moves more and is stressed the same', () => {
+    // Stress does not care what it is made of; deflection is all it cares
+    // about. Getting that the wrong way round is the commonest misreading of
+    // a stress result there is.
+    const steel = loadedBeam(100, 10, 10, 20, [0, 0, -100], { material: 'steel' });
+    const plastic = loadedBeam(100, 10, 10, 20, [0, 0, -100], { material: 'pla' });
+    assert(
+      plastic.out.maxMove > steel.out.maxMove * 20,
+      `plastic bends far more, ${(plastic.out.maxMove / steel.out.maxMove).toFixed(0)} times`
+    );
+    near(
+      plastic.out.maxStress,
+      steel.out.maxStress,
+      steel.out.maxStress * 0.1,
+      'and carries the same stress'
+    );
+    assert(plastic.out.factor < steel.out.factor, 'so the plastic one is nearer to failing');
+  });
+
+  test('fea: twice the load is twice everything', () => {
+    const one = loadedBeam(100, 10, 10, 20, [0, 0, -100]);
+    const two = loadedBeam(100, 10, 10, 20, [0, 0, -200]);
+    near(two.out.maxMove, one.out.maxMove * 2, one.out.maxMove * 0.01, 'twice the deflection');
+    near(two.out.maxStress, one.out.maxStress * 2, one.out.maxStress * 0.01, 'and twice the stress');
+  });
+
+  test('fea: nothing holding it, or nothing pushing it, is refused', () => {
+    const grid = FE.voxelise(beamMesh(100, 10, 10), { across: 10 });
+    const nodes = FE.nodesOf(grid);
+    const material = FE.stiffnessOf('steel');
+    const Ke = FE.hexStiffness(material.modulus, material.poisson, grid.size);
+    const tip = FE.nodesNear(nodes, { origin: [100, 0, 0], normal: [1, 0, 0] }, grid.size * 0.4);
+
+    const loose = FE.solve(nodes, nodes.elements, Ke, {
+      fixed: [],
+      forces: FE.spreadForce(tip, [0, 0, -100], nodes.elements)
+    });
+    assert(!loose.ok && /holding/.test(loose.reason), 'a free body is refused, not solved forever');
+
+    const idle = FE.solve(nodes, nodes.elements, Ke, {
+      fixed: FE.dofsOf([0, 1, 2, 3]),
+      forces: []
+    });
+    assert(!idle.ok && /pushing/.test(idle.reason), 'and so is a part with no load on it');
+  });
+
+  test('fea: a load spread over a face is spread by area, not by node count', () => {
+    // Evenly is wrong in a way that looks like an answer: the corners of a face
+    // touch one element and the middle touches four, so an even share
+    // over-loads the corners and invents a stress concentration that is not in
+    // the part.
+    const grid = FE.voxelise(beamMesh(100, 20, 20), { across: 10 });
+    const nodes = FE.nodesOf(grid);
+    const face = FE.nodesNear(nodes, { origin: [100, 0, 0], normal: [1, 0, 0] }, grid.size * 0.4);
+    assert(face.length > 4, `a face with corners and middles, got ${face.length} nodes`);
+
+    const even = FE.spreadForce(face, [100, 0, 0]);
+    const weighted = FE.spreadForce(face, [100, 0, 0], nodes.elements);
+    const total = (list) => list.filter(([d]) => d % 3 === 0).reduce((a, [, v]) => a + v, 0);
+    near(total(even), 100, 1e-9, 'both add up to the load asked for');
+    near(total(weighted), 100, 1e-9, 'both of them');
+
+    const share = (list, node) => list.find(([d]) => d === node * 3)[1];
+    const shares = face.map((n) => share(weighted, n));
+    assert(
+      Math.max(...shares) > Math.min(...shares) * 1.5,
+      'and the weighted one really does share unevenly'
+    );
+  });
+
+  test('fea: it says when the grid is coarser than the part is thick', () => {
+    // A cube bigger than the thinnest wall turns a 10 millimetre beam into a
+    // 20 millimetre one, and every number after that is about a part nobody
+    // drew.
+    const coarse = FE.voxelise(beamMesh(100, 10, 10), { across: 5 });
+    assert(!FE.gridQuality(coarse).enough, 'one cube through the section is not enough');
+    const fine = FE.voxelise(beamMesh(100, 10, 10), { across: 40 });
+    const q = FE.gridQuality(fine);
+    assert(q.enough && q.good, `four through the section is good, got ${q.across}`);
+  });
+
+  test('fea: a stiffness matrix has no strength against being picked up', () => {
+    // The check every element formulation has to pass. Move every corner by the
+    // same amount and nothing is being deformed, so no force can come out. An
+    // element that fails this pushes back against a part simply being carried.
+    const Ke = FE.hexStiffness(200000, 0.3, 2);
+    for (const c of [0, 1, 2]) {
+      const move = new Float64Array(24);
+      for (let a = 0; a < 8; a++) move[a * 3 + c] = 1;
+      for (let i = 0; i < 24; i++) {
+        let f = 0;
+        for (let j = 0; j < 24; j++) f += Ke[i * 24 + j] * move[j];
+        near(f, 0, 1e-6, `no force from being carried along axis ${c}`);
+      }
+    }
+  });
+
+  test('fea: the stiffness matrix is symmetric, as any real one must be', () => {
+    const Ke = FE.hexStiffness(200000, 0.3, 2);
+    let worst = 0;
+    for (let i = 0; i < 24; i++) {
+      for (let j = 0; j < 24; j++) {
+        worst = Math.max(worst, Math.abs(Ke[i * 24 + j] - Ke[j * 24 + i]));
+      }
+    }
+    near(worst, 0, 1e-6, 'pushing here and measuring there is the same either way round');
   });
 
   /* -------- animation -------- */

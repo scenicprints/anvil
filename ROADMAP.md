@@ -8,10 +8,9 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.21.0**. 489 tests. Batches 11 to 20b have shipped, and two
-of the four workspaces in Batch 21: **Render and Animation**. What is left is
-**Simulation and Generative Design**, and the roadmap's own instruction stands:
-cost both in front of him before starting either.
+Current version: **2.22.0**. 507 tests. Batches 11 to 20b have shipped, and
+three of the four workspaces in Batch 21: **Render, Animation and Simulation**.
+What is left is **Generative Design**.
 
 ---
 
@@ -1598,14 +1597,33 @@ to the assembly, so scrubbing costs nothing and the playhead can stop anywhere.
 
 What is left, and why each is a project rather than a batch:
 
-**Simulation** means a solver. Static stress on a printed part is the useful
-case, and it needs tetrahedral meshing of a manifold body, material stiffness,
-constraints and loads on faces, an assembly and solve of a sparse system, and a
-way to show the result. The meshing and the sparse solve are each larger than
-any batch on this list. Worth costing honestly before a line of it is written.
+**Simulation shipped in v2.22.0**, and it is a real finite element solve
+validated against beam theory. `fea.js` holds all of it and nothing there
+touches the kernel or the renderer.
 
-**Generative Design** means running many solves and picking. It cannot start
-before Simulation and is a multiple of it.
+Four things in it are load-bearing, and three of them were bugs first:
+
+1. **Sized by the thinnest direction.** Cubes that divide the long side will not
+   divide the short one, and stiffness goes as the thickness cubed, so a section
+   a quarter too fat is two and a half times too stiff with nothing else looking
+   wrong. The grid also reports its own volume against the part's, which catches
+   this whenever it happens anyway.
+2. **The scanline samples a hair off the cell centre.** Cell centres land on the
+   diagonal of a square face constantly, because both sit on the same regular
+   spacing, and the edge rule then has to break a tie by an exact floating point
+   comparison. Sometimes both triangles claim the point, sometimes neither, and
+   a whole row of cells comes out wrong.
+3. **The element has incompatible bending modes**, condensed out once. Without
+   them a cantilever at one element through the depth gives two thirds of the
+   right answer; with them, within a fraction of a percent.
+4. **Stress is read at element corners, not centres.** The middle of a section
+   in bending has no stress in it, so a centre reading is zero for a beam at
+   yield.
+
+**Generative Design** is what is left. It means running many solves and picking,
+so it could not have started before this and is a multiple of it. The grid this
+uses is exactly the one SIMP topology optimisation wants, which is the reason to
+have built it this way.
 
 **Not scheduled, deliberately:** the twelve library and cloud backed commands
 listed with the inventory, and everything in section 6 of it.

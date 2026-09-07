@@ -708,6 +708,60 @@ change of shape rather than a repair. A cage with nothing wrong with it comes
 back untouched and says so, rather than being quietly rebuilt: a rebuild
 renumbers the points and takes every crease and selection with it.
 
+## Stress
+
+**Stress Analysis** is a real finite element solve. Hold some faces, push some
+others, say how hard, and it works out what the part does.
+
+It cuts the body into a grid of little cubes rather than meshing it with
+tetrahedra. Meshing an arbitrary solid with tetrahedra that are all well shaped
+is a research problem and one bad element poisons the answer everywhere; a grid
+cannot tangle, cannot invert and cannot produce a sliver. The price is a
+stair-stepped boundary, and the answer to that is a finer grid rather than a
+cleverer mesher. Because every element is the same cube, the matrix saying how
+one resists deformation is worked out once for the whole part, and the global
+system is never assembled at all: conjugate gradients only ever needs the matrix
+times a vector, and that is done one element at a time.
+
+Three things about it are worth knowing before trusting a number out of it.
+
+**It is sized by the thinnest direction, not the longest.** This is the decision
+that decides whether the answer means anything. Cubes chosen to divide the long
+side neatly will not divide the short one, so a 10 millimetre section comes out
+12.5 because that is where the cell boundaries fell. Stiffness in bending goes
+as the thickness cubed, so a section a quarter too fat is two and a half times
+too stiff, and nothing else in the answer looks wrong. It also reports the
+volume of its own cubes against the real volume of the part, which is the one
+number that catches this when it happens anyway.
+
+**The element can bend.** A plain trilinear cube cannot: asked to bend it shears
+instead, and shearing takes far more force, so a beam made of them comes out
+several times too stiff. Three extra shapes are added to each element and solved
+away before it ever reaches the solver, which costs nothing at solve time and
+takes a cantilever from two thirds of the right answer to within a fraction of a
+percent at one element through the depth.
+
+**Stress is read at the corners, not the middle.** Bending stress is highest at
+the surface and zero in the middle of the section, so an element centre
+systematically under-reads the peak: with one element through the depth it reads
+zero for a beam that is at yield. Under-reading a stress is how a part gets
+signed off and then breaks.
+
+Everything is checked against beam theory in the tests: a cantilever's tip
+deflection against PL cubed over 3EI and its bending stress against Mc over I,
+both to within a few percent at every resolution, and a bar in tension against
+PL over AE.
+
+What it will not tell you: a printed part is weaker across the layers than along
+them, sometimes by half, and no solver that treats the material as the same in
+every direction can know that. Stress will also run high right at a face that is
+fully held, which is real and is what a perfectly rigid clamp does; look away
+from the fixture.
+
+And one run at one resolution is not a number to design to. Two runs at
+different resolutions are: when the answer stops moving, that is the answer. The
+panel reports the resolution it used so that comparison can actually be made.
+
 ## Pictures and taking things apart
 
 **Render** makes a still of the model that is better than the screen can draw in
@@ -1417,7 +1471,7 @@ model file can never execute anything.
 npm test
 ```
 
-489 tests in a hidden window, checking measured quantities: volumes against
+507 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1451,7 +1505,9 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-render.js` renders a plate, checks the picture is the size asked for and
+drilled plate. `demo-stress.js` builds a bar, holds one end, pushes the other, and compares
+the deflection and the stress against the beam formulae, then runs it again
+finer to show the answer has settled. `demo-render.js` renders a plate, checks the picture is the size asked for and
 holds a model rather than an empty frame, that a transparent background really
 is clear, that the helpers went away and came back, and that the same settings
 give the same picture twice. `demo-animate.js` explodes three components and

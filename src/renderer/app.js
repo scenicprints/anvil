@@ -46,6 +46,7 @@ import * as FM from './form.js';
 import { decalMesh } from './decal.js';
 import * as CF from './configure.js';
 import * as AN from './animation.js';
+import * as FE from './fea.js';
 import { meshHealth, sectionCurves } from './meshtools.js';
 import {
   newComponent,
@@ -1740,6 +1741,12 @@ async function runCommand(cmd) {
       break;
     case 'animate':
       cmdAnimate();
+      break;
+    case 'simulate':
+      cmdSimulate();
+      break;
+    case 'clearStress':
+      clearStress();
       break;
     case 'meshReduce':
       cmdMeshReduce();
@@ -6707,6 +6714,14 @@ function applyAnalyses(records, res) {
     delete rec.vertexColours;
     delete rec.chrome;
   }
+  // A stress result is a colour per vertex, the same as every other analysis,
+  // so it goes on and comes off the same way.
+  if (state.stress?.colours) {
+    for (const rec of records) {
+      const held = state.stress.colours.get(rec.id);
+      if (held && held.length === rec.mesh.vertProperties.length) rec.vertexColours = held;
+    }
+  }
   if (!state.section && !state.draft && !state.faceAnalysis) return;
 
   const scope = new K.Scope();
@@ -6966,6 +6981,400 @@ function startInterference() {
     () => {}
   );
   setStatus(`${hits.length} overlap${hits.length === 1 ? '' : 's'} found.`);
+}
+
+/**
+ * What happens to a part when it is pushed.
+ *
+ * A real finite element solve, not a rule of thumb. What it needs from the
+ * person is the three things it cannot know: which faces are held, which faces
+ * are pushed and how hard, and how fine to cut the part up.
+ *
+ * The last one is the one to understand. Everything here is worked out on a
+ * grid of little cubes, and a single run at one grid is not a number to design
+ * to. Two runs at different resolutions are: when the answer stops moving, it
+ * is the answer. The panel says what resolution it used so that comparison can
+ * actually be made.
+ */
+function cmdSimulate() {
+  if (state.sketcher.active) finishSketch();
+  const solids = (state.result?.bodies || []).filter((b) => b.solid);
+  if (!solids.length) {
+    setStatus('Stress analysis needs a solid body.');
+    return;
+  }
+
+  const picked = pickedFaceList();
+  const kept = state.stressSetup || {
+    held: null,
+    pushed: null,
+    force: '100',
+    direction: 'z-',
+    through: '4'
+  };
+  // Whatever is selected now is taken as the answer to whichever question has
+  // not been answered yet, which is how this gets used: pick, run, pick, run.
+  const setup = { ...kept };
+  if (picked.length && !setup.held) setup.held = picked.map((f) => f.ref);
+  else if (picked.length && !setup.pushed) setup.pushed = picked.map((f) => f.ref);
+
+  showInspector(
+    'Stress Analysis',
+    [
+      {
+        key: '__held',
+        label: 'Held',
+        type: 'action',
+        run: () => {
+          const now = pickedFaceList();
+          if (!now.length) {
+            setStatus('Select the faces that are bolted down, then press Held.');
+            return;
+          }
+          setup.held = now.map((f) => f.ref);
+          state.stressSetup = { ...setup };
+          setStatus(`${now.length} face${now.length === 1 ? '' : 's'} held.`);
+        }
+      },
+      {
+        key: '__pushed',
+        label: 'Pushed',
+        type: 'action',
+        run: () => {
+          const now = pickedFaceList();
+          if (!now.length) {
+            setStatus('Select the faces the load is on, then press Pushed.');
+            return;
+          }
+          setup.pushed = now.map((f) => f.ref);
+          state.stressSetup = { ...setup };
+          setStatus(`${now.length} face${now.length === 1 ? '' : 's'} pushed.`);
+        }
+      },
+      { key: 'force', label: 'How hard, in newtons', type: 'expr', value: setup.force },
+      {
+        key: 'direction',
+        label: 'Which way',
+        type: 'select',
+        value: setup.direction,
+        options: [
+          ['z-', 'Down'],
+          ['z+', 'Up'],
+          ['x+', 'Along X'],
+          ['x-', 'Back along X'],
+          ['y+', 'Along Y'],
+          ['y-', 'Back along Y'],
+          ['into', 'Into the face']
+        ]
+      },
+      {
+        key: 'through',
+        label: 'Cubes through the thinnest part',
+        type: 'select',
+        value: setup.through,
+        options: [
+          ['2', '2, quick and rough'],
+          ['3', '3'],
+          ['4', '4, a fair answer'],
+          ['6', '6'],
+          ['8', '8, slow']
+        ]
+      },
+      {
+        key: '__state',
+        label: '',
+        type: 'note',
+        text: `${setup.held ? `${setup.held.length} held` : 'nothing held yet'}, ${
+          setup.pushed ? `${setup.pushed.length} pushed` : 'nothing pushed yet'
+        }.`
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'One run at one resolution is not a number to design to. Run it twice at different resolutions: when the answer stops moving, that is the answer.'
+      }
+    ],
+    async (v) => {
+      state.stressSetup = { ...setup, ...v };
+      await runStress({ ...setup, ...v });
+    }
+  );
+}
+
+/** Every face currently picked, with a reference that survives a rebuild. */
+function pickedFaceList() {
+  const out = [];
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const face = record?.topology?.faces[index];
+    if (!face) continue;
+    out.push({ bodyId, face, ref: { body: bodyId, face: faceReference(face, record.topology) } });
+  }
+  return out;
+}
+
+/**
+ * Cut the part up, solve it, and colour it by what came out.
+ *
+ * The faces are turned into held and pushed nodes by their own planes rather
+ * than by picking nodes: what somebody means by "hold this face" is every node
+ * on it, and a face of the grid is a slab one element thick.
+ */
+async function runStress(setup) {
+  const body = (state.result?.bodies || []).find(
+    (b) => b.solid && (!setup.held?.length || b.id === setup.held[0].body)
+  );
+  if (!body) {
+    setStatus('That body is not here any more.');
+    return;
+  }
+  if (!setup.held?.length) {
+    setStatus('Nothing is holding it. Select the faces that are bolted down and press Held.');
+    return;
+  }
+  if (!setup.pushed?.length) {
+    setStatus('Nothing is pushing it. Select the faces the load is on and press Pushed.');
+    return;
+  }
+
+  const record = (state.records || []).find((r) => r.id === body.id);
+  if (!record?.topology) {
+    setStatus('That body could not be read.');
+    return;
+  }
+  const scope = resolveParameters(state.doc.parameters);
+  const through = Math.round(safeEval(setup.through, scope, 4));
+
+  setStatus(`Cutting it into cubes, ${through} through the thinnest part...`);
+  await new Promise((r) => setTimeout(r, 0));
+
+  const mesh = record.mesh;
+  // Sized by the thin direction rather than the long one. Stiffness in bending
+  // goes as the thickness cubed, so a section that comes out a quarter too fat
+  // because the cells did not divide it is two and a half times too stiff, and
+  // nothing else in the answer looks wrong.
+  const grid = FE.voxelise(mesh, { through });
+  if (!grid) {
+    setStatus('That body could not be cut into cubes. It may not be closed.');
+    return;
+  }
+  const nodes = FE.nodesOf(grid);
+  const quality = FE.gridQuality(grid);
+
+  const mats = state.doc.materials || {};
+  const material = FE.stiffnessOf(mats.byBody?.[body.id] || mats.default || 'pla');
+  const Ke = FE.hexStiffness(material.modulus, material.poisson, grid.size);
+
+  const facesOf = (refs) => {
+    const out = [];
+    for (const r of refs) {
+      const [face] = resolveFaceRefs(record.topology, [r.face]);
+      if (face) out.push(face);
+    }
+    return out;
+  };
+  const nodesOnFaces = (faces) => {
+    const seen = new Set();
+    for (const face of faces) {
+      for (const n of FE.nodesNear(
+        nodes,
+        { origin: face.centre, normal: face.normal },
+        grid.size * 0.6
+      )) {
+        // Only the part of that plane the face actually covers, or holding one
+        // end of a part would hold everything else that happens to be level
+        // with it.
+        if (withinFace(nodes, n, face, grid.size)) seen.add(n);
+      }
+    }
+    return [...seen];
+  };
+
+  const heldFaces = facesOf(setup.held);
+  const pushedFaces = facesOf(setup.pushed);
+  if (!heldFaces.length || !pushedFaces.length) {
+    setStatus('The faces this was set up on are not on the model any more.');
+    return;
+  }
+  const held = nodesOnFaces(heldFaces);
+  const pushed = nodesOnFaces(pushedFaces);
+  if (!held.length || !pushed.length) {
+    setStatus('The grid is too coarse to land on those faces. Try more cubes.');
+    return;
+  }
+
+  const magnitude = safeEval(setup.force, scope, 100);
+  const dir =
+    setup.direction === 'into'
+      ? pushedFaces[0].normal.map((v) => -v)
+      : {
+          'z-': [0, 0, -1],
+          'z+': [0, 0, 1],
+          'x+': [1, 0, 0],
+          'x-': [-1, 0, 0],
+          'y+': [0, 1, 0],
+          'y-': [0, -1, 0]
+        }[setup.direction] || [0, 0, -1];
+
+  setStatus(`Solving, ${nodes.count * 3} unknowns...`);
+  await new Promise((r) => setTimeout(r, 0));
+
+  const t0 = performance.now();
+  const res = FE.solve(nodes, nodes.elements, Ke, {
+    fixed: FE.dofsOf(held),
+    forces: FE.spreadForce(pushed, dir.map((v) => v * magnitude), nodes.elements)
+  });
+  if (!res.ok) {
+    setStatus(res.reason);
+    return;
+  }
+  const out = FE.stresses(nodes, nodes.elements, res.displacement, material, grid.size);
+  const took = Math.round(performance.now() - t0);
+
+  const trueVolume = body.solid.volume();
+  const fidelity = FE.volumeError(grid, trueVolume);
+
+  state.stress = {
+    bodyId: body.id,
+    grid,
+    nodes,
+    result: out,
+    material,
+    through,
+    quality,
+    fidelity,
+    colours: new Map([[body.id, stressColours(mesh, grid, nodes, out)]])
+  };
+  rebuildAll();
+
+  const words = [
+    `${out.maxStress.toFixed(1)} MPa at worst, ${material.yield} to yield, so ${
+      out.factor > 99 ? 'nowhere near it' : `${out.factor.toFixed(1)} times over`
+    }.`,
+    `It moves ${out.maxMove.toFixed(3)} mm.`,
+    `${grid.filled} cubes, ${quality.across} through the thinnest part, ${res.iterations} passes, ${took} ms.`
+  ];
+  if (!quality.enough) {
+    words.push('The grid is coarser than the part is thick, so this is about a different part. Use more cubes.');
+  }
+  if (!fidelity.ok) {
+    // The one that catches what nothing else does: cubes that do not divide a
+    // section leave it fatter or thinner than it is, and stiffness goes as the
+    // cube of that.
+    words.push(
+      `The cubes come to ${fidelity.percent > 0 ? '' : 'minus '}${Math.abs(fidelity.percent).toFixed(0)} in a hundred ${
+        fidelity.percent > 0 ? 'more' : 'less'
+      } material than the part has, so it is being solved a little ${
+        fidelity.percent > 0 ? 'fatter' : 'thinner'
+      } than it is.`
+    );
+  }
+  if (grid.capped) {
+    words.push('That resolution was more cubes than is sensible, so it was made coarser.');
+  }
+  if (!res.converged) {
+    words.push('The solve did not settle. Treat the numbers as a hint.');
+  }
+  setStatus(words.join(' '));
+}
+
+/**
+ * Is this node actually on that face, or merely level with it?
+ *
+ * A plane through one end of a part passes through everything else at the same
+ * height, and holding all of that is not what "hold this face" means.
+ */
+function withinFace(nodes, node, face, size) {
+  const p = [nodes.xyz[node * 3], nodes.xyz[node * 3 + 1], nodes.xyz[node * 3 + 2]];
+  let best = Infinity;
+  const step = Math.max(1, Math.floor(face.tris.length / 64));
+  for (let i = 0; i < face.tris.length; i += step) {
+    const c = face.centre;
+    const d = Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]);
+    if (d < best) best = d;
+    break;
+  }
+  // The face's own reach, plus a cube, which is as near as a grid can get.
+  return best <= faceReach(face) + size;
+}
+
+/** How far a face extends from its own middle. */
+function faceReach(face) {
+  if (face._reach !== undefined) return face._reach;
+  // From the area, which is already known, rather than from the triangles.
+  face._reach = Math.sqrt(Math.max(face.area, 0)) * 0.75;
+  return face._reach;
+}
+
+/**
+ * A colour per vertex of the drawn mesh, from the stress in the cube it is in.
+ *
+ * Nearest cube rather than interpolated. The result is a step per cube, which
+ * is honest: that is the resolution the answer was worked out at, and a smooth
+ * picture would suggest a precision the grid does not have.
+ */
+function stressColours(mesh, grid, nodes, out) {
+  const vp = mesh.vertProperties;
+  const stride = mesh.numProp;
+  const count = vp.length / stride;
+  const colours = new Float32Array(count * 3);
+  const peak = Math.max(1e-9, out.maxStress);
+
+  // Which element is in each cell, so a vertex can find its stress by position.
+  const cell = new Int32Array(grid.n[0] * grid.n[1] * grid.n[2]).fill(-1);
+  let e = 0;
+  for (let k = 0; k < grid.n[2]; k++) {
+    for (let j = 0; j < grid.n[1]; j++) {
+      for (let i = 0; i < grid.n[0]; i++) {
+        if (grid.inside[grid.at(i, j, k)]) cell[grid.at(i, j, k)] = e++;
+      }
+    }
+  }
+
+  for (let v = 0; v < count; v++) {
+    const x = vp[v * stride];
+    const y = vp[v * stride + 1];
+    const z = vp[v * stride + 2];
+    const i = Math.max(0, Math.min(grid.n[0] - 1, Math.floor((x - grid.origin[0]) / grid.size)));
+    const j = Math.max(0, Math.min(grid.n[1] - 1, Math.floor((y - grid.origin[1]) / grid.size)));
+    const k = Math.max(0, Math.min(grid.n[2] - 1, Math.floor((z - grid.origin[2]) / grid.size)));
+    const at = cell[grid.at(i, j, k)];
+    const t = at >= 0 ? Math.min(1, out.vonMises[at] / peak) : 0;
+    const [r, g, b] = heat(t);
+    colours[v * 3] = r;
+    colours[v * 3 + 1] = g;
+    colours[v * 3 + 2] = b;
+  }
+  return colours;
+}
+
+/**
+ * Cool to hot, for a number already scaled from nought to one.
+ *
+ * Blue through green to red, because that is the ramp every stress plot in
+ * every package uses and reading one should not need a legend to be learned.
+ */
+function heat(t) {
+  const x = Math.max(0, Math.min(1, t));
+  if (x < 0.5) {
+    const u = x * 2;
+    return [0.16 + 0.2 * u, 0.4 + 0.4 * u, 0.75 - 0.35 * u];
+  }
+  const u = (x - 0.5) * 2;
+  return [0.36 + 0.6 * u, 0.8 - 0.65 * u, 0.4 - 0.35 * u];
+}
+
+/** Put the ordinary colour back. */
+function clearStress() {
+  if (!state.stress) {
+    setStatus('No stress result to clear.');
+    return;
+  }
+  state.stress = null;
+  rebuildAll();
+  setStatus('Stress colours cleared.');
 }
 
 /**
