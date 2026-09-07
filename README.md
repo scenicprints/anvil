@@ -708,6 +708,50 @@ change of shape rather than a repair. A cage with nothing wrong with it comes
 back untouched and says so, rather than being quietly rebuilt: a rebuild
 renumbers the points and takes every crease and selection with it.
 
+## One document, several parts
+
+**Configurations** is a table: a column per thing that varies, a row per
+variant, and the model built from whichever row is current. A bracket that comes
+in three lengths is one design, not three; drawing it three times means three
+sets of everything to keep in step, and they will not stay in step.
+
+A column can drive a parameter, whether a feature is suppressed, whether a body
+is shown, a body's colour or material, the sheet metal rule in force, or a joint
+position. Each of those names the one place the value already lives rather than
+inventing a second one.
+
+Two rules matter more than the rest. A blank cell means "as drawn", not zero:
+a row can be silent about a column and leave that alone. And the document is
+never written to, so switching back to the first row gives the first part again;
+a table that edited the parameters in place could not go back. Suppression works
+both ways, because a variant needs to be able to be the one that *has* the hole
+as well as the one that has not.
+
+It is shown as a real table, because the whole value of one is seeing the
+variants side by side. A stack of dialogs would hide exactly the thing worth
+looking at.
+
+**Document Properties** hold a name, a part number, a description and a
+revision. Not decoration: they are what a drawing, a purchase order and a shelf
+all agree on, and a model without them is one somebody has to name again every
+time it leaves.
+
+**Named Versions** keep the whole document under a name so it can be put back.
+Not a substitute for a version control system and not pretending to be one. What
+it is for is the hour in which a part is being tried three ways: keep the one
+that worked before starting the next. Each one holds the whole document, which
+is honest about the cost, and the size is said out loud. Going back to an early
+one does not throw away what was kept since.
+
+**Notes** pin a remark to a face or an edge. A note about a face is useless once
+you cannot tell which face; pinned, it points at what it is about and it moves
+when the model does, because what is stored is a reference to the geometry and
+not a position in space. When the geometry has gone the note stays where it was
+and says so, because a note that disappears because a fillet was added is worse
+than one in roughly the right place with a mark against it. Notes are not
+geometry and are not in the timeline: rolling back past a remark would be a
+strange thing for it to do.
+
 ## Inserting
 
 **Insert Component** takes the bodies out of another Anvil document and puts
@@ -1344,7 +1388,7 @@ model file can never execute anything.
 npm test
 ```
 
-469 tests in a hidden window, checking measured quantities: volumes against
+480 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1378,7 +1422,10 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-batch20b.js` inserts a part from another document's bodies, lays a canvas
+drilled plate. `demo-configure.js` builds a configuration table, switches between two variants
+and measures the volume each time, sets the document properties, keeps a named
+version and puts it back after changing the model, and pins a note to a face and
+turns the view to check it followed. `demo-batch20b.js` inserts a part from another document's bodies, lays a canvas
 on a plane and a decal on a face, and measures the decal on the part against the
 size it was asked for. `demo-batch20a.js` folds a hem on a sheet metal plate, takes a flat pattern,
 fakes a DXF export and checks the tree notices when the model moves past it, and

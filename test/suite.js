@@ -88,6 +88,7 @@ import * as SEL from '../src/renderer/select.js';
 import * as PL from '../src/renderer/plastic.js';
 import * as AS from '../src/renderer/assembly.js';
 import { decalMesh } from '../src/renderer/decal.js';
+import * as CF from '../src/renderer/configure.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
@@ -7270,6 +7271,175 @@ async function run() {
     const size = meshSize(mesh);
     near(size[0], 5, 0.01, 'pushed along the frame, which here is world x');
     out.dispose();
+  });
+
+  /* -------- configurations -------- */
+
+  /** A table with one parameter column and two rows that differ in it. */
+  function lengthTable() {
+    return {
+      active: 'r1',
+      columns: [{ id: 'c1', kind: 'parameter', ref: 'length', label: 'Length' }],
+      rows: [
+        { id: 'r1', name: 'Short', values: { c1: '30' } },
+        { id: 'r2', name: 'Long', values: { c1: '90' } }
+      ]
+    };
+  }
+
+  test('configurations: a row rewrites the parameters it names and no others', () => {
+    const params = [
+      { name: 'length', expr: '50' },
+      { name: 'width', expr: '20' }
+    ];
+    const table = lengthTable();
+    const out = CF.parametersFor(params, table, CF.activeRow(table));
+    assert(out.find((p) => p.name === 'length').expr === '30', 'the one it names is rewritten');
+    assert(out.find((p) => p.name === 'width').expr === '20', 'and the one it does not is left');
+    // The document itself must be untouched, or switching back gives the wrong
+    // part.
+    assert(params[0].expr === '50', 'the document still holds what it was drawn with');
+  });
+
+  test('configurations: with nothing in force the model is as it was drawn', () => {
+    const params = [{ name: 'length', expr: '50' }];
+    const table = { ...lengthTable(), active: null };
+    assert(CF.activeRow(table) === null, 'no row is in force');
+    const out = CF.parametersFor(params, table, null);
+    assert(out[0].expr === '50', 'so nothing is rewritten');
+  });
+
+  test('configurations: a column a row says nothing about is left as drawn', () => {
+    const table = lengthTable();
+    table.rows[1].values = {};
+    const out = CF.parametersFor([{ name: 'length', expr: '50' }], table, table.rows[1]);
+    assert(out[0].expr === '50', 'a blank cell means as drawn, not zero');
+  });
+
+  test('configurations: yes and no are read the way people write them', () => {
+    for (const yes of [true, 'yes', 'Yes', 'y', '1', 'true', 'ON']) {
+      assert(CF.isYes(yes), `${JSON.stringify(yes)} is yes`);
+    }
+    for (const no of [false, '', 'no', 'n', '0', 'false', undefined, null]) {
+      assert(!CF.isYes(no), `${JSON.stringify(no)} is not yes`);
+    }
+  });
+
+  test('configurations: a row can turn a feature off and another can turn it back on', () => {
+    const table = {
+      active: 'r1',
+      columns: [{ id: 'c1', kind: 'suppress', ref: 'fhole', label: 'Hole' }],
+      rows: [
+        { id: 'r1', name: 'Plain', values: { c1: 'yes' } },
+        { id: 'r2', name: 'Drilled', values: { c1: 'no' } }
+      ]
+    };
+    const off = CF.suppressedBy(table, table.rows[0]);
+    assert(off.has('fhole'), 'the plain one loses the hole');
+    assert(!CF.unsuppressedBy(table, table.rows[0]).has('fhole'), 'and does not also ask for it');
+
+    const on = CF.unsuppressedBy(table, table.rows[1]);
+    assert(on.has('fhole'), 'the drilled one asks for it back');
+    assert(!CF.suppressedBy(table, table.rows[1]).has('fhole'), 'and does not suppress it');
+  });
+
+  test('configurations: a blank suppress cell leaves the timeline alone', () => {
+    const table = {
+      active: 'r1',
+      columns: [{ id: 'c1', kind: 'suppress', ref: 'fhole' }],
+      rows: [{ id: 'r1', name: 'Silent', values: {} }]
+    };
+    assert(CF.suppressedBy(table, table.rows[0]).size === 0, 'it turns nothing off');
+    assert(CF.unsuppressedBy(table, table.rows[0]).size === 0, 'and turns nothing on');
+  });
+
+  test('configurations: what is different between two rows is listed', () => {
+    const table = lengthTable();
+    table.columns.push({ id: 'c2', kind: 'parameter', ref: 'width' });
+    table.rows[0].values.c2 = '20';
+    table.rows[1].values.c2 = '20';
+    const diff = CF.differences(table, table.rows[0], table.rows[1]);
+    assert(diff.length === 1, `one difference, got ${diff.length}`);
+    assert(diff[0].column.ref === 'length', 'and it is the length');
+    assert(diff[0].from === '30' && diff[0].to === '90', 'from thirty to ninety');
+  });
+
+  test('configurations: a copied row keeps the values and takes a free name', () => {
+    const table = lengthTable();
+    const copy = CF.copyRow(table, table.rows[0]);
+    assert(copy.values.c1 === '30', 'it kept what it copied');
+    assert(copy.id !== table.rows[0].id, 'and it is its own row');
+    assert(!table.rows.some((r) => r.name === copy.name), 'with a name nothing else has');
+  });
+
+  test('configurations: through the timeline, a row really changes the part', () => {
+    const doc = newDocument();
+    doc.parameters = [{ name: 'tall', expr: '10' }];
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: 'tall', centered: false })
+    ];
+    doc.configurations = {
+      active: null,
+      columns: [{ id: 'c1', kind: 'parameter', ref: 'tall' }],
+      rows: [
+        { id: 'r1', name: 'Low', values: { c1: '10' } },
+        { id: 'r2', name: 'High', values: { c1: '40' } }
+      ]
+    };
+
+    const asDrawn = rebuild(doc);
+    near(asDrawn.bodies[0].solid.volume(), 40 * 40 * 10, 1, 'as drawn it is ten tall');
+    asDrawn.dispose();
+
+    doc.configurations.active = 'r2';
+    const high = rebuild(doc);
+    near(high.bodies[0].solid.volume(), 40 * 40 * 40, 1, 'and forty in the other configuration');
+    high.dispose();
+
+    // And back, which is the test that matters: a table that writes over the
+    // document cannot go back.
+    doc.configurations.active = 'r1';
+    const low = rebuild(doc);
+    near(low.bodies[0].solid.volume(), 40 * 40 * 10, 1, 'and back to ten');
+    low.dispose();
+  });
+
+  test('configurations: through the timeline, a row can drop a feature', () => {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '10', centered: true }),
+      { ...prim('cylinder', { diameter: '10', height: '40', centered: true }), id: 'fbore', op: 'cut', targets: 'all' }
+    ];
+    doc.configurations = {
+      active: 'r1',
+      columns: [{ id: 'c1', kind: 'suppress', ref: 'fbore' }],
+      rows: [
+        { id: 'r1', name: 'Plain', values: { c1: 'yes' } },
+        { id: 'r2', name: 'Drilled', values: { c1: 'no' } }
+      ]
+    };
+
+    const plain = rebuild(doc);
+    near(plain.bodies[0].solid.volume(), 40 * 40 * 10, 1, 'no bore in the plain one');
+    plain.dispose();
+
+    doc.configurations.active = 'r2';
+    const drilled = rebuild(doc);
+    const bore = Math.PI * 25 * 10;
+    assert(
+      drilled.bodies[0].solid.volume() < 40 * 40 * 10 - bore * 0.9,
+      'and the drilled one has it'
+    );
+    drilled.dispose();
+  });
+
+  test('configurations: a table says what is in force and what it is silent about', () => {
+    const table = lengthTable();
+    table.columns.push({ id: 'c2', kind: 'parameter', ref: 'width', label: 'Width' });
+    const st = CF.tableState(table);
+    assert(st.rows === 2 && st.columns === 2, 'it counts what is there');
+    assert(st.active.name === 'Short', 'and names the one in force');
+    assert(st.blanks.length === 1 && st.blanks[0] === 'Width', 'and what that row is silent about');
   });
 
   /* -------- decals -------- */

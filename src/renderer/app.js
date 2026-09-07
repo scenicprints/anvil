@@ -44,6 +44,7 @@ import { projectRunOnto, isoCurves } from './sheet.js';
 import * as SM from './sheetmetal.js';
 import * as FM from './form.js';
 import { decalMesh } from './decal.js';
+import * as CF from './configure.js';
 import { meshHealth, sectionCurves } from './meshtools.js';
 import {
   newComponent,
@@ -57,7 +58,12 @@ import { CONSTRUCTION_LABELS } from './construction.js';
 import { resolveParameters, evaluate, safeEval } from './expr.js';
 import { entityRuns, interiorPoint, pointInPolygon, tessellate, chainPath } from './profile.js';
 import { buildTopology, basisFor } from './topology.js';
-import { edgeReference, faceReference, resolveFaceRefs } from './edgefeature.js';
+import {
+  edgeReference,
+  faceReference,
+  resolveFaceRefs,
+  resolveEdgeRefs
+} from './edgefeature.js';
 import { TEXT_FONTS } from './textoutline.js';
 import { parseSVG, parseDXF } from './vectorimport.js';
 import {
@@ -162,6 +168,7 @@ async function boot() {
 
   state.vp.onRendered = () => {
     if (state.sketcher.active) state.sketcher.updateOverlay();
+    placeNotes();
   };
   state.vp.onPointerDown = (e) => handleViewportDown(e);
   state.vp.onPointerMove = (e) => {
@@ -1714,6 +1721,18 @@ async function runCommand(cmd) {
     case 'computeAll':
       cmdComputeAll();
       break;
+    case 'configurations':
+      cmdConfigurations();
+      break;
+    case 'documentInfo':
+      cmdDocumentInfo();
+      break;
+    case 'namedVersions':
+      cmdNamedVersions();
+      break;
+    case 'addNote':
+      cmdAddNote();
+      break;
     case 'meshReduce':
       cmdMeshReduce();
       break;
@@ -2355,6 +2374,10 @@ function migrate(data) {
   doc.flatExports = doc.flatExports || {};
   doc.canvases = doc.canvases || {};
   doc.decals = doc.decals || {};
+  doc.configurations = doc.configurations || null;
+  doc.versions = doc.versions || [];
+  doc.info = doc.info || {};
+  doc.notes = doc.notes || [];
   doc.constraints = doc.constraints || [];
   doc.forms = doc.forms || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
@@ -2876,6 +2899,18 @@ function renderTree() {
           state.dirty = true;
           rebuildAll();
         }
+      });
+    }
+  }
+
+  const notes = state.doc.notes || [];
+  if (notes.length) {
+    const left = notes.filter((n) => !n.done).length;
+    addNode(left ? `Notes (${left} to deal with)` : 'Notes', { head: true });
+    for (const n of notes) {
+      addNode(`${n.done ? '✓ ' : ''}${n.text}`, {
+        child: true,
+        onClick: () => editNote(n.id)
       });
     }
   }
@@ -6922,6 +6957,535 @@ function startInterference() {
     () => {}
   );
   setStatus(`${hits.length} overlap${hits.length === 1 ? '' : 's'} found.`);
+}
+
+/**
+ * A note pinned to a place on the model.
+ *
+ * The reason to have these rather than a text file beside the part is that a
+ * note about a face is useless once you cannot tell which face. Pinned, it
+ * points at the thing it is about, and it moves when the model does because
+ * what is stored is a reference to the face and not a position in space.
+ *
+ * Notes are not geometry and do not go in the timeline. Rolling back past one
+ * would be a strange thing for a remark to do.
+ */
+function cmdAddNote() {
+  if (state.sketcher.active) finishSketch();
+  const anchor = noteAnchorFromSelection();
+  if (!anchor) {
+    setStatus('Select the face or edge the note is about first.');
+    return;
+  }
+
+  showInspector(
+    'Note',
+    [
+      { key: 'text', label: 'Note', type: 'text', value: '' },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Pinned to what is selected, so it points at the thing it is about and moves when the model does.'
+      }
+    ],
+    (v) => {
+      const text = String(v.text || '').trim();
+      if (!text) {
+        setStatus('A note with nothing in it is not a note.');
+        return;
+      }
+      pushUndo('note');
+      state.doc.notes = state.doc.notes || [];
+      state.doc.notes.push({ id: uid('note'), text, ...anchor, done: false });
+      state.dirty = true;
+      renderTree();
+      rebuildAll();
+      setStatus('Note pinned.');
+    }
+  );
+}
+
+/** Where a note goes, as a reference that survives a rebuild plus a fallback. */
+function noteAnchorFromSelection() {
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const face = record?.topology?.faces[index];
+    if (!face) continue;
+    return { face: faceReference(face, record.topology), at: face.centre.slice() };
+  }
+  for (const key of state.selection.edges) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const edge = record?.topology?.edges[index];
+    if (!edge?.points?.length) continue;
+    const mid = edge.points[Math.floor(edge.points.length / 2)];
+    return { edge: edgeReference(edge, record.topology), at: mid.slice() };
+  }
+  return null;
+}
+
+/**
+ * Where every note currently is, in the world.
+ *
+ * Looked up again each rebuild rather than stored, so a note follows the face
+ * it is about. When the face has gone the note stays where it was put and says
+ * so, because a note that vanishes because a fillet was added is worse than one
+ * sitting in roughly the right place.
+ */
+function noteAnchors() {
+  const out = [];
+  for (const note of state.doc.notes || []) {
+    let at = note.at;
+    let lost = true;
+    for (const record of state.records || []) {
+      if (!record.topology) continue;
+      if (note.face) {
+        const [face] = resolveFaceRefs(record.topology, [note.face]);
+        if (face) {
+          at = face.centre;
+          lost = false;
+          break;
+        }
+      } else if (note.edge) {
+        const [edge] = resolveEdgeRefs(record.topology, [note.edge]);
+        if (edge?.points?.length) {
+          at = edge.points[Math.floor(edge.points.length / 2)];
+          lost = false;
+          break;
+        }
+      }
+    }
+    if (at) out.push({ note, at, lost });
+  }
+  return out;
+}
+
+/**
+ * Draw the notes over the canvas, once the camera for this frame is settled.
+ *
+ * In HTML rather than in the scene, because text in a 3D scene either faces the
+ * wrong way or has to be rebuilt every time the view moves, and neither is
+ * worth it for a remark.
+ */
+function placeNotes() {
+  const wrap = document.getElementById('viewwrap');
+  if (!wrap) return;
+  const anchors = noteAnchors();
+  if (!state.noteEls) state.noteEls = new Map();
+
+  const seen = new Set();
+  for (const { note, at, lost } of anchors) {
+    seen.add(note.id);
+    let el = state.noteEls.get(note.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'note-pin';
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editNote(note.id);
+      });
+      wrap.appendChild(el);
+      state.noteEls.set(note.id, el);
+    }
+    el.textContent = note.text;
+    el.title = lost ? 'The geometry this was about has gone' : note.text;
+    el.classList.toggle('lost', lost);
+    el.classList.toggle('done', !!note.done);
+
+    const s = state.vp.worldToScreen(at[0], at[1], at[2]);
+    if (!s || s.behind) {
+      el.style.display = 'none';
+      continue;
+    }
+    const r = wrap.getBoundingClientRect();
+    el.style.display = '';
+    el.style.left = `${s.clientX - r.left}px`;
+    el.style.top = `${s.clientY - r.top}px`;
+  }
+
+  for (const [id, el] of state.noteEls) {
+    if (seen.has(id)) continue;
+    el.remove();
+    state.noteEls.delete(id);
+  }
+}
+
+/** Read a note, change it, mark it dealt with, or throw it away. */
+function editNote(id) {
+  const note = (state.doc.notes || []).find((n) => n.id === id);
+  if (!note) return;
+  showInspector(
+    'Note',
+    [
+      { key: 'text', label: 'Note', type: 'text', value: note.text },
+      { key: 'done', label: 'Dealt with', type: 'bool', value: !!note.done },
+      { key: 'remove', label: 'Throw it away', type: 'bool', value: false }
+    ],
+    (v) => {
+      pushUndo('note');
+      if (v.remove) {
+        state.doc.notes = state.doc.notes.filter((n) => n.id !== id);
+        setStatus('Note removed.');
+      } else {
+        note.text = String(v.text || '').trim() || note.text;
+        note.done = !!v.done;
+        setStatus(note.done ? 'Note marked as dealt with.' : 'Note saved.');
+      }
+      state.dirty = true;
+      renderTree();
+      state.vp.invalidate();
+    }
+  );
+}
+
+/**
+ * The table that turns one document into several parts.
+ *
+ * A bracket that comes in three lengths is one design, not three. Drawing it
+ * three times means three sets of everything to keep in step, and they will not
+ * stay in step.
+ *
+ * Shown as a real table because that is what it is, and because the whole value
+ * of one is seeing the variants side by side. A stack of dialogs would hide
+ * exactly the thing worth looking at.
+ */
+function cmdConfigurations() {
+  if (state.sketcher.active) finishSketch();
+  state.doc.configurations = state.doc.configurations || CF.newTable();
+  drawConfigTable();
+}
+
+function drawConfigTable() {
+  const table = state.doc.configurations;
+  const modal = $('#modal');
+  $('#modalTitle').textContent = 'Configurations';
+  const body = $('#modalBody');
+  body.innerHTML = '';
+  body.className = 'wide';
+
+  const note = document.createElement('div');
+  note.className = 'hint';
+  const st = CF.tableState(table);
+  note.textContent = st.active
+    ? `${st.active.name} is in force.${
+        st.blanks.length ? ` It says nothing about ${st.blanks.join(', ')}, so those are left as drawn.` : ''
+      }`
+    : 'Nothing is in force, so the model is as it was drawn. Click a row name to make it current.';
+  body.appendChild(note);
+
+  const grid = document.createElement('table');
+  grid.className = 'cfgtable';
+
+  const head = document.createElement('tr');
+  head.appendChild(cell('th', 'Configuration'));
+  for (const col of table.columns) {
+    const th = cell('th', CF.columnLabel(col));
+    const drop = document.createElement('button');
+    drop.textContent = '✕';
+    drop.title = 'Remove this column';
+    drop.addEventListener('click', () => {
+      pushUndo('configuration column');
+      table.columns = table.columns.filter((c) => c.id !== col.id);
+      state.dirty = true;
+      drawConfigTable();
+      rebuildAll();
+    });
+    th.appendChild(drop);
+    head.appendChild(th);
+  }
+  head.appendChild(cell('th', ''));
+  grid.appendChild(head);
+
+  for (const row of table.rows) {
+    const tr = document.createElement('tr');
+    if (row.id === table.active) tr.className = 'on';
+
+    const name = cell('td', '');
+    const pick = document.createElement('button');
+    pick.textContent = row.name;
+    pick.title = 'Make this one current';
+    pick.addEventListener('click', () => {
+      pushUndo('configuration');
+      table.active = table.active === row.id ? null : row.id;
+      state.dirty = true;
+      drawConfigTable();
+      rebuildAll();
+      setStatus(table.active ? `${row.name} is in force.` : 'Back to the model as drawn.');
+    });
+    name.appendChild(pick);
+    tr.appendChild(name);
+
+    for (const col of table.columns) {
+      const td = cell('td', '');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = row.values?.[col.id] ?? '';
+      input.placeholder = col.kind === 'suppress' || col.kind === 'visible' ? 'yes / no' : 'as drawn';
+      input.addEventListener('change', () => {
+        pushUndo('configuration value');
+        row.values = row.values || {};
+        row.values[col.id] = input.value;
+        state.dirty = true;
+        if (table.active === row.id) rebuildAll();
+      });
+      td.appendChild(input);
+      tr.appendChild(td);
+    }
+
+    const tools = cell('td', '');
+    const copy = document.createElement('button');
+    copy.textContent = 'Copy';
+    copy.addEventListener('click', () => {
+      pushUndo('configuration row');
+      table.rows.push(CF.copyRow(table, row));
+      state.dirty = true;
+      drawConfigTable();
+    });
+    tools.appendChild(copy);
+    const drop = document.createElement('button');
+    drop.textContent = '✕';
+    drop.addEventListener('click', () => {
+      pushUndo('configuration row');
+      table.rows = table.rows.filter((r) => r.id !== row.id);
+      if (table.active === row.id) table.active = null;
+      state.dirty = true;
+      drawConfigTable();
+      rebuildAll();
+    });
+    tools.appendChild(drop);
+    tr.appendChild(tools);
+    grid.appendChild(tr);
+  }
+  body.appendChild(grid);
+
+  const buttons = document.createElement('div');
+  buttons.className = 'cfgbuttons';
+  const addRow = document.createElement('button');
+  addRow.textContent = 'Add a configuration';
+  addRow.addEventListener('click', () => {
+    pushUndo('configuration row');
+    table.rows.push(CF.copyRow(table, table.rows[table.rows.length - 1], `Configuration ${table.rows.length + 1}`));
+    state.dirty = true;
+    drawConfigTable();
+  });
+  buttons.appendChild(addRow);
+
+  const addCol = document.createElement('button');
+  addCol.textContent = 'Add a column';
+  addCol.addEventListener('click', () => addConfigColumn());
+  buttons.appendChild(addCol);
+  body.appendChild(buttons);
+
+  modal.classList.remove('hidden');
+  $('#modalOk').onclick = () => {
+    modal.classList.add('hidden');
+    body.className = '';
+    $('#modalOk').onclick = null;
+  };
+}
+
+function cell(tag, text) {
+  const c = document.createElement(tag);
+  if (text) c.textContent = text;
+  return c;
+}
+
+/** Ask what a new column drives, then what in particular. */
+function addConfigColumn() {
+  const table = state.doc.configurations;
+  const kinds = Object.entries(CF.COLUMN_KINDS).map(([k, v]) => [k, v.label]);
+  promptChoice('What does this column change?', kinds, (kind) => {
+    if (!kind) return;
+    const targets = configTargets(kind);
+    const add = (ref, label) => {
+      pushUndo('configuration column');
+      table.columns.push({
+        id: `col${Math.random().toString(36).slice(2, 9)}`,
+        kind,
+        ref: ref ?? '',
+        label
+      });
+      state.dirty = true;
+      drawConfigTable();
+    };
+    if (!targets) return add('', CF.COLUMN_KINDS[kind].label);
+    if (!targets.length) {
+      setStatus(`There is nothing in this document to point a ${CF.COLUMN_KINDS[kind].label} column at.`);
+      return;
+    }
+    promptChoice(`Which ${CF.COLUMN_KINDS[kind].needs}?`, targets, (ref) => {
+      if (ref === null || ref === undefined) return;
+      const found = targets.find(([v]) => v === ref);
+      add(ref, `${CF.COLUMN_KINDS[kind].label}: ${found ? found[1] : ref}`);
+    });
+  });
+}
+
+/** What a column of each kind can point at, or null when it points at nothing. */
+function configTargets(kind) {
+  if (kind === 'rule') return null;
+  if (kind === 'parameter') {
+    return (state.doc.parameters || []).map((p) => [p.name, `${p.name} = ${p.expr}`]);
+  }
+  if (kind === 'suppress') {
+    return (state.doc.features || [])
+      .filter((f) => f.type !== 'sketch')
+      .map((f) => [f.id, featureLabel(state.doc, f)]);
+  }
+  if (kind === 'joint') {
+    return (state.doc.joints || []).map((j) => [j.id, j.name || j.id]);
+  }
+  return (state.result?.bodies || []).map((b) => [b.id, b.name]);
+}
+
+/**
+ * What this document is, as opposed to what shape it is.
+ *
+ * A part number and a description are not decoration. They are what a drawing,
+ * a purchase order and a shelf all agree on, and a model without them is a
+ * model somebody has to name again every time it leaves.
+ */
+function cmdDocumentInfo() {
+  const info = state.doc.info || {};
+  showInspector(
+    'Document Properties',
+    [
+      { key: 'name', label: 'Name', type: 'text', value: info.name || state.doc.name || '' },
+      { key: 'partNumber', label: 'Part number', type: 'text', value: info.partNumber || '' },
+      { key: 'description', label: 'Description', type: 'text', value: info.description || '' },
+      { key: 'revision', label: 'Revision', type: 'text', value: info.revision || '' },
+      { key: 'material', label: 'Material note', type: 'text', value: info.material || '' },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'These travel with the document and go into a 3MF when one is written, so what comes out the other end knows what it is.'
+      }
+    ],
+    (v) => {
+      pushUndo('document properties');
+      state.doc.info = { ...info, ...v };
+      if (v.name) state.doc.name = v.name;
+      state.dirty = true;
+      renderTree();
+      setStatus(v.partNumber ? `${v.partNumber}: ${v.name || 'unnamed'}.` : 'Properties saved.');
+    }
+  );
+}
+
+/**
+ * Named states of the document, kept inside it.
+ *
+ * Not a substitute for a version control system and not pretending to be one.
+ * What it is for is the hour in which a part is being tried three ways: keep
+ * the one that worked before starting the next, and go back to it without
+ * having to remember what was changed.
+ *
+ * Each one holds the whole document, which is honest about the cost. A model
+ * with a scan in it is a large thing to copy, so the size is said out loud.
+ */
+function cmdNamedVersions() {
+  state.doc.versions = state.doc.versions || [];
+  const list = state.doc.versions;
+  const rows = list.map((v, i) => ({
+    key: `__v${i}`,
+    label: '',
+    type: 'action',
+    run: () => restoreVersion(v.id)
+  }));
+
+  showInspector(
+    'Named Versions',
+    [
+      { key: 'name', label: 'Keep this one as', type: 'text', value: nextVersionName() },
+      ...list.map((v, i) => ({
+        key: `__row${i}`,
+        label: '',
+        type: 'note',
+        text: `${v.name} · ${new Date(v.at).toLocaleString()} · ${sizeWords(v.size)}`
+      })),
+      ...(list.length
+        ? [
+            {
+              key: 'restore',
+              label: 'Go back to',
+              type: 'select',
+              value: '',
+              options: [['', 'Nothing, just keep a new one'], ...list.map((v) => [v.id, v.name])]
+            }
+          ]
+        : []),
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Each one holds the whole document. It is for trying a part three ways in an hour, not for keeping a history.'
+      }
+    ],
+    (v) => {
+      if (v.restore) {
+        restoreVersion(v.restore);
+        return;
+      }
+      const data = JSON.stringify({ ...state.doc, versions: undefined });
+      pushUndo('keep a version');
+      state.doc.versions.push({
+        id: uid('ver'),
+        name: v.name || nextVersionName(),
+        at: Date.now(),
+        size: data.length,
+        data
+      });
+      state.dirty = true;
+      renderTree();
+      setStatus(`Kept as ${v.name || 'a version'}, ${sizeWords(data.length)}.`);
+    }
+  );
+}
+
+function nextVersionName() {
+  const used = new Set((state.doc.versions || []).map((v) => v.name));
+  let n = 1;
+  while (used.has(`Version ${n}`)) n++;
+  return `Version ${n}`;
+}
+
+function sizeWords(bytes) {
+  if (!bytes) return 'no size';
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Put a kept version back, keeping the list of versions itself. */
+function restoreVersion(id) {
+  const held = (state.doc.versions || []).find((v) => v.id === id);
+  if (!held) {
+    setStatus('That version is not in this document any more.');
+    return;
+  }
+  let doc;
+  try {
+    doc = migrate(JSON.parse(held.data));
+  } catch (err) {
+    setStatus(`That version could not be read: ${err.message}`);
+    return;
+  }
+  pushUndo('go back to a version');
+  // The list of versions is not part of what was kept, or going back to an
+  // early one would throw away everything kept since.
+  doc.versions = state.doc.versions;
+  state.doc = doc;
+  state.dirty = true;
+  clearGeometrySelection(false);
+  if (state.cache) {
+    state.cache.dispose();
+    state.cache = null;
+  }
+  rebuildAll();
+  setStatus(`Back to ${held.name}.`);
 }
 
 /**

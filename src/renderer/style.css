@@ -1282,3 +1282,118 @@ table.params .v {
   border-radius: 3px;
   padding: 1px 5px;
 }
+
+
+/* ------------------------------------------------------------------ */
+/* The configuration table                                             */
+/* ------------------------------------------------------------------ */
+
+#modalBody.wide {
+  min-width: 520px;
+  max-width: 80vw;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.cfgtable {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  font-size: 12px;
+}
+
+.cfgtable th,
+.cfgtable td {
+  border: 1px solid var(--rule);
+  padding: 4px 6px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cfgtable th {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+/* The row in force. Marked by its own background rather than by a tick in a
+   column, because which one is current is the first thing to read off a table
+   and it should not have to be hunted for. */
+.cfgtable tr.on td {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.cfgtable input {
+  width: 100px;
+  background: var(--ground);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  padding: 2px 4px;
+  font: inherit;
+}
+
+.cfgtable button {
+  background: none;
+  border: none;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  padding: 1px 4px;
+}
+
+.cfgtable button:hover {
+  color: var(--accent);
+}
+
+.cfgbuttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Notes pinned to the model                                           */
+/* ------------------------------------------------------------------ */
+
+/* Offset up and right of the point they are pinned to, so the note sits beside
+   what it is about rather than on top of it. */
+.note-pin {
+  position: absolute;
+  transform: translate(8px, -50%);
+  max-width: 220px;
+  padding: 3px 7px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 3px;
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 1.35;
+  cursor: pointer;
+  pointer-events: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 5;
+}
+
+.note-pin:hover {
+  color: var(--ink);
+  border-color: var(--paper-4);
+  border-left-color: var(--accent);
+}
+
+/* Dealt with: still there, still readable, no longer asking for attention. */
+.note-pin.done {
+  border-left-color: var(--paper-4);
+  color: var(--ink-3);
+  text-decoration: line-through;
+}
+
+/* The geometry it was about has gone. Said rather than hidden: a note that
+   disappears because a fillet was added is worse than one in roughly the right
+   place with a mark against it. */
+.note-pin.lost {
+  border-left-style: dashed;
+  opacity: 0.75;
+}

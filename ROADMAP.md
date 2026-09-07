@@ -8,8 +8,9 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.19.0**. 469 tests. Batches 11 to 20 have shipped. Batch 20b
-and everything after it have not. Each batch below says which.
+Current version: **2.20.0**. 480 tests. Batches 11 to 20b have shipped. What is
+left is Batches 21 and beyond: Render, Animation, Simulation and Generative
+Design, each of which is a project rather than a batch.
 
 ---
 
@@ -1560,12 +1561,25 @@ And the decal really clips the triangles it lands on, in the image's own flat
 frame, rather than keeping or dropping them whole; the clipped corners carry
 barycentric weights so they can be lifted back onto the surface.
 
-**Batch 20b. Configurations and document history.** The local half of section
-6b, and larger than it looks. The Configuration Table with its eleven
-configurable aspects, named restorable versions of a document, part number and
-description, and notes pinned to geometry. Configurations first: it is the one
-that changes how a part is used rather than how it is drawn, and everything it
-needs is already in the document.
+**Batch 20b. Configurations and document history. Shipped in v2.20.0.** The
+configuration table, named versions, document properties, and notes pinned to
+geometry.
+
+Seven kinds of column rather than Fusion's eleven, and the difference is
+deliberate: each kind here names the one place the value already lives, and the
+four not built are ones where Anvil has no second place to point at. Parameter,
+feature suppression, body visibility, colour, material, sheet metal rule, joint
+position.
+
+The two rules that hold the whole thing up. A blank cell means "as drawn", not
+zero, so a row can be silent about a column. And the document is never written
+to when a row is applied: an in-place edit would mean switching back to the
+first row no longer gave the first part. Suppression works both ways, because a
+variant needs to be able to be the one that has the hole as well as the one that
+has not.
+
+Notes are not in the timeline on purpose. Rolling back past a remark would be a
+strange thing for it to do.
 
 **Batches 21 and beyond. The workspaces he ruled in.** Render, Animation,
 Simulation, Generative Design. Each is a project rather than a batch. Cost

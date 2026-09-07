@@ -35,6 +35,7 @@ import { resolveConstruction } from './construction.js';
 import { solveAssembly } from './assembly.js';
 import { solveSketch } from './solver.js';
 import * as PL from './plastic.js';
+import * as CF from './configure.js';
 import { buildTopology, basisFor } from './topology.js';
 import {
   buildEdgeTools,
@@ -675,11 +676,15 @@ function globalRebuildKey(doc, scope) {
   }
   return JSON.stringify({
     params,
+    // Which row is in force is part of what the model is built from, so a
+    // switch has to throw the cache away like any other change.
+    config: doc.configurations?.active || null,
     base: (doc.baseBodies || []).map((b) => [b.id, b.verts?.length, b.tris?.length]),
     names: doc.bodyNames,
     components: doc.components,
     rules: doc.sheetMetalRules,
-    rule: doc.sheetMetalRule
+    rule: doc.sheetMetalRule,
+    ruleOverride: CF.overridesFor(doc.configurations, CF.activeRow(doc.configurations), 'rule').get('') || null
   });
 }
 
@@ -722,7 +727,15 @@ export function rebuild(doc, options = {}) {
   // Provenance ids start again every rebuild, so the map from them to feature
   // ids has to as well.
   K.resetOriginalTags();
-  const { scope, errors: paramErrors } = resolveParameters(doc.parameters || []);
+  // A configuration is applied before anything is worked out, because what it
+  // changes is what everything else is worked out from. The document itself is
+  // never written to: switching back to the first row has to give the first
+  // part again, and it cannot if the first row's values were written over.
+  const config = CF.activeRow(doc.configurations);
+  const effectiveParameters = CF.parametersFor(doc.parameters || [], doc.configurations, config);
+  const turnedOff = CF.suppressedBy(doc.configurations, config);
+  const turnedOn = CF.unsuppressedBy(doc.configurations, config);
+  const { scope, errors: paramErrors } = resolveParameters(effectiveParameters);
   const errors = [];
   const sketchRegions = {};
   const sketchPlanes = {};
@@ -915,7 +928,13 @@ export function rebuild(doc, options = {}) {
 
   for (let i = start; i <= limit && i < doc.features.length; i++) {
     const feature = doc.features[i];
-    if (!feature || feature.suppressed) {
+    // A configuration can turn a feature off, and can turn one back on that was
+    // suppressed by hand. Both are needed: without the second, a variant cannot
+    // be the one that has the hole.
+    const off = feature
+      ? turnedOff.has(feature.id) || (feature.suppressed && !turnedOn.has(feature.id))
+      : true;
+    if (!feature || off) {
       checkpoint(i);
       continue;
     }
@@ -6004,7 +6023,12 @@ export function rebuild(doc, options = {}) {
    */
   function sheetRule(scope, feature) {
     normalizeSheetRules(doc);
-    const wanted = feature?.rule || doc.sheetMetalRule;
+    // A configuration can put a different rule in force, which is what makes
+    // the same part in one gauge and another one document rather than two.
+    // A rule named on the feature itself still wins: that was said about this
+    // fold and not about the part as a whole.
+    const byConfig = CF.overridesFor(doc.configurations, config, 'rule').get('');
+    const wanted = feature?.rule || byConfig || doc.sheetMetalRule;
     const r = { ...SM.DEFAULT_RULE, ...SM.ruleByName(doc.sheetMetalRules, wanted) };
     const num = (v, d) => (v === '' || v === null || v === undefined ? d : safeEval(v, scope, d));
     return {
