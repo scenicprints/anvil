@@ -7269,6 +7269,185 @@ async function run() {
     out.dispose();
   });
 
+  /* -------- building a form from curves -------- */
+
+  /** A square of side `w` in the XY plane, as a closed run with no repeat. */
+  function squareRun(w = 20) {
+    const h = w / 2;
+    return [
+      [-h, -h, 0],
+      [h, -h, 0],
+      [h, h, 0],
+      [-h, h, 0]
+    ];
+  }
+
+  test('form from curves: a grid needs every row the same length', () => {
+    assert(FM.gridCage([[[0, 0, 0], [1, 0, 0]], [[0, 1, 0]]]) === null, 'ragged rows are refused');
+    assert(FM.gridCage([]) === null, 'and nothing is nothing');
+    const ok = FM.gridCage([
+      [[0, 0, 0], [1, 0, 0], [2, 0, 0]],
+      [[0, 1, 0], [1, 1, 0], [2, 1, 0]]
+    ]);
+    assert(ok.points.length === 6 && ok.faces.length === 2, 'two quads from two rows of three');
+  });
+
+  test('form from curves: coarsening keeps the ends and spaces the rest evenly', () => {
+    // A run bunched up at one end. Cut to five points it has to space them by
+    // length, not by how many segments happen to be where.
+    const run = [];
+    for (let i = 0; i <= 10; i++) run.push([i * 0.1, 0, 0]);
+    for (let i = 1; i <= 4; i++) run.push([1 + i * 4, 0, 0]);
+    const out = FM.coarsenRun(run, 5);
+    assert(out.length === 5, `five points, got ${out.length}`);
+    near(out[0][0], 0, 1e-9, 'the first end is kept');
+    near(out[4][0], 17, 1e-6, 'and the last');
+    const gaps = out.slice(1).map((p, i) => p[0] - out[i][0]);
+    near(Math.max(...gaps) - Math.min(...gaps), 0, 1e-6, 'and the spacing is even along the length');
+  });
+
+  test('form from curves: extruding a closed run makes a tube with two open ends', () => {
+    const cage = FM.extrudeRunCage(squareRun(20), [0, 0, 30], { rows: 3, points: 4, closed: true });
+    assert(cage, 'it built');
+    assert(cage.points.length === 16, `four rows of four, got ${cage.points.length}`);
+    assert(cage.faces.length === 12, `twelve quads, got ${cage.faces.length}`);
+    assert(FM.boundaryLoops(cage).length === 2, 'open at both ends');
+    // It really went the distance asked for.
+    const zs = cage.points.map((p) => p[2]);
+    near(Math.max(...zs) - Math.min(...zs), 30, 1e-6, 'thirty tall');
+  });
+
+  test('form from curves: an open run extrudes to a sheet, not a tube', () => {
+    const run = [[-10, 0, 0], [0, 0, 0], [10, 0, 0]];
+    const cage = FM.extrudeRunCage(run, [0, 0, 20], { rows: 2, points: 3, closed: false });
+    assert(cage.faces.length === 4, `two by two quads, got ${cage.faces.length}`);
+    assert(FM.boundaryLoops(cage).length === 1, 'and it is one open sheet');
+  });
+
+  test('form from curves: a full revolve wraps round and joins up', () => {
+    const profile = [[10, 0, 0], [10, 0, 10], [6, 0, 20]];
+    const cage = FM.revolveRunCage(profile, [0, 0, 0], [0, 0, 1], 360, {
+      sides: 8,
+      points: 3
+    });
+    assert(cage, 'it built');
+    assert(cage.points.length === 24, `eight rings of three, got ${cage.points.length}`);
+    // Wrapped: no seam, so the only open edges are the two ends of the profile.
+    assert(FM.boundaryLoops(cage).length === 2, 'open at the ends, closed round');
+    // And every point is where the profile says it should be, at its own radius.
+    const radii = cage.points.map((p) => Math.hypot(p[0], p[1]));
+    near(Math.max(...radii), 10, 1e-6, 'the widest is the widest of the profile');
+    near(Math.min(...radii), 6, 1e-6, 'and the narrowest the narrowest');
+  });
+
+  test('form from curves: a part revolve leaves a seam', () => {
+    const profile = [[10, 0, 0], [10, 0, 10]];
+    const half = FM.revolveRunCage(profile, [0, 0, 0], [0, 0, 1], 180, { sides: 6, points: 2 });
+    assert(half, 'it built');
+    assert(FM.boundaryLoops(half).length === 1, 'half a turn is one open sheet, not a tube');
+  });
+
+  test('form from curves: a sweep carries the shape without rolling it', () => {
+    // A profile carried along a path that climbs. Carried rather than turned
+    // with the path: a profile that rolls as it goes twists the surface.
+    const profile = squareRun(10);
+    const path = [[0, 0, 0], [0, 20, 5], [0, 40, 20]];
+    const cage = FM.sweepRunCage(profile, path, { rows: 3, points: 4, closed: true });
+    assert(cage, 'it built');
+    assert(cage.points.length === 16, `four rings of four, got ${cage.points.length}`);
+    // Every ring is the same shape as the one before, moved.
+    const ring = (k) => cage.points.slice(k * 4, k * 4 + 4);
+    for (let k = 1; k < 4; k++) {
+      const a = ring(0);
+      const b = ring(k);
+      const shift = [b[0][0] - a[0][0], b[0][1] - a[0][1], b[0][2] - a[0][2]];
+      for (let i = 0; i < 4; i++) {
+        for (let d = 0; d < 3; d++) {
+          near(b[i][d] - a[i][d], shift[d], 1e-6, 'the shape was carried, not turned');
+        }
+      }
+    }
+  });
+
+  test('form from curves: a loft runs between two sketches', () => {
+    const cage = FM.loftRunsCage([squareRun(20), squareRun(8).map((p) => [p[0], p[1], 30])], {
+      points: 4,
+      closed: true
+    });
+    assert(cage, 'it built');
+    assert(cage.faces.length === 4, `one band of four, got ${cage.faces.length}`);
+    assert(FM.boundaryLoops(cage).length === 2, 'open at both ends');
+    const low = cage.points.filter((p) => p[2] === 0);
+    const high = cage.points.filter((p) => p[2] === 30);
+    assert(low.length === 4 && high.length === 4, 'four corners at each end');
+  });
+
+  test('form from curves: a pipe holds its radius all the way round a bend', () => {
+    const path = [];
+    for (let i = 0; i <= 12; i++) {
+      const a = (Math.PI / 2) * (i / 12);
+      path.push([30 * Math.sin(a), 0, 30 - 30 * Math.cos(a)]);
+    }
+    const cage = FM.pipeRunCage(path, 5, { rows: 7, sides: 8 });
+    assert(cage, 'it built');
+    assert(cage.points.length === 64, `eight rings of eight, got ${cage.points.length}`);
+    assert(FM.boundaryLoops(cage).length === 2, 'a tube open at both ends');
+
+    // Every ring is a real circle of the radius asked for, about its own centre.
+    for (let k = 0; k < 8; k++) {
+      const ring = cage.points.slice(k * 8, k * 8 + 8);
+      const centre = [0, 1, 2].map((d) => ring.reduce((a, p) => a + p[d], 0) / 8);
+      for (const p of ring) {
+        near(
+          Math.hypot(p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]),
+          5,
+          1e-6,
+          'every point of the ring is the radius out'
+        );
+      }
+    }
+  });
+
+  test('form from curves: a pipe does not flip its ring part way along', () => {
+    // The frame is carried from one station to the next rather than rebuilt.
+    // Rebuilt, it turns over wherever the path passes through vertical and the
+    // tube pinches into an hourglass.
+    const path = [];
+    for (let i = 0; i <= 16; i++) {
+      const a = (2 * Math.PI * i) / 16;
+      path.push([0, i * 4, 0]);
+    }
+    path[8] = [0, 32, 0.001];
+    const cage = FM.pipeRunCage(path, 4, { rows: 9, sides: 6 });
+    const ringAt = (k) => cage.points.slice(k * 6, k * 6 + 6);
+    for (let k = 1; k < 10; k++) {
+      const a = ringAt(k - 1);
+      const b = ringAt(k);
+      // Point 0 of each ring should still be roughly beside point 0 of the last.
+      const step = Math.hypot(b[0][0] - a[0][0], b[0][1] - a[0][1], b[0][2] - a[0][2]);
+      assert(step < 12, `ring ${k} did not jump round, step ${step.toFixed(2)}`);
+    }
+  });
+
+  test('form from curves: a built cage subdivides into a real surface', () => {
+    // The end of the road for all of these: whatever was built has to be
+    // something the subdivision can work on and the kernel can take.
+    const cage = FM.extrudeRunCage(squareRun(20), [0, 0, 30], { rows: 2, points: 4, closed: true });
+    let capped = cage;
+    for (let i = 0; i < 4 && FM.boundaryLoops(capped).length; i++) {
+      capped = FM.fillHole(capped, FM.boundaryLoops(capped)[0], 'single');
+      assert(capped, 'a cap went on');
+    }
+    capped = FM.orientCage(capped);
+    assert(FM.boundaryLoops(capped).length === 0, 'and it is shut');
+    const mesh = FM.formMesh(capped, 2);
+    const scope = new K.Scope();
+    const solid = K.ofMesh(mesh.vertProperties, mesh.triVerts, scope);
+    assert(solid && !K.isEmpty(solid), 'the kernel took it');
+    assert(solid.volume() > 0, `and it has a volume, got ${solid.volume().toFixed(1)}`);
+    scope.dispose();
+  });
+
   /* -------- sculpting a form -------- */
 
   const CAGE_XY = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };

@@ -54,7 +54,7 @@ import {
 } from './assembly.js';
 import { CONSTRUCTION_LABELS } from './construction.js';
 import { resolveParameters, evaluate, safeEval } from './expr.js';
-import { entityRuns, interiorPoint, pointInPolygon, tessellate } from './profile.js';
+import { entityRuns, interiorPoint, pointInPolygon, tessellate, chainPath } from './profile.js';
 import { buildTopology, basisFor } from './topology.js';
 import { edgeReference, faceReference } from './edgefeature.js';
 import { TEXT_FONTS } from './textoutline.js';
@@ -1796,6 +1796,24 @@ async function runCommand(cmd) {
       break;
     case 'formUnweld':
       cmdFormWeld(true);
+      break;
+    case 'formExtrudeCurve':
+      cmdFormFromCurve('extrude');
+      break;
+    case 'formRevolveCurve':
+      cmdFormFromCurve('revolve');
+      break;
+    case 'formSweepCurve':
+      cmdFormFromCurve('sweep');
+      break;
+    case 'formLoftCurves':
+      cmdFormFromCurve('loft');
+      break;
+    case 'formPipeCurve':
+      cmdFormFromCurve('pipe');
+      break;
+    case 'formFace':
+      cmdFormFace();
       break;
     case 'formSmooth':
       cmdFormSmooth();
@@ -5198,6 +5216,14 @@ const RIBBON_MENUS = {
   formTidy: [
     ['formFlatten', 'Flatten'],
     ['formUniform', 'Make Uniform']
+  ],
+  formCreate: [
+    ['formExtrudeCurve', 'Extrude a curve'],
+    ['formRevolveCurve', 'Revolve a curve'],
+    ['formSweepCurve', 'Sweep a curve along a path'],
+    ['formLoftCurves', 'Loft between sketches'],
+    ['formPipeCurve', 'Pipe along a path'],
+    ['formFace', 'Face from picked points']
   ],
   formShape: [
     ['formSmooth', 'Smooth'],
@@ -12477,6 +12503,257 @@ function cmdFormWeld(unweld) {
       setStatus(`${verts.length} point${verts.length === 1 ? '' : 's'} ${unweld ? 'unwelded' : 'welded'}.`);
     }
   });
+}
+
+/**
+ * Build a form from curves that are already drawn.
+ *
+ * The six primitives are for starting from nothing. This is for starting from
+ * a shape that has already been worked out in a sketch, which is what most
+ * forms really begin as: a section and a path, or two sections to run between.
+ *
+ * A cage is not the surface it stands for. The surface lies inside the cage, so
+ * a form built on a drawn curve runs near that curve rather than exactly
+ * through it. Every package that does this behaves the same way, and it is the
+ * whole difference between a form and a loft: a loft goes through the sections
+ * given, and there is already a Loft for when that is what is wanted.
+ */
+function cmdFormFromCurve(kind) {
+  if (state.sketcher.active) finishSketch();
+  const sketches = sketchesWithCurves();
+  if (!sketches.length) {
+    setStatus('Draw the curve to build on first.');
+    return;
+  }
+  const needsPath = kind === 'sweep' || kind === 'pipe';
+  const needsSecond = kind === 'loft';
+  if ((needsPath || needsSecond) && sketches.length < 2) {
+    setStatus(
+      needsPath
+        ? 'This needs two sketches: the shape, and the path it follows.'
+        : 'A loft needs two sketches to run between.'
+    );
+    return;
+  }
+
+  const titles = {
+    extrude: 'Form: Extrude a curve',
+    revolve: 'Form: Revolve a curve',
+    sweep: 'Form: Sweep a curve',
+    loft: 'Form: Loft between sketches',
+    pipe: 'Form: Pipe along a path'
+  };
+  const list = sketches.map((sk) => [sk.id, sk.name]);
+  const kept = state.formCurve || {};
+
+  const fields = [
+    {
+      key: 'profile',
+      label: kind === 'pipe' ? 'Path' : kind === 'loft' ? 'First sketch' : 'Shape',
+      type: 'select',
+      value: kept.profile || list[0][0],
+      options: list
+    }
+  ];
+  if (needsPath) {
+    fields.push({
+      key: 'path',
+      label: 'Path',
+      type: 'select',
+      value: kept.path || list[Math.min(1, list.length - 1)][0],
+      options: list
+    });
+  }
+  if (needsSecond) {
+    fields.push({
+      key: 'second',
+      label: 'Second sketch',
+      type: 'select',
+      value: kept.second || list[Math.min(1, list.length - 1)][0],
+      options: list
+    });
+  }
+  if (kind === 'extrude') {
+    fields.push({ key: 'distance', label: 'How far', type: 'expr', value: kept.distance || '40' });
+  }
+  if (kind === 'revolve') {
+    fields.push(
+      {
+        key: 'axis',
+        label: 'About which axis',
+        type: 'select',
+        value: kept.axis || 'w:z',
+        options: axisOptions()
+      },
+      { key: 'angle', label: 'How far round', type: 'expr', value: kept.angle || '360' },
+      { key: 'sides', label: 'Faces round', type: 'expr', value: kept.sides || '8' }
+    );
+  }
+  if (kind === 'pipe') {
+    fields.push(
+      { key: 'radius', label: 'Radius', type: 'expr', value: kept.radius || '5' },
+      { key: 'sides', label: 'Faces round', type: 'expr', value: kept.sides || '8' }
+    );
+  }
+  if (kind !== 'pipe') {
+    fields.push({ key: 'points', label: 'Points along the shape', type: 'expr', value: kept.points || '8' });
+  }
+  fields.push({ key: 'rows', label: 'Rows along it', type: 'expr', value: kept.rows || '4' });
+  fields.push({
+    key: '__note',
+    label: '',
+    type: 'note',
+    text: 'The cage runs on the curve; the surface it stands for lies inside it. Use a Loft if it has to pass through the section exactly.'
+  });
+
+  showInspector(titles[kind], fields, (v) => {
+    state.formCurve = { ...state.formCurve, ...v };
+    const scope = resolveParameters(state.doc.parameters);
+    const num = (k, d) => safeEval(v[k], scope, d);
+    const profile = worldRunOfSketch(v.profile);
+    if (!profile) {
+      setStatus('That sketch has no chain of curves in it.');
+      return;
+    }
+    const opts = {
+      points: Math.round(num('points', 8)),
+      rows: Math.round(num('rows', 4)),
+      sides: Math.round(num('sides', 8)),
+      closed: !!profile.closed
+    };
+
+    let cage = null;
+    if (kind === 'extrude') {
+      const plane = sketchPlaneOf(v.profile);
+      const n = plane ? plane.n : [0, 0, 1];
+      const d = num('distance', 40);
+      cage = FM.extrudeRunCage(profile, [n[0] * d, n[1] * d, n[2] * d], opts);
+    } else if (kind === 'revolve') {
+      const axis = worldAxisFor(axisSpecFromOption(v.axis));
+      if (!axis) {
+        setStatus('That axis could not be worked out.');
+        return;
+      }
+      cage = FM.revolveRunCage(profile, axis.origin, axis.dir, num('angle', 360), opts);
+    } else if (kind === 'sweep') {
+      const path = worldRunOfSketch(v.path);
+      if (!path) {
+        setStatus('That path sketch has no chain of curves in it.');
+        return;
+      }
+      cage = FM.sweepRunCage(profile, path, opts);
+    } else if (kind === 'loft') {
+      const second = worldRunOfSketch(v.second);
+      if (!second) {
+        setStatus('That second sketch has no chain of curves in it.');
+        return;
+      }
+      cage = FM.loftRunsCage([profile, second], opts);
+    } else if (kind === 'pipe') {
+      cage = FM.pipeRunCage(profile, num('radius', 5), opts);
+    }
+
+    if (!cage) {
+      setStatus('Nothing could be built from those curves.');
+      return;
+    }
+    addFormBody(cage, titles[kind]);
+  });
+}
+
+/** A cage from three or four picked points, which is the smallest form there is. */
+function cmdFormFace() {
+  if (state.sketcher.active) finishSketch();
+  const picked = [];
+  for (const record of state.records || []) {
+    if (!record.topology) continue;
+    for (const key of state.selection.edges) {
+      const { bodyId, index } = splitKey(key);
+      if (bodyId !== record.id) continue;
+      const edge = record.topology.edges[index];
+      if (edge?.points?.length) picked.push(edge.points[0], edge.points[edge.points.length - 1]);
+    }
+  }
+  // Points that are the same place are one corner, whichever edge they came off.
+  const corners = [];
+  for (const p of picked) {
+    if (!corners.some((q) => Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) < 1e-4)) {
+      corners.push(p.slice());
+    }
+  }
+  if (corners.length < 3 || corners.length > 4) {
+    setStatus(`A face needs three or four corners. Those edges gave ${corners.length}.`);
+    return;
+  }
+  addFormBody(FM.faceCage(corners), 'Form: Face');
+}
+
+/** Put a built cage into the document as a form body. */
+function addFormBody(cage, label) {
+  if (!cage?.faces?.length) {
+    setStatus('Nothing to build.');
+    return;
+  }
+  pushUndo(label);
+  const id = uid('form');
+  state.doc.forms[id] = { ...cage, name: formName() };
+  state.doc.features.push({
+    id: uid('f'),
+    type: 'form',
+    form: id,
+    shape: 'custom',
+    levels: '2',
+    display: 'control'
+  });
+  state.dirty = true;
+  clearGeometrySelection(false);
+  rebuildAll();
+  setTab('form');
+  setStatus(`${cage.points.length} points, ${cage.faces.length} faces.`);
+}
+
+/** Every sketch with a chain of curves in it, which is what these can build on. */
+function sketchesWithCurves() {
+  const out = [];
+  for (const f of state.doc.features) {
+    if (f.type !== 'sketch') continue;
+    const sk = state.doc.sketches[f.sketch];
+    if (sk && sk.entities.some((e) => e.type !== 'point')) out.push(sk);
+  }
+  return out;
+}
+
+/** The plane a sketch is drawn on, in world terms. */
+function sketchPlaneOf(sketchId) {
+  const sk = state.doc.sketches[sketchId];
+  if (!sk) return null;
+  const scope = resolveParameters(state.doc.parameters).scope;
+  return resolvePlane(sk.plane, scope, state.result?.construction);
+}
+
+/**
+ * A sketch's curves as one run of world points, in order along the chain.
+ *
+ * A closed chain comes back with its last point dropped. Left in, it is the
+ * first point again, and a cage that wraps round would have a face whose two
+ * ends are the same corner.
+ */
+function worldRunOfSketch(sketchId) {
+  const sk = state.doc.sketches[sketchId];
+  if (!sk) return null;
+  const plane = sketchPlaneOf(sketchId);
+  const chain = chainPath(sk, {});
+  if (!chain?.points?.length) return null;
+  const pts = chain.points.map((q) => {
+    const w = sketchToWorld(plane, q.x, q.y, q.z || 0);
+    return [w.x, w.y, w.z];
+  });
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  const meets = Math.hypot(first[0] - last[0], first[1] - last[1], first[2] - last[2]) < 1e-6;
+  const run = meets && pts.length > 3 ? pts.slice(0, -1) : pts;
+  run.closed = !!chain.closed || meets;
+  return run;
 }
 
 /**

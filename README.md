@@ -847,6 +847,31 @@ subdivision, so two holds an edge for two levels and the third rounds it off.
 Creased hard all round, Catmull-Clark reproduces the cage exactly, which is how
 a form can be a box of precisely 20 as easily as a blob.
 
+**From Curves** builds a form on geometry that has already been worked out
+rather than starting from nothing. **Extrude** carries a sketch chain along the
+plane's normal, **Revolve** turns it about an axis, **Sweep** carries it along a
+path, **Loft** runs between two sketches, and **Pipe** puts a tube of a given
+radius along a path. **Face** makes the smallest form there is, a single quad or
+triangle from three or four picked corners.
+
+A cage is not the surface it stands for. The surface lies inside the cage, so a
+form built on a drawn curve runs near that curve and not exactly through it.
+Every package that does this behaves the same way, and it is the whole
+difference between a form and a loft: a loft goes through the sections it was
+given, and there is a Loft for when that is what is wanted.
+
+A profile is only ever cut down to the number of control points asked for, never
+filled in, because a square asked for eight points would come back with a point
+in the middle of each side and a cage that rounds off corners the sketch drew
+square. A path is resampled either way, because the number of rings along a
+sweep was asked for and has to be what comes out. A loft resamples every section
+to the same count, since two sections drawn at different times are almost never
+divided the same way.
+
+The pipe's ring is carried from one station to the next rather than rebuilt at
+each. Rebuilt, it turns over wherever the path passes through vertical and the
+tube pinches into an hourglass.
+
 The **Shape** menu is the sculpting half of the tab, and every one of these
 works on what is picked rather than on a dialog full of numbers, because the way
 a form is worked is pick, do, look.
@@ -1158,7 +1183,7 @@ model file can never execute anything.
 npm test
 ```
 
-417 tests in a hidden window, checking measured quantities: volumes against
+428 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1192,7 +1217,9 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-sculpt.js` works a box cage through the Shape menu, smoothing, bevelling,
+drilled plate. `demo-formcreate.js` puts a square and a path into a document and builds a form
+off each of the From Curves commands. `demo-sculpt.js` works a box cage through
+the Shape menu, smoothing, bevelling,
 freezing and then failing to move what it froze, erasing an edge and
 interpolating a point. `demo-ucs.js` builds a coordinate system and checks its planes
 turn up in the dropdowns under its own name, takes a spun profile off a hex bar,

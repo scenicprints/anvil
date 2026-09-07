@@ -692,6 +692,201 @@ export function quadballCage(plane, radius, divisions = 3) {
 }
 
 /** A single face from a run of points, which is where a hand made shape starts. */
+/**
+ * A cage from a grid of points.
+ *
+ * Everything built from a curve comes out of this: a run of control points
+ * carried along, turned about, swept or lofted is a grid, and the only things
+ * that change are how the rows were made and whether the grid wraps round.
+ *
+ * A cage is not the surface. The surface a Catmull-Clark cage stands for lies
+ * inside it, so a form built on a drawn curve runs near that curve and not
+ * exactly through it. That is true of every package that does this and it is
+ * what makes a form a form: if it went exactly through the points it would be a
+ * loft, and there is already a Loft.
+ */
+export function gridCage(rows, opts = {}) {
+  const cage = newCage();
+  if (!rows?.length || !rows[0]?.length) return null;
+  const across = rows[0].length;
+  for (const row of rows) {
+    if (row.length !== across) return null;
+    for (const p of row) cage.points.push([p[0], p[1], p[2]]);
+  }
+
+  const wrapU = !!opts.closedU;
+  const wrapV = !!opts.closedV;
+  const id = (r, c) => (r % rows.length) * across + (c % across);
+  const lastRow = wrapV ? rows.length : rows.length - 1;
+  const lastCol = wrapU ? across : across - 1;
+  for (let r = 0; r < lastRow; r++) {
+    for (let c = 0; c < lastCol; c++) {
+      cage.faces.push([id(r, c), id(r, c + 1), id(r + 1, c + 1), id(r + 1, c)]);
+    }
+  }
+  if (!cage.faces.length) return null;
+  return cage;
+}
+
+/**
+ * Cut a run down to a handful of control points, evenly along its length.
+ *
+ * A profile is only ever cut down, never filled in: a square asked for eight
+ * points would come back with a point in the middle of each side and a cage
+ * that rounds off corners the sketch drew square.
+ */
+export function coarsenRun(run, count) {
+  const want = Math.max(2, Math.round(count));
+  if (run.length <= want) return run.map((p) => p.slice());
+  return resampleTo(run, want);
+}
+
+/**
+ * Exactly this many points, evenly along the length, filling in or cutting down.
+ *
+ * This is what a path wants rather than a profile. The number of rings along a
+ * sweep was asked for and has to be what comes out, whether the path was drawn
+ * with three points or three hundred.
+ */
+export function resampleTo(run, count) {
+  const want = Math.max(2, Math.round(count));
+  const at = [0];
+  for (let i = 1; i < run.length; i++) at.push(at[i - 1] + len(sub(run[i], run[i - 1])));
+  const total = at[at.length - 1];
+  const out = [];
+  for (let k = 0; k < want; k++) {
+    const s = (total * k) / (want - 1);
+    let i = 0;
+    while (i + 2 < run.length && at[i + 1] < s) i++;
+    const span = at[i + 1] - at[i];
+    const t = span > 1e-12 ? (s - at[i]) / span : 0;
+    out.push(add(run[i], mul(sub(run[i + 1], run[i]), t)));
+  }
+  return out;
+}
+
+/** A run carried along a direction, as a cage. */
+export function extrudeRunCage(run, direction, opts = {}) {
+  const points = coarsenRun(run, opts.points ?? 8);
+  const steps = Math.max(1, Math.round(opts.rows ?? 2));
+  const rows = [];
+  for (let k = 0; k <= steps; k++) {
+    const d = mul(direction, k / steps);
+    rows.push(points.map((p) => add(p, d)));
+  }
+  return gridCage(rows, { closedU: !!opts.closed });
+}
+
+/** A run turned about an axis, as a cage. */
+export function revolveRunCage(run, origin, axis, degrees = 360, opts = {}) {
+  const points = coarsenRun(run, opts.points ?? 8);
+  const dir = unit(axis);
+  const full = Math.abs(Math.abs(degrees) - 360) < 1e-6;
+  const sides = Math.max(3, Math.round(opts.sides ?? 8));
+  const steps = full ? sides : sides;
+  const total = (degrees * Math.PI) / 180;
+
+  const rows = [];
+  const limit = full ? steps - 1 : steps;
+  for (let k = 0; k <= limit; k++) {
+    const a = (total * k) / steps;
+    rows.push(points.map((p) => turnAbout(p, origin, dir, a)));
+  }
+  return gridCage(rows, { closedU: !!opts.closed, closedV: full });
+}
+
+/** One point turned about an axis by an angle. */
+function turnAbout(p, origin, axis, angle) {
+  const d = sub(p, origin);
+  const along = mul(axis, dot(d, axis));
+  const across = sub(d, along);
+  const side = cross(axis, across);
+  const turned = add(mul(across, Math.cos(angle)), mul(side, Math.sin(angle)));
+  return add(origin, add(along, turned));
+}
+
+/**
+ * A run carried along a path, as a cage.
+ *
+ * The profile is moved rather than turned with the path: keeping its own
+ * orientation is what makes a swept form usable, because a profile that rolls
+ * as it goes twists the surface in a way nobody asked for. A path that doubles
+ * back on itself will still pinch, and that is the path's fault.
+ */
+export function sweepRunCage(run, path, opts = {}) {
+  const points = coarsenRun(run, opts.points ?? 8);
+  // `rows` counts spans, the way it does everywhere else here, so a sweep of
+  // three rows is four rings.
+  const spine = resampleTo(path, Math.max(1, Math.round(opts.rows ?? 6)) + 1);
+  if (spine.length < 2) return null;
+  const start = spine[0];
+  const rows = spine.map((q) => {
+    const d = sub(q, start);
+    return points.map((p) => add(p, d));
+  });
+  return gridCage(rows, { closedU: !!opts.closed });
+}
+
+/**
+ * Runs joined into one cage, one row each, in the order given.
+ *
+ * Every section is resampled to the same count rather than coarsened, because
+ * two sections drawn at different times are almost never divided the same way
+ * and a loft between rows of different lengths is not a loft, it is nothing.
+ */
+export function loftRunsCage(runs, opts = {}) {
+  if (!runs || runs.length < 2) return null;
+  const across = Math.max(3, Math.round(opts.points ?? 8));
+  const rows = runs.map((r) => resampleTo(r, across));
+  return gridCage(rows, { closedU: !!opts.closed, closedV: !!opts.closedPath });
+}
+
+/**
+ * A tube of a given radius along a path, as a cage.
+ *
+ * The ring is carried along the path and turned to face the way it is going, so
+ * a bend comes out round rather than squashed. At each corner the ring faces
+ * halfway between the two legs, which is the same bisector a mitre uses and for
+ * the same reason.
+ */
+export function pipeRunCage(path, radius, opts = {}) {
+  const spine = resampleTo(path, Math.max(1, Math.round(opts.rows ?? 8)) + 1);
+  if (spine.length < 2 || !(radius > 0)) return null;
+  const sides = Math.max(3, Math.round(opts.sides ?? 8));
+
+  const tangents = spine.map((p, i) => {
+    const before = i > 0 ? sub(p, spine[i - 1]) : null;
+    const after = i + 1 < spine.length ? sub(spine[i + 1], p) : null;
+    if (before && after) return unit(add(unit(before), unit(after)));
+    return unit(before || after);
+  });
+
+  // One starting frame, carried along rather than rebuilt at each step, or the
+  // ring flips over wherever the path passes through vertical.
+  let up = null;
+  const rows = [];
+  spine.forEach((centre, i) => {
+    const t = tangents[i];
+    if (!up) {
+      const seed = Math.abs(t[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      up = unit(sub(seed, mul(t, dot(seed, t))));
+    } else {
+      const carried = sub(up, mul(t, dot(up, t)));
+      if (len(carried) > 1e-9) up = unit(carried);
+    }
+    const side = cross(t, up);
+    const ring = [];
+    for (let k = 0; k < sides; k++) {
+      const a = (2 * Math.PI * k) / sides;
+      ring.push(
+        add(centre, add(mul(up, radius * Math.cos(a)), mul(side, radius * Math.sin(a))))
+      );
+    }
+    rows.push(ring);
+  });
+  return gridCage(rows, { closedU: true });
+}
+
 export function faceCage(points) {
   const cage = newCage();
   for (const p of points) cage.points.push([p[0], p[1], p[2]]);

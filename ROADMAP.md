@@ -8,8 +8,8 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.14.0**. 417 tests. Batches 11 to 15 and 18 have shipped.
-Batches 16, 17, 19, 20, 20b and everything after them have not. Each batch below
+Current version: **2.15.0**. 428 tests. Batches 11 to 16 and 18 have shipped.
+Batches 17, 19, 20, 20b and everything after them have not. Each batch below
 says which.
 
 ---
@@ -1456,7 +1456,21 @@ match alike.
 The thirteen that were already here are the topological verbs: insert edge,
 subdivide, weld, crease, bridge.
 
-**Batch 16. Form Create.** Six. Extrude, Revolve, Sweep and Loft in the Form
+**Batch 16. Form Create. Shipped in v2.15.0.** All six, under a From Curves menu
+on the Form tab: Extrude, Revolve, Sweep, Loft, Pipe and Face. They all come out
+of one `gridCage`, because a run of control points carried along, turned about,
+swept or lofted is a grid and the only thing that changes is how the rows were
+made.
+
+The thing to know before touching this again is the resampling rule, which is
+not the same for all three kinds of input. A profile is only cut down, never
+filled in: a square asked for eight points comes back with a point in the middle
+of each side and a cage that rounds off corners the sketch drew square. A path is
+resampled either way, because the row count was asked for. A loft resamples every
+section to one count, because sections drawn at different times are never divided
+alike.
+
+Six. Extrude, Revolve, Sweep and Loft in the Form
 environment, building a T-Spline rather than a solid, plus the Pipe and Face
 primitives. The solid versions already exist, so this is the same intent
 against a different output.
