@@ -1328,7 +1328,20 @@ function wireKeys() {
 
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
-      if (e.key === 'Escape') document.activeElement.blur();
+      if (e.key === 'Escape') {
+        // The pull box is left focused on purpose, so the exact size can be
+        // typed over the one that was dragged to. That makes Escape land in a
+        // text box rather than on the model, and merely blurring it leaves the
+        // extrude open with its box still floating by the pointer. Escape there
+        // means the same as Escape anywhere else: stop this.
+        const inPullBox = state.pullValueEl?.contains(document.activeElement);
+        document.activeElement.blur();
+        if (inPullBox) {
+          if (state.editing) cancelEdit();
+          else hidePullValue();
+          e.preventDefault();
+        }
+      }
       return;
     }
 
@@ -10937,8 +10950,30 @@ function regionCentreWorld(region, plane) {
 /** Put the handle where it belongs, or take it away. */
 function refreshPullHandle() {
   const target = state.pullDrag ? state.pullDrag.target : pullTarget();
+  const appeared = !!target && !state.pullHandle;
   state.pullHandle = target;
   state.vp.setGizmo(target ? target.frame : null, 'pull');
+
+  // An arrow pointing straight at the eye is a dot. There is nothing to aim at
+  // and no direction to drag in, and that is exactly the state you are in the
+  // moment a sketch is finished, because finishing one leaves you looking
+  // square at its plane. So the view is turned as soon as the arrow appears,
+  // and what you press is what you were looking at.
+  //
+  // It used to turn at the press instead, which was worse than not turning at
+  // all: the arrow leapt a hundred and thirty pixels out from under the pointer
+  // that had just grabbed it, and the direction you had aimed to drag in was no
+  // longer the direction the arrow lay along.
+  if (appeared && !state.pullDrag && turnToSeeAxis(target.frame.z)) {
+    state.vp.setGizmo(target.frame, 'pull');
+  }
+
+  // The value box belongs to a pull that is happening or to the feature that
+  // pull opened. Once neither is true it has nothing to say and nobody to say
+  // it to, and left alone it floats beside the pointer for the rest of the
+  // session. Swept up here rather than at each exit, because it was the exits
+  // that were missed: only the dialog's own OK and Cancel ever cleared it.
+  if (!state.pullDrag && !state.editing) hidePullValue();
 }
 
 /** A press on the arrow starts a pull. Returns true when it took the click. */
@@ -10949,11 +10984,10 @@ function pullPointerDown(e) {
 
   const target = state.pullHandle;
   const frame = target.frame;
-  // Straight after finishing a sketch you are looking square at the plane, so
-  // the arrow points at your eye: it has no length on screen to drag along and
-  // what it builds grows towards you, invisibly. Turn first, the same few
-  // degrees the Extrude dialog turns for the same reason. Before the drag
-  // rather than during it, so nothing moves under the pointer.
+  // Normally the view was already turned when the arrow appeared, so this does
+  // nothing. It is here for the one case that is left: orbiting to end-on after
+  // selecting and then pressing. A jump at that moment is jarring, and it is
+  // still better than a drag along an arrow with no length to drag along.
   turnToSeeAxis(frame.z);
   const start = { x: e.clientX, y: e.clientY };
 
@@ -17778,6 +17812,11 @@ window.anvilDev = {
   get bodies() {
     return state.result ? state.result.bodies : [];
   },
+  // The pull is the one interaction that cannot be checked by looking at the
+  // document afterwards: it is a drag, and what it does depends on where the
+  // camera is. These are here so a probe can measure it rather than infer it.
+  axisDragAmount,
+  pullTarget,
   ready: () => !!state.result,
   isDirty: () => !!state.dirty,
   /** Save, and say whether it happened. Used by the close prompt. */

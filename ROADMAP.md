@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.23.0**. 516 tests.
+Current version: **2.23.1**. 516 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
@@ -16,6 +16,43 @@ workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
 What is left is not on this list: it is whatever the next thing turns out to be.
 The sections below are kept as the record of what was built and, more usefully,
 of what was learned building it.
+
+---
+
+## Read this before writing another demo
+
+Twelve versions of features went out on top of an extrude that did not work.
+Not subtly: clicking the middle of a face selected nothing, so no arrow came up,
+so there was nothing to pull. The demos were green the whole time.
+
+They were green because they pressed things with `element.click()`, which
+dispatches no pointer events, and because they read state back out of the app
+rather than off the screen. Neither of those can see:
+
+- **`pickEntity` returned any edge hit before it considered the face.** The ray
+  carries on through the solid, so every edge on the far side of the part lies
+  along it, and one of them always won. Fixed by finding the surface first and
+  making an edge prove it is at least as near, within a few pixels of slack.
+- **The arrow was a zero-length dot** after finishing a sketch, because the view
+  was square on to the plane the arrow points out of. The turn that fixes that
+  was happening at pointerdown, which also moved the target out from under the
+  cursor. It now happens when the handle appears.
+- **The value box outlived its feature.** Only the dialog's own OK and Cancel
+  cleared it, so every other way out of a pull left it floating by the pointer
+  for the rest of the session. It is now swept up wherever the handle is
+  refreshed, which is every exit.
+
+Three rules came out of that, and they cost a lot to learn:
+
+1. **Anything that tests a gesture has to make the gesture.** Real
+   `PointerEvent`s, at real screen coordinates, with `pointermove` in them.
+2. **Measure what is on screen, not what is in state.** "There is a handle" and
+   "there is an arrow you can aim at" are different claims, and only the second
+   one is the feature.
+3. **Test the ways out, not only the way through.** Escape, clicking away, and
+   changing your mind are most of what a person does.
+
+`tools/demo-pull.js` is written that way and covers all three failures.
 
 ---
 

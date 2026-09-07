@@ -1581,14 +1581,37 @@ export class Viewport {
     return { ...hits[0].object.userData.handle, point: hits[0].point.toArray() };
   }
 
+  /**
+   * What is under the pointer: an edge, a face, or a body.
+   *
+   * An edge is preferred over a face, because an edge is a thin thing and
+   * anybody aiming at one means it. But only an edge that is actually in front:
+   * the ray carries on through the solid, and every edge on the far side of the
+   * part lies somewhere along it. Taken without that check, clicking the middle
+   * of a face returns the edge behind it, and a face can never be selected at
+   * all. Which is to say: extrude stops working, because there is nothing to
+   * stand the arrow on.
+   *
+   * So the surface is found first and an edge has to be at least as near as it,
+   * within a few pixels' worth of slack for an edge lying on the silhouette of
+   * the very face being clicked.
+   */
   pickEntity(clientX, clientY, opts = {}) {
     const rc = this.raycastRay(clientX, clientY);
     const visible = [...this.bodies.entries()].filter(([, b]) => b.mesh.visible);
+
+    const meshes = visible.map(([, b]) => b.mesh);
+    const surface = rc.intersectObjects(meshes, false)[0] || null;
 
     if (opts.edges !== false) {
       let best = null;
       const px = this.pixelSize();
       rc.params.Line = { threshold: px * 5 };
+      // How much further than the surface an edge may be and still count as on
+      // it rather than behind it. An edge on the rim of the face being clicked
+      // is at the same depth to within rounding; one on the far side of a part
+      // is a whole part away.
+      const slack = px * 4;
       for (const [id, entry] of visible) {
         if (!entry.segEdge) continue;
         const hits = rc.intersectObject(entry.lines, false);
@@ -1596,6 +1619,7 @@ export class Viewport {
           const seg = Math.floor(h.index / 2);
           const edgeId = entry.segEdge[seg];
           if (edgeId === undefined) continue;
+          if (surface && h.distance > surface.distance + slack) continue;
           if (!best || h.distance < best.distance) {
             best = { kind: 'edge', bodyId: id, edgeId, point: h.point, distance: h.distance };
           }
@@ -1604,10 +1628,8 @@ export class Viewport {
       if (best) return best;
     }
 
-    const meshes = visible.map(([, b]) => b.mesh);
-    const hits = rc.intersectObjects(meshes, false);
-    if (!hits.length) return null;
-    const hit = hits[0];
+    if (!surface) return null;
+    const hit = surface;
     const bodyId = hit.object.userData.bodyId;
     const entry = this.bodies.get(bodyId);
     const topo = entry?.record?.topology;

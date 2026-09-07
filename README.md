@@ -1574,7 +1574,17 @@ the solid it makes measures exactly what the file described. `demo-recognise.js`
 clicks a size to select it, then exports the same body to STL and reads it again
 with no history at all to check it says the same thing. `demo-pull.js` clicks a face, drags the arrow that appears, checks the body grew
 while the drag was happening, types an exact size over what was dragged to, and
-does the same to a sketch profile. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
+does the same to a sketch profile. It also clicks seven places across one face
+and measures how long the arrow is on screen at each, and it escapes out of a
+pull and looks at what is left behind, because those are the three ways this
+interaction has actually broken: a hidden edge on the far side of the part
+winning over the face in front of it, so nothing could be picked in the middle
+of a face; the arrow coming up as a zero-length dot pointing at the camera after
+a sketch was finished; and the value box outliving the feature it belonged to
+and floating beside the pointer for the rest of the session. An earlier version
+of this demo pressed things with `element.click()`, which dispatches no pointer
+events at all, and passed every run while all three were broken. Anything that
+tests a gesture has to make the gesture. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
 click, rather than the bare `click()` every other demo uses, because that is a
 path no mouse can take and it hid a menu that shut itself before the press could
 land. And `demo-picking.js` checks the things a volume cannot see:
