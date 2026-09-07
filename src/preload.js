@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('anvil', {
   currentPath: () => ipcRenderer.invoke('doc:currentPath'),
   exportMesh: (suggestedName, ext, data) =>
     ipcRenderer.invoke('export:mesh', { suggestedName, ext, data }),
+  exportImage: (suggestedName, bytes) =>
+    ipcRenderer.invoke('export:image', { suggestedName, bytes }),
   importVector: (kind) => ipcRenderer.invoke('import:vector', kind),
   importBinary: (kind) => ipcRenderer.invoke('import:binary', kind),
   changedOnDisk: () => ipcRenderer.invoke('doc:changedOnDisk'),

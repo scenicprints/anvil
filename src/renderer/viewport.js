@@ -23,6 +23,19 @@ const SHEET_COLOUR = 0xd9c187;
 const FORM_COLOUR = 0xc4cbd2;
 
 /**
+ * A repeatable scatter, from a pass number and which of the five values.
+ *
+ * Repeatable so the same settings give the same picture twice, which is what
+ * lets two renders be compared. A real random source would make every render
+ * of an unchanged model slightly different, and then nobody could tell whether
+ * a change they made had done anything.
+ */
+function rand2(i, k) {
+  const x = Math.sin((i + 1) * 12.9898 + k * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/**
  * What colour a body is when nothing is happening to it.
  *
  * A colour set by hand wins over the kind of body it is. Everything that paints
@@ -916,6 +929,148 @@ export class Viewport {
     entry.mesh.geometry.dispose();
     entry.mat.dispose();
     entry.tex?.dispose();
+  }
+
+  /**
+   * A still of the current view, better than the screen can draw in real time.
+   *
+   * Not a path tracer and not pretending to be one. What makes the difference
+   * between this and a screenshot is accumulation: the same scene is drawn many
+   * times with the camera moved by a fraction of a pixel and the lights moved a
+   * little each pass, and the results are averaged. Jittering the camera gives
+   * antialiasing far past what the hardware does; jittering the lights turns
+   * every hard shadow soft, for nothing, because a light sampled over an area
+   * is what a soft shadow is.
+   *
+   * The helpers, the grid and the origin planes go away for the duration. A
+   * render is a picture of the part, not of the tool it was made in.
+   */
+  async renderStill(opts = {}) {
+    const width = Math.max(64, Math.round(opts.width || 1600));
+    const height = Math.max(64, Math.round(opts.height || 1000));
+    const samples = Math.max(1, Math.min(256, Math.round(opts.samples || 32)));
+    const softness = Math.max(0, opts.softness ?? 0.06);
+
+    const target = new THREE.WebGLRenderTarget(width, height, {
+      type: THREE.UnsignedByteType,
+      colorSpace: THREE.SRGBColorSpace
+    });
+
+    // What the picture is of, and nothing else.
+    const hidHelpers = this.helperGroup.visible;
+    const hidOverlay = this.overlayGroup.visible;
+    this.helperGroup.visible = false;
+    this.overlayGroup.visible = false;
+
+    const camera = this.camera.clone();
+    const lights = [];
+    this.scene.traverse((o) => {
+      if (o.isDirectionalLight) lights.push({ light: o, home: o.position.clone() });
+    });
+
+    const oldTarget = this.renderer.getRenderTarget();
+    const oldClear = new THREE.Color();
+    this.renderer.getClearColor(oldClear);
+    const oldAlpha = this.renderer.getClearAlpha();
+    if (opts.background === 'transparent') this.renderer.setClearAlpha(0);
+    else {
+      this.renderer.setClearColor(new THREE.Color(opts.background || '#20242a'), 1);
+    }
+
+    const sum = new Float32Array(width * height * 4);
+    const frame = new Uint8Array(width * height * 4);
+
+    for (let i = 0; i < samples; i++) {
+      // A fraction of a pixel, different every pass. Over enough passes the
+      // average of those is what a much larger image reduced down would be.
+      const jx = (rand2(i, 0) - 0.5) / width;
+      const jy = (rand2(i, 1) - 0.5) / height;
+      camera.copy(this.camera);
+      // The picture has its own shape, which is usually not the window's. Left
+      // at the window's aspect the model comes out letterboxed and small in a
+      // frame that is not the shape it was asked for.
+      camera.aspect = width / height;
+      camera.setViewOffset(width, height, jx * width, jy * height, width, height);
+      camera.updateProjectionMatrix();
+
+      for (const { light, home } of lights) {
+        light.position.set(
+          home.x + (rand2(i, 2) - 0.5) * softness * 2,
+          home.y + (rand2(i, 3) - 0.5) * softness * 2,
+          home.z + (rand2(i, 4) - 0.5) * softness * 2
+        );
+      }
+
+      this.renderer.setRenderTarget(target);
+      this.renderer.clear();
+      this.renderer.render(this.scene, camera);
+      this.renderer.readRenderTargetPixels(target, 0, 0, width, height, frame);
+      for (let k = 0; k < sum.length; k++) sum[k] += frame[k];
+
+      // Let the window breathe. A render of two hundred passes that locks the
+      // interface for ten seconds looks exactly like a crash.
+      if (i % 8 === 7) await new Promise((r) => setTimeout(r, 0));
+    }
+
+    for (const { light, home } of lights) light.position.copy(home);
+    this.renderer.setRenderTarget(oldTarget);
+    this.renderer.setClearColor(oldClear, oldAlpha);
+    this.helperGroup.visible = hidHelpers;
+    this.overlayGroup.visible = hidOverlay;
+    this.invalidate();
+
+    // Into a canvas, the right way up: WebGL reads bottom to top and every
+    // image format written from here is top to bottom.
+    const out = document.createElement('canvas');
+    out.width = width;
+    out.height = height;
+    const ctx = out.getContext('2d');
+    const image = ctx.createImageData(width, height);
+    for (let y = 0; y < height; y++) {
+      const from = (height - 1 - y) * width * 4;
+      const to = y * width * 4;
+      for (let x = 0; x < width * 4; x++) {
+        image.data[to + x] = Math.round(sum[from + x] / samples);
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    target.dispose();
+    return out;
+  }
+
+  /**
+   * Move bodies for display, without moving the model.
+   *
+   * What an exploded view needs. The parts have to come apart on screen while
+   * the geometry underneath stays exactly where it is, or scrubbing a timeline
+   * would leave the assembly wherever the playhead happened to stop.
+   *
+   * Applied to the drawn mesh and to everything drawn with it, so an edge or a
+   * highlight goes with the body rather than staying behind on it.
+   */
+  setBodyOffsets(offsets) {
+    this._offsets = offsets || null;
+    for (const [id, entry] of this.bodies) {
+      const held = offsets?.get(id);
+      for (const node of [entry.mesh, entry.lines, entry.overlay].filter(Boolean)) {
+        if (!held) {
+          node.position.set(0, 0, 0);
+          node.quaternion.identity();
+          continue;
+        }
+        node.position.set(held.move[0] || 0, held.move[1] || 0, held.move[2] || 0);
+        node.quaternion.identity();
+        for (const turn of held.turns || []) {
+          node.quaternion.premultiply(
+            new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(...turn.axis).normalize(),
+              turn.radians
+            )
+          );
+        }
+      }
+    }
+    this.invalidate();
   }
 
   setBodies(bodyRecords) {

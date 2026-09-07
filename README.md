@@ -708,6 +708,35 @@ change of shape rather than a repair. A cage with nothing wrong with it comes
 back untouched and says so, rather than being quietly rebuilt: a rebuild
 renumbers the points and takes every crease and selection with it.
 
+## Pictures and taking things apart
+
+**Render** makes a still of the model that is better than the screen can draw in
+real time. Not a path tracer and not pretending to be one. What makes the
+difference is accumulation: the same view is drawn many times with the camera
+moved by a fraction of a pixel and the lights moved a little each pass, and the
+results averaged. Jittering the camera gives antialiasing far past what the
+hardware does. Jittering the lights turns every hard shadow soft for nothing,
+because a light sampled over an area is what a soft shadow is. The scatter is
+repeatable, so the same settings give the same picture twice and two renders can
+be compared.
+
+The finish comes from what each body is made of, which is the point of having
+said: steel renders as metal because it is metal, and a printed part does not.
+The working view is deliberately matt, so that is put back afterwards. Nothing
+of the tool is in the picture: no grid, no origin planes, no manipulator.
+
+**Animate** takes an assembly apart on a timeline, which is the single most
+useful drawing there is for telling somebody how a thing goes together. A
+moving one is better still, because it shows the order as well as the
+arrangement. Auto explode works it out from where the parts actually are, so it
+stays right when one moves, and sends them one after another with the furthest
+out going first, which is the order things come off.
+
+Nothing about it rebuilds anything. A step is a transform laid over a body for
+display, so scrubbing costs nothing and the model underneath never moves. That
+matters more than it sounds: an animation that edited the assembly would leave
+the parts wherever the playhead happened to stop.
+
 ## One document, several parts
 
 **Configurations** is a table: a column per thing that varies, a row per
@@ -1388,7 +1417,7 @@ model file can never execute anything.
 npm test
 ```
 
-480 tests in a hidden window, checking measured quantities: volumes against
+489 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1422,7 +1451,12 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-configure.js` builds a configuration table, switches between two variants
+drilled plate. `demo-render.js` renders a plate, checks the picture is the size asked for and
+holds a model rather than an empty frame, that a transparent background really
+is clear, that the helpers went away and came back, and that the same settings
+give the same picture twice. `demo-animate.js` explodes three components and
+checks the bodies moved on screen while the model underneath did not.
+`demo-configure.js` builds a configuration table, switches between two variants
 and measures the volume each time, sets the document properties, keeps a named
 version and puts it back after changing the model, and pins a note to a face and
 turns the view to check it followed. `demo-batch20b.js` inserts a part from another document's bodies, lays a canvas

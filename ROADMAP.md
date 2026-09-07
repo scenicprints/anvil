@@ -8,9 +8,10 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.20.0**. 480 tests. Batches 11 to 20b have shipped. What is
-left is Batches 21 and beyond: Render, Animation, Simulation and Generative
-Design, each of which is a project rather than a batch.
+Current version: **2.21.0**. 489 tests. Batches 11 to 20b have shipped, and two
+of the four workspaces in Batch 21: **Render and Animation**. What is left is
+**Simulation and Generative Design**, and the roadmap's own instruction stands:
+cost both in front of him before starting either.
 
 ---
 
@@ -1581,9 +1582,30 @@ has not.
 Notes are not in the timeline on purpose. Rolling back past a remark would be a
 strange thing for it to do.
 
-**Batches 21 and beyond. The workspaces he ruled in.** Render, Animation,
-Simulation, Generative Design. Each is a project rather than a batch. Cost
-Simulation and Generative Design in front of him before starting either.
+**Batch 21. The workspaces he ruled in.** Render and Animation **shipped in
+v2.21.0**. Simulation and Generative Design have not, and are not to be started
+without costing them in front of him first.
+
+Render is accumulation rather than ray tracing: many passes with the camera
+jittered a fraction of a pixel and the lights jittered a little, averaged. That
+gives antialiasing past what the hardware does and soft shadows for nothing. The
+scatter is repeatable on purpose, so two renders of an unchanged model are
+identical and a change can be seen.
+
+Animation is display-only. A step is a transform laid over a body, never an edit
+to the assembly, so scrubbing costs nothing and the playhead can stop anywhere.
+`setBodyOffsets` on the viewport is where that lives.
+
+What is left, and why each is a project rather than a batch:
+
+**Simulation** means a solver. Static stress on a printed part is the useful
+case, and it needs tetrahedral meshing of a manifold body, material stiffness,
+constraints and loads on faces, an assembly and solve of a sparse system, and a
+way to show the result. The meshing and the sparse solve are each larger than
+any batch on this list. Worth costing honestly before a line of it is written.
+
+**Generative Design** means running many solves and picking. It cannot start
+before Simulation and is a multiple of it.
 
 **Not scheduled, deliberately:** the twelve library and cloud backed commands
 listed with the inventory, and everything in section 6 of it.

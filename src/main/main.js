@@ -640,6 +640,22 @@ ipcMain.handle('doc:currentPath', async () => currentPath);
 /* Mesh export                                                         */
 /* ------------------------------------------------------------------ */
 
+/** A rendered image, written where the person says. */
+ipcMain.handle('export:image', async (_e, { suggestedName, bytes }) => {
+  const res = await dialog.showSaveDialog(win, {
+    title: 'Save the render',
+    defaultPath: suggestedName || 'render.png',
+    filters: [{ name: 'PNG', extensions: ['png'] }]
+  });
+  if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+  try {
+    await writeAtomicBytes(res.filePath, Buffer.from(bytes));
+    return { ok: true, path: res.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('export:mesh', async (_e, { suggestedName, ext, data }) => {
   const filters = {
     stl: [{ name: 'STL (binary)', extensions: ['stl'] }],

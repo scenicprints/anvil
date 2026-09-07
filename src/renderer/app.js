@@ -45,6 +45,7 @@ import * as SM from './sheetmetal.js';
 import * as FM from './form.js';
 import { decalMesh } from './decal.js';
 import * as CF from './configure.js';
+import * as AN from './animation.js';
 import { meshHealth, sectionCurves } from './meshtools.js';
 import {
   newComponent,
@@ -313,6 +314,7 @@ function rebuildAll() {
   if (previous) previous.dispose();
 
   state.vp.setBodies(records);
+  applyAnimationOffsets();
   state.vp.setCanvases(placedCanvases());
   state.vp.setDecals(placedDecals(records));
   state.vp.setSelection(state.selection.bodies);
@@ -1733,6 +1735,12 @@ async function runCommand(cmd) {
     case 'addNote':
       cmdAddNote();
       break;
+    case 'render':
+      cmdRender();
+      break;
+    case 'animate':
+      cmdAnimate();
+      break;
     case 'meshReduce':
       cmdMeshReduce();
       break;
@@ -2378,6 +2386,7 @@ function migrate(data) {
   doc.versions = doc.versions || [];
   doc.info = doc.info || {};
   doc.notes = doc.notes || [];
+  doc.animation = doc.animation || null;
   doc.constraints = doc.constraints || [];
   doc.forms = doc.forms || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
@@ -6957,6 +6966,359 @@ function startInterference() {
     () => {}
   );
   setStatus(`${hits.length} overlap${hits.length === 1 ? '' : 's'} found.`);
+}
+
+/**
+ * Take the assembly apart, on a timeline.
+ *
+ * What this is for is telling somebody how a thing goes together. An exploded
+ * view is the single most useful drawing there is for that, and a moving one is
+ * better still, because it shows the order as well as the arrangement.
+ *
+ * Nothing here rebuilds anything. A step is a transform laid over a body for
+ * display, so scrubbing costs nothing and the model underneath never moves,
+ * which is what stops the assembly being left wherever the playhead stopped.
+ */
+function cmdAnimate() {
+  if (state.sketcher.active) finishSketch();
+  const parts = animatableParts();
+  if (parts.length < 2) {
+    setStatus('An exploded view needs two or more components. Make some first.');
+    return;
+  }
+  state.doc.animation = state.doc.animation || AN.newStoryboard();
+  state.anim = state.anim || { time: 0, playing: false };
+  drawAnimationPanel();
+}
+
+/** Every component that has a body, with where its middle is. */
+function animatableParts() {
+  const byComponent = new Map();
+  for (const record of state.records || []) {
+    const body = (state.result?.bodies || []).find((b) => b.id === record.id);
+    if (!body?.component || !record.topology) continue;
+    const centre = [0, 0, 0];
+    let weight = 0;
+    for (const face of record.topology.faces) {
+      for (let i = 0; i < 3; i++) centre[i] += face.centre[i] * face.area;
+      weight += face.area;
+    }
+    if (weight < 1e-9) continue;
+    const held = byComponent.get(body.component) || {
+      component: body.component,
+      name: componentName(body.component),
+      bodies: [],
+      sum: [0, 0, 0],
+      weight: 0
+    };
+    held.bodies.push(record.id);
+    for (let i = 0; i < 3; i++) held.sum[i] += centre[i];
+    held.weight += weight;
+    byComponent.set(body.component, held);
+  }
+  return [...byComponent.values()].map((c) => ({
+    ...c,
+    centre: c.sum.map((v) => v / Math.max(1e-9, c.weight))
+  }));
+}
+
+/** Lay the current moment of the storyboard over the bodies. */
+function applyAnimationOffsets() {
+  const story = state.doc.animation;
+  if (!story?.steps?.length || !state.anim) {
+    state.vp.setBodyOffsets(null);
+    return;
+  }
+  const byComponent = AN.offsetsAt(story, state.anim.time || 0);
+  const perBody = new Map();
+  for (const body of state.result?.bodies || []) {
+    const held = body.component && byComponent.get(body.component);
+    if (held) perBody.set(body.id, held);
+  }
+  state.vp.setBodyOffsets(perBody);
+}
+
+/** The panel that builds and plays a storyboard. */
+function drawAnimationPanel() {
+  const story = state.doc.animation;
+  const parts = animatableParts();
+  const length = AN.lengthOf(story);
+
+  showInspector(
+    'Animation',
+    [
+      {
+        key: '__caption',
+        label: '',
+        type: 'note',
+        text: `${AN.captionAt(story, state.anim.time)} · ${state.anim.time.toFixed(2)} of ${length.toFixed(2)} seconds`
+      },
+      {
+        key: 'time',
+        label: 'Where the playhead is',
+        type: 'expr',
+        get: () => String(state.anim.time.toFixed(2)),
+        set: (f, v) => {
+          const t = Number(v);
+          if (!Number.isFinite(t)) return;
+          state.anim.time = Math.max(0, Math.min(AN.lengthOf(story), t));
+          applyAnimationOffsets();
+        }
+      },
+      {
+        key: '__play',
+        label: state.anim.playing ? 'Stop' : 'Play it through',
+        type: 'action',
+        run: () => togglePlay()
+      },
+      {
+        key: '__explode',
+        label: 'Take it apart automatically',
+        type: 'action',
+        run: () => {
+          const made = AN.autoExplode(parts, { spread: 1.6 });
+          if (!made) {
+            setStatus('There is nothing here to take apart.');
+            return;
+          }
+          pushUndo('explode');
+          state.doc.animation = made;
+          state.anim.time = AN.lengthOf(made);
+          state.dirty = true;
+          applyAnimationOffsets();
+          drawAnimationPanel();
+          setStatus(`${made.steps.length} parts, ${AN.lengthOf(made).toFixed(1)} seconds.`);
+        }
+      },
+      {
+        key: '__together',
+        label: 'Put it back together',
+        type: 'action',
+        run: () => {
+          state.anim.time = 0;
+          applyAnimationOffsets();
+          drawAnimationPanel();
+        }
+      },
+      ...(story.steps || []).slice(0, 12).map((step, i) => ({
+        key: `__s${i}`,
+        label: '',
+        type: 'note',
+        text: `${(step.start || 0).toFixed(2)}s  ${step.name} · ${Math.round(
+          Math.hypot(...(step.move || [0, 0, 0]))
+        )} away`
+      })),
+      {
+        key: '__clear',
+        label: 'Clear the storyboard',
+        type: 'action',
+        run: () => {
+          pushUndo('clear animation');
+          state.doc.animation = AN.newStoryboard();
+          state.anim.time = 0;
+          state.dirty = true;
+          applyAnimationOffsets();
+          drawAnimationPanel();
+        }
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Nothing here moves the model. The parts come apart on screen and the geometry stays where it is, so wherever the playhead stops, the assembly is still assembled.'
+      }
+    ],
+    () => {
+      state.anim.playing = false;
+    }
+  );
+}
+
+/** Run the storyboard, or stop it. */
+function togglePlay() {
+  if (!state.anim) return;
+  if (state.anim.playing) {
+    state.anim.playing = false;
+    drawAnimationPanel();
+    return;
+  }
+  const story = state.doc.animation;
+  const length = AN.lengthOf(story);
+  state.anim.playing = true;
+  state.anim.time = 0;
+  const started = performance.now();
+
+  const tick = () => {
+    if (!state.anim.playing) return;
+    const t = (performance.now() - started) / 1000;
+    state.anim.time = Math.min(length, t);
+    applyAnimationOffsets();
+    if (t >= length) {
+      state.anim.playing = false;
+      drawAnimationPanel();
+      setStatus('Apart.');
+      return;
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  drawAnimationPanel();
+}
+
+/**
+ * A still of the model, better than the screen can draw in real time.
+ *
+ * Not a path tracer and not pretending to be one. What makes the difference is
+ * accumulation: the same view is drawn many times with the camera moved by a
+ * fraction of a pixel and the lights moved a little each pass, and the results
+ * averaged. Jittering the camera gives antialiasing far past what the hardware
+ * does, and jittering the lights turns every hard shadow soft for nothing,
+ * because a light sampled over an area is what a soft shadow is.
+ *
+ * The finish comes from the material, which is the point of having said what
+ * each body is made of: steel renders as metal because it is metal, and a
+ * printed part does not.
+ */
+function cmdRender() {
+  if (state.sketcher.active) finishSketch();
+  if (!(state.result?.bodies || []).length) {
+    setStatus('Nothing to render yet.');
+    return;
+  }
+  const kept = state.render || {
+    size: '1600',
+    samples: '48',
+    softness: '0.08',
+    background: '#20242a',
+    finish: true
+  };
+
+  showInspector(
+    'Render',
+    [
+      {
+        key: 'size',
+        label: 'Width in pixels',
+        type: 'select',
+        value: kept.size,
+        options: [
+          ['800', '800, quick look'],
+          ['1600', '1600, for a document'],
+          ['2400', '2400, for print'],
+          ['3200', '3200, big']
+        ]
+      },
+      {
+        key: 'samples',
+        label: 'Passes',
+        type: 'select',
+        value: kept.samples,
+        options: [
+          ['8', '8, rough'],
+          ['24', '24'],
+          ['48', '48, good'],
+          ['128', '128, slow and clean']
+        ]
+      },
+      { key: 'softness', label: 'How soft the shadows', type: 'expr', value: kept.softness },
+      {
+        key: 'background',
+        label: 'Behind it',
+        type: 'select',
+        value: kept.background,
+        options: [
+          ['#20242a', 'The usual dark'],
+          ['#f2f0ec', 'White, for a document'],
+          ['#000000', 'Black'],
+          ['transparent', 'Nothing, so it can be laid on anything']
+        ]
+      },
+      { key: 'finish', label: 'Use what each body is made of', type: 'bool', value: kept.finish },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'More passes means less noise and a cleaner edge, and takes longer in proportion. Nothing of the tool is in the picture: no grid, no planes, no manipulator.'
+      }
+    ],
+    async (v) => {
+      state.render = { ...v };
+      const scope = resolveParameters(state.doc.parameters);
+      const width = Math.round(safeEval(v.size, scope, 1600));
+      const rect = state.vp.canvas.getBoundingClientRect();
+      const height = Math.max(64, Math.round((width * rect.height) / Math.max(1, rect.width)));
+
+      const undo = v.finish ? applyRenderFinish() : null;
+      setStatus(`Rendering ${width} by ${height}, ${v.samples} passes...`);
+      let canvas;
+      try {
+        canvas = await state.vp.renderStill({
+          width,
+          height,
+          samples: Math.round(safeEval(v.samples, scope, 48)),
+          softness: safeEval(v.softness, scope, 0.08),
+          background: v.background
+        });
+      } catch (err) {
+        undo?.();
+        setStatus(`The render failed: ${err.message}`);
+        return;
+      }
+      undo?.();
+
+      const bytes = await pngBytesOf(canvas);
+      const base = (state.docPath ? state.docPath.split(/[\\/]/).pop() : 'Untitled').replace(
+        /\.anvil$/i,
+        ''
+      );
+      const res = await window.anvil.exportImage?.(`${base}.png`, bytes);
+      if (res?.ok) {
+        setStatus(`Saved ${res.path.split(/[\\/]/).pop()}, ${width} by ${height}.`);
+        window.anvil.showItem(res.path);
+      } else if (res?.error) {
+        setStatus(`Could not save it: ${res.error}`);
+      } else {
+        setStatus('Render finished, not saved.');
+      }
+    }
+  );
+}
+
+/**
+ * Give every body the finish of what it is made of, and hand back the undo.
+ *
+ * This is what makes the Material command worth more than a number on a mass
+ * report: steel renders as metal because it is metal. Put back afterwards,
+ * because the working view is deliberately matt, so the shape is the subject
+ * and not the finish.
+ */
+function applyRenderFinish() {
+  const mats = state.doc.materials || {};
+  const was = [];
+  for (const record of state.records || []) {
+    const entry = state.vp.bodies?.get(record.id);
+    if (!entry?.mat) continue;
+    const name = mats.byBody?.[record.id] || mats.default || 'pla';
+    was.push({ mat: entry.mat, metalness: entry.mat.metalness, roughness: entry.mat.roughness });
+    const metal = ['aluminium', 'steel', 'stainless', 'brass', 'titanium'].includes(name);
+    entry.mat.metalness = metal ? 0.85 : 0.05;
+    entry.mat.roughness = metal ? 0.32 : name === 'resin' ? 0.25 : 0.55;
+    entry.mat.needsUpdate = true;
+  }
+  return () => {
+    for (const w of was) {
+      w.mat.metalness = w.metalness;
+      w.mat.roughness = w.roughness;
+      w.mat.needsUpdate = true;
+    }
+    state.vp.invalidate();
+  };
+}
+
+/** A canvas as PNG bytes, which is what the file writer wants. */
+async function pngBytesOf(canvas) {
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /**

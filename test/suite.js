@@ -89,6 +89,7 @@ import * as PL from '../src/renderer/plastic.js';
 import * as AS from '../src/renderer/assembly.js';
 import { decalMesh } from '../src/renderer/decal.js';
 import * as CF from '../src/renderer/configure.js';
+import * as AM from '../src/renderer/animation.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
@@ -7271,6 +7272,116 @@ async function run() {
     const size = meshSize(mesh);
     near(size[0], 5, 0.01, 'pushed along the frame, which here is world x');
     out.dispose();
+  });
+
+  /* -------- animation -------- */
+
+  /** Three parts in a stack, each its own component, as the explode wants them. */
+  function stackedParts() {
+    return [
+      { component: 'a', name: 'Bottom', centre: [0, 0, 0] },
+      { component: 'b', name: 'Middle', centre: [0, 0, 10] },
+      { component: 'c', name: 'Top', centre: [0, 0, 20] }
+    ];
+  }
+
+  test('animation: a step eases in and out rather than starting dead', () => {
+    const step = { start: 1, duration: 2 };
+    near(AM.progressOf(step, 0), 0, 1e-12, 'nothing before it starts');
+    near(AM.progressOf(step, 1), 0, 1e-12, 'nothing at the moment it starts');
+    near(AM.progressOf(step, 2), 0.5, 1e-12, 'halfway at halfway');
+    near(AM.progressOf(step, 3), 1, 1e-12, 'all of it at the end');
+    near(AM.progressOf(step, 9), 1, 1e-12, 'and it stays there after');
+    // Eased means it leaves flat: a quarter of the way through in time is less
+    // than a quarter of the way through in distance.
+    assert(AM.progressOf(step, 1.5) < 0.25, 'it leaves gently');
+    assert(AM.progressOf(step, 2.5) > 0.75, 'and arrives gently');
+  });
+
+  test('animation: an auto explode sends every part away from the middle', () => {
+    const story = AM.autoExplode(stackedParts(), { spread: 1.5 });
+    assert(story, 'it made one');
+    assert(story.steps.length === 3, `one step each, got ${story.steps.length}`);
+
+    const at = AM.offsetsAt(story, AM.lengthOf(story));
+    const bottom = at.get('a').move;
+    const top = at.get('c').move;
+    assert(bottom[2] < -1, `the bottom went down, got ${bottom[2].toFixed(1)}`);
+    assert(top[2] > 1, `the top went up, got ${top[2].toFixed(1)}`);
+    near(bottom[0], 0, 1e-9, 'and neither went sideways');
+    near(top[1], 0, 1e-9, 'in either direction');
+  });
+
+  test('animation: a part sitting in the middle is not sent to infinity', () => {
+    // It has no direction to go, which is exactly where dividing by its
+    // distance from the middle goes wrong.
+    const story = AM.autoExplode(stackedParts());
+    const at = AM.offsetsAt(story, AM.lengthOf(story));
+    const middle = at.get('b').move;
+    const reach = Math.hypot(...middle);
+    assert(reach > 1, `it did move, ${reach.toFixed(2)}`);
+    assert(reach < 100, `and not by a preposterous amount, ${reach.toFixed(2)}`);
+  });
+
+  test('animation: the parts go one after another, furthest out first', () => {
+    const story = AM.autoExplode(stackedParts());
+    const starts = story.steps.map((s) => s.start);
+    assert(
+      starts.every((v, i) => i === 0 || v >= starts[i - 1]),
+      'each starts no earlier than the one before'
+    );
+    assert(starts[0] === 0, 'and the first goes straight away');
+    assert(starts[starts.length - 1] > 0, 'while the last waits');
+  });
+
+  test('animation: at nought everything is where it was', () => {
+    const story = AM.autoExplode(stackedParts());
+    const at = AM.offsetsAt(story, 0);
+    for (const [, held] of at) {
+      near(Math.hypot(...held.move), 0, 1e-9, 'nothing has moved yet');
+    }
+  });
+
+  test('animation: two steps on one part add up', () => {
+    const story = {
+      steps: [
+        { id: 's1', name: 'Out', component: 'a', move: [10, 0, 0], start: 0, duration: 1 },
+        { id: 's2', name: 'Up', component: 'a', move: [0, 0, 30], start: 1, duration: 1 }
+      ]
+    };
+    const half = AM.offsetsAt(story, 1);
+    near(half.get('a').move[0], 10, 1e-9, 'the first is done');
+    near(half.get('a').move[2], 0, 1e-9, 'and the second has not started');
+
+    const end = AM.offsetsAt(story, 2);
+    near(end.get('a').move[0], 10, 1e-9, 'the first still counts');
+    near(end.get('a').move[2], 30, 1e-9, 'and the second is done too');
+  });
+
+  test('animation: the caption says what is happening, in words', () => {
+    const story = AM.autoExplode(stackedParts());
+    assert(AM.captionAt(story, -1) === 'Together', 'before anything, together');
+    assert(AM.captionAt(story, AM.lengthOf(story)) === 'Apart', 'at the end, apart');
+    // Every moment is either inside a step or after it, never neither.
+    for (let t = 0; t <= AM.lengthOf(story); t += 0.05) {
+      assert(AM.captionAt(story, t).length > 0, `something to say at ${t.toFixed(2)}`);
+    }
+  });
+
+  test('animation: how long it runs is as far as the last step reaches', () => {
+    const story = {
+      steps: [
+        { id: 'a', component: 'x', start: 0, duration: 1 },
+        { id: 'b', component: 'y', start: 3, duration: 0.5 }
+      ]
+    };
+    near(AM.lengthOf(story), 3.5, 1e-9, 'the last step decides it');
+    assert(AM.lengthOf({ steps: [] }) > 0, 'and an empty one still has a length, not a divide by nought');
+  });
+
+  test('animation: one part on its own has nothing to explode', () => {
+    assert(AM.autoExplode([stackedParts()[0]]) === null, 'nothing to take apart');
+    assert(AM.autoExplode([]) === null, 'and nothing at all is nothing');
   });
 
   /* -------- configurations -------- */
