@@ -528,6 +528,7 @@ function handleViewportDown(e) {
         'constructPath',
         'constructEdgeA',
         'constructEdgeB',
+        'plasticFace',
         'jointAxis2',
         'surfaceCurves',
         'sheetEdges'
@@ -1616,6 +1617,18 @@ async function runCommand(cmd) {
       break;
     case 'replaceFace':
       cmdReplaceFace();
+      break;
+    case 'boss':
+      cmdPlastic('boss');
+      break;
+    case 'rest':
+      cmdPlastic('rest');
+      break;
+    case 'snapFit':
+      cmdPlastic('snapFit');
+      break;
+    case 'lip':
+      cmdPlastic('lip');
       break;
     case 'smRule':
       cmdSheetRule();
@@ -5239,6 +5252,12 @@ const RIBBON_MENUS = {
     ['formFlatten', 'Flatten'],
     ['formUniform', 'Make Uniform']
   ],
+  plastic: [
+    ['boss', 'Boss'],
+    ['rest', 'Rest'],
+    ['snapFit', 'Snap Fit'],
+    ['lip', 'Lip']
+  ],
   formCreate: [
     ['formExtrudeCurve', 'Extrude a curve'],
     ['formRevolveCurve', 'Revolve a curve'],
@@ -6794,6 +6813,216 @@ function startInterference() {
     () => {}
   );
   setStatus(`${hits.length} overlap${hits.length === 1 ? '' : 's'} found.`);
+}
+
+/**
+ * The four plastic part features, which all stand on a face.
+ *
+ * One command over four sets of numbers, because they share everything that is
+ * awkward: finding the face, standing something square on it, and putting it
+ * where on that face it goes. What differs between them is only the shape, and
+ * the shape is worked out in plastic.js where it can be checked against numbers.
+ */
+function cmdPlastic(kind) {
+  if (state.sketcher.active) finishSketch();
+  if (!(state.result?.bodies || []).some((b) => b.solid)) {
+    setStatus('These stand on a face of a solid. There is nothing solid yet.');
+    return;
+  }
+  const titles = { boss: 'Boss', rest: 'Rest', snapFit: 'Snap Fit', lip: 'Lip' };
+  const defaults = {
+    boss: {
+      diameter: '8',
+      bore: '3',
+      height: '10',
+      boreDepth: '8',
+      through: false,
+      fillet: '1.5',
+      ribs: '0',
+      ribThickness: '1.5',
+      ribHeight: '7',
+      ribReach: '4',
+      x: '0',
+      y: '0'
+    },
+    rest: {
+      shape: 'round',
+      diameter: '10',
+      width: '10',
+      depth: '10',
+      corner: '1',
+      height: '2',
+      draft: '5',
+      op: 'join',
+      x: '0',
+      y: '0'
+    },
+    snapFit: {
+      length: '12',
+      thickness: '2',
+      width: '6',
+      hook: '1.5',
+      leadIn: '30',
+      retention: '90',
+      clearance: '0.2',
+      facing: '0',
+      op: 'join',
+      x: '0',
+      y: '0'
+    },
+    lip: { width: '1.2', inset: '0.8', height: '2', clearance: '0.15', op: 'join' }
+  };
+
+  const feature = {
+    id: uid('f'),
+    type: kind,
+    face: firstPickedFaceRef(),
+    ...defaults[kind]
+  };
+  openFeatureEditor(feature, titles[kind], plasticFields(kind));
+  if (!feature.face) {
+    setEditPick('plasticFace');
+    setStatus('Click the face it stands on.');
+  }
+}
+
+/** The face currently picked, as a reference that survives a rebuild. */
+function firstPickedFaceRef() {
+  for (const key of state.selection.faces) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const face = record?.topology?.faces[index];
+    if (face) return faceReference(face, record.topology);
+  }
+  return null;
+}
+
+const PLASTIC_FACE_FIELD = {
+  key: '__face',
+  label: 'Stands on',
+  type: 'pick',
+  pick: 'plasticFace',
+  summary: (f) => (f.face ? 'chosen' : 'click a flat face'),
+  clear: (f) => {
+    f.face = null;
+  }
+};
+
+const PLASTIC_WHERE_FIELDS = [
+  { key: 'x', label: 'Across the face', type: 'expr' },
+  { key: 'y', label: 'And up it', type: 'expr' }
+];
+
+function plasticFields(kind) {
+  if (kind === 'boss') {
+    return [
+      PLASTIC_FACE_FIELD,
+      { key: 'diameter', label: 'Outside diameter', type: 'expr' },
+      { key: 'bore', label: 'Bore', type: 'expr' },
+      { key: 'height', label: 'Height', type: 'expr' },
+      { key: 'through', label: 'Bore goes right through', type: 'bool' },
+      { key: 'boreDepth', label: 'Bore depth from the top', type: 'expr', showIf: (f) => !f.through },
+      { key: 'fillet', label: 'Fillet at the foot', type: 'expr' },
+      { key: 'ribs', label: 'How many ribs', type: 'expr' },
+      { key: 'ribThickness', label: 'Rib thickness', type: 'expr', showIf: (f) => Number(f.ribs) > 0 },
+      { key: 'ribHeight', label: 'Rib height', type: 'expr', showIf: (f) => Number(f.ribs) > 0 },
+      { key: 'ribReach', label: 'How far a rib reaches out', type: 'expr', showIf: (f) => Number(f.ribs) > 0 },
+      ...PLASTIC_WHERE_FIELDS,
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'The fillet at the foot is where the load is. A boss without one snaps off there, and on a printed part that is also where the layers run across the stress.'
+      }
+    ];
+  }
+  if (kind === 'rest') {
+    return [
+      PLASTIC_FACE_FIELD,
+      {
+        key: 'shape',
+        label: 'Shape',
+        type: 'select',
+        options: [
+          ['round', 'Round'],
+          ['rectangular', 'Rectangular']
+        ]
+      },
+      { key: 'diameter', label: 'Diameter', type: 'expr', showIf: (f) => f.shape !== 'rectangular' },
+      { key: 'width', label: 'Width', type: 'expr', showIf: (f) => f.shape === 'rectangular' },
+      { key: 'depth', label: 'Depth', type: 'expr', showIf: (f) => f.shape === 'rectangular' },
+      { key: 'corner', label: 'Corner radius', type: 'expr', showIf: (f) => f.shape === 'rectangular' },
+      { key: 'height', label: 'Height', type: 'expr' },
+      { key: 'draft', label: 'Draft angle', type: 'expr' },
+      {
+        key: 'op',
+        label: 'Raised or sunken',
+        type: 'select',
+        options: [
+          ['join', 'Raised'],
+          ['cut', 'Sunken']
+        ]
+      },
+      ...PLASTIC_WHERE_FIELDS,
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Three small pads touch properly. One big face never does, because nothing is flat enough, so it rocks on whichever two high spots it has.'
+      }
+    ];
+  }
+  if (kind === 'snapFit') {
+    return [
+      PLASTIC_FACE_FIELD,
+      { key: 'length', label: 'Beam length', type: 'expr' },
+      { key: 'thickness', label: 'Beam thickness', type: 'expr' },
+      { key: 'width', label: 'Beam width', type: 'expr' },
+      { key: 'hook', label: 'Hook height', type: 'expr' },
+      { key: 'leadIn', label: 'Lead-in angle', type: 'expr' },
+      { key: 'retention', label: 'Retention angle', type: 'expr' },
+      { key: 'facing', label: 'Which way it faces, degrees', type: 'expr' },
+      {
+        key: 'op',
+        label: 'Hook or catch',
+        type: 'select',
+        options: [
+          ['join', 'The hook'],
+          ['cut', 'The catch it clicks into']
+        ]
+      },
+      { key: 'clearance', label: 'Clearance for the catch', type: 'expr', showIf: (f) => f.op === 'cut' },
+      ...PLASTIC_WHERE_FIELDS,
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'The lead-in is the shallow face the hook rides over going in, and a shallow one is the difference between clicking together with a thumb and needing a mallet. Ninety degrees of retention is square, which holds hardest.'
+      }
+    ];
+  }
+  return [
+    PLASTIC_FACE_FIELD,
+    { key: 'width', label: 'Lip width', type: 'expr' },
+    { key: 'inset', label: 'In from the edge', type: 'expr' },
+    { key: 'height', label: 'Height', type: 'expr' },
+    { key: 'clearance', label: 'Clearance', type: 'expr' },
+    {
+      key: 'op',
+      label: 'Lip or groove',
+      type: 'select',
+      options: [
+        ['join', 'The lip'],
+        ['cut', 'The groove it drops into']
+      ]
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'Run it twice with the same numbers, once on each half. The groove takes the clearance on both walls, so the two cannot drift apart.'
+    }
+  ];
 }
 
 /**
@@ -9170,6 +9399,13 @@ function pickIntoEdit(hit) {
     } else {
       return true;
     }
+    ed.pickInto = null;
+  } else if (ed.pickInto === 'plasticFace') {
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = record?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    f.face = faceReference(face, record.topology);
     ed.pickInto = null;
   } else if (ed.pickInto === 'constructEdgeA' || ed.pickInto === 'constructEdgeB') {
     if (hit.kind !== 'edge') return true;
@@ -14488,6 +14724,14 @@ function describeFeature(feature) {
       return { title: 'Boundary Fill', fields: boundaryFillFields() };
     case 'replaceFace':
       return { title: 'Replace Face', fields: replaceFaceFields() };
+    case 'boss':
+      return { title: 'Boss', fields: plasticFields('boss') };
+    case 'rest':
+      return { title: 'Rest', fields: plasticFields('rest') };
+    case 'snapFit':
+      return { title: 'Snap Fit', fields: plasticFields('snapFit') };
+    case 'lip':
+      return { title: 'Lip', fields: plasticFields('lip') };
     case 'extrude':
       return { title: 'Extrude', fields: extrudeFields() };
     case 'revolve':

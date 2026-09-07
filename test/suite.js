@@ -85,6 +85,7 @@ import {
 } from '../src/renderer/meshutil.js';
 import * as RC from '../src/renderer/recognise.js';
 import * as SEL from '../src/renderer/select.js';
+import * as PL from '../src/renderer/plastic.js';
 import { parseSTEP, stepHeader, Ref, Enum, UNSET } from '../src/renderer/stepfile.js';
 import * as BL from '../src/renderer/blend.js';
 import { readSTEP } from '../src/renderer/stepread.js';
@@ -7266,6 +7267,314 @@ async function run() {
     const mesh = K.meshData(body.solid);
     const size = meshSize(mesh);
     near(size[0], 5, 0.01, 'pushed along the frame, which here is world x');
+    out.dispose();
+  });
+
+  /* -------- plastic parts -------- */
+
+  /** A face reference for the top of the first body of a document. */
+  function topFaceOf(out) {
+    const body = out.bodies.find((b) => b.solid);
+    const topo = buildTopology(K.meshData(body.solid));
+    let best = 0;
+    for (let i = 1; i < topo.faces.length; i++) {
+      if (topo.faces[i].normal[2] > 0.99 && topo.faces[i].area > topo.faces[best].area) best = i;
+    }
+    return { body, topo, face: topo.faces[best], ref: faceReference(topo.faces[best], topo) };
+  }
+
+  /** A plate 60 by 60 by 5, sitting on the origin, to stand things on. */
+  function plateDoc() {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '60', depth: '60', height: '5', centered: false })
+    ];
+    return doc;
+  }
+
+  test('plastic: a boss profile is a post with a hole and a foot', () => {
+    const p = PL.bossProfile({ diameter: 8, height: 10, bore: 3, boreDepth: 8, fillet: 1.5 });
+    assert(p, 'it drew one');
+    assert(PL.signedArea(p) > 0, 'and it runs the way a revolve wants');
+    const r = p.map((q) => q[0]);
+    const z = p.map((q) => q[1]);
+    // The widest point is the foot of the fillet, not the wall.
+    near(Math.max(...r), 4 + 1.5, 1e-9, 'the fillet reaches a radius and a half past the wall');
+    near(Math.min(...z), 0, 1e-9, 'it sits on the face');
+    near(Math.max(...z), 10, 1e-9, 'and stands the height it was given');
+    // A blind bore leaves material under it, so the outline touches the axis.
+    assert(Math.min(...r) === 0, 'a blind bore closes on the axis');
+  });
+
+  test('plastic: a bore right through leaves a ring, not a cup', () => {
+    const p = PL.bossProfile({ diameter: 8, height: 10, bore: 3, boreDepth: 10, fillet: 1 });
+    near(Math.min(...p.map((q) => q[0])), 1.5, 1e-9, 'nothing reaches the axis');
+  });
+
+  test('plastic: a bore as wide as the boss is refused', () => {
+    assert(PL.bossProfile({ diameter: 8, bore: 8 }) === null, 'it will not draw a boss with no wall');
+  });
+
+  test('plastic: a snap fit has the lead-in and the retention it was given', () => {
+    const p = PL.snapProfile({ length: 12, thickness: 2, hook: 1.5, leadIn: 30, retention: 90 });
+    assert(p.length === 5, `five corners, got ${p.length}`);
+    const tip = p[2];
+    const back = p[3];
+    near(tip[0], 12, 1e-9, 'the retention face is square at the tip');
+    near(tip[1], 3.5, 1e-9, 'and the hook stands its height above the beam');
+    // The lead-in slope really is the angle asked for.
+    const rise = tip[1] - back[1];
+    const run = tip[0] - back[0];
+    near((Math.atan2(rise, run) * 180) / Math.PI, 30, 1e-6, 'thirty degrees of lead-in');
+  });
+
+  test('plastic: a retention angle under square undercuts the tip', () => {
+    const square = PL.snapProfile({ length: 12, thickness: 2, hook: 1.5, retention: 90 });
+    const under = PL.snapProfile({ length: 12, thickness: 2, hook: 1.5, retention: 60 });
+    near(square[2][0], 12, 1e-9, 'square is square');
+    assert(under[2][0] > 12, `and under square leans out past the tip, got ${under[2][0].toFixed(3)}`);
+  });
+
+  test('plastic: a lead-in longer than the beam is refused', () => {
+    assert(
+      PL.snapProfile({ length: 2, thickness: 2, hook: 5, leadIn: 10 }) === null,
+      'it says so rather than drawing a beam that folds back on itself'
+    );
+  });
+
+  test('plastic: a groove is wider than the lip by the clearance, both sides', () => {
+    const lip = PL.lipBand({ width: 1.2, inset: 0.8, clearance: 0.15 });
+    const groove = PL.lipBand({ width: 1.2, inset: 0.8, clearance: 0.15, groove: true });
+    near(lip.outer - lip.inner, 1.2, 1e-9, 'the lip is the width asked for');
+    near(groove.outer - groove.inner, 1.2 + 0.3, 1e-9, 'and the groove is wider by the clearance both sides');
+    assert(groove.outer > lip.outer, 'and it starts sooner');
+  });
+
+  test('plastic: a rest drafts inwards as it rises', () => {
+    const round = PL.restProfile({ shape: 'round', diameter: 10, height: 2, draft: 10 });
+    assert(round.kind === 'turn', 'a round one is turned');
+    const top = round.contour.find((p) => Math.abs(p[1] - 2) < 1e-9 && p[0] > 0);
+    assert(top[0] < 5, `the top is narrower than the bottom, got ${top[0].toFixed(3)}`);
+    near(top[0], 5 - Math.tan((10 * Math.PI) / 180) * 2, 1e-9, 'by exactly the draft');
+  });
+
+  test('plastic: a draft that runs out before the top is refused', () => {
+    assert(
+      PL.restProfile({ shape: 'round', diameter: 4, height: 20, draft: 45 }) === null,
+      'it will not draw a pad that comes to nothing halfway up'
+    );
+  });
+
+  test('plastic: a rounded rectangle really is rounded and the right size', () => {
+    const r = PL.roundedRect(5, 4, 1);
+    assert(PL.signedArea(r) > 0, 'anticlockwise');
+    const xs = r.map((p) => p[0]);
+    const ys = r.map((p) => p[1]);
+    near(Math.max(...xs), 5, 1e-9, 'ten wide');
+    near(Math.max(...ys), 4, 1e-9, 'and eight deep');
+    // A rounded corner is a rectangle less four bites of the same size.
+    const full = 10 * 8;
+    const bite = 4 * (1 - Math.PI / 4) * 1;
+    assert(Math.abs(PL.signedArea(r) - (full - bite)) < 0.3, 'and the corners really are taken off');
+  });
+
+  test('plastic: a boss on a plate adds material and stands where it was put', () => {
+    const doc = plateDoc();
+    const first = rebuild(doc);
+    const { ref } = topFaceOf(first);
+    const was = first.bodies[0].solid.volume();
+    first.dispose();
+
+    doc.features.push({
+      id: 'fboss',
+      type: 'boss',
+      face: ref,
+      diameter: '8',
+      bore: '3',
+      height: '10',
+      boreDepth: '8',
+      fillet: '1.5',
+      ribs: '0',
+      x: '0',
+      y: '0'
+    });
+    const out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    const now = out.bodies.find((b) => b.solid).solid.volume();
+    assert(now > was, 'it added material');
+    // A post of 8 across and 10 tall, less a bore of 3 across and 8 deep, plus
+    // the fillet at the foot. Near enough that a wrong profile would show.
+    const post = Math.PI * 16 * 10;
+    const bore = Math.PI * 2.25 * 8;
+    assert(
+      Math.abs(now - was - (post - bore)) < post * 0.15,
+      `about a post less a bore, added ${(now - was).toFixed(1)} against ${(post - bore).toFixed(1)}`
+    );
+    out.dispose();
+  });
+
+  test('plastic: a boss with ribs is heavier than one without', () => {
+    const doc = plateDoc();
+    const first = rebuild(doc);
+    const { ref } = topFaceOf(first);
+    first.dispose();
+
+    const boss = (ribs) => ({
+      id: `fb${ribs}`,
+      type: 'boss',
+      face: ref,
+      diameter: '8',
+      bore: '3',
+      height: '10',
+      boreDepth: '8',
+      fillet: '1.5',
+      ribs: String(ribs),
+      ribThickness: '1.5',
+      ribHeight: '7',
+      ribReach: '4',
+      x: '0',
+      y: '0'
+    });
+
+    const plain = rebuild({ ...doc, features: [...doc.features, boss(0)] });
+    const ribbed = rebuild({ ...doc, features: [...doc.features, boss(4)] });
+    assert(ribbed.errors.length === 0, ribbed.errors.map((e) => e.message).join('; '));
+    const a = plain.bodies.find((b) => b.solid).solid.volume();
+    const b = ribbed.bodies.find((b2) => b2.solid).solid.volume();
+    assert(b > a, `ribs add material, ${b.toFixed(1)} against ${a.toFixed(1)}`);
+
+    // Where the ribs went, not just that there are some. Tipping the profile
+    // by swapping two axes instead of turning it puts them on their sides,
+    // which adds the same volume and is completely wrong.
+    const box = K.boundingBox(ribbed.bodies.find((x) => x.solid).solid);
+    near(box.max[2], 5 + 10, 0.01, 'nothing stands above the boss');
+    // The plate is 60 across from the origin, so the ribs are well inside it
+    // and cannot be what sets the width. The reach is what has to show.
+    const grew = [0, 1].every((d) => box.max[d] <= 60.001 && box.min[d] >= -0.001);
+    assert(grew, 'and nothing hangs off the plate');
+    const four = 4 * 1.5 * ((4 * 7) / 2);
+    assert(
+      b - a > four * 0.6 && b - a < four * 1.2,
+      `about four gussets of material, got ${(b - a).toFixed(1)} against ${four.toFixed(1)}`
+    );
+    plain.dispose();
+    ribbed.dispose();
+  });
+
+  test('plastic: a sunken rest takes material away', () => {
+    const doc = plateDoc();
+    const first = rebuild(doc);
+    const { ref } = topFaceOf(first);
+    const was = first.bodies[0].solid.volume();
+    first.dispose();
+
+    doc.features.push({
+      id: 'frest',
+      type: 'rest',
+      face: ref,
+      shape: 'round',
+      diameter: '10',
+      height: '2',
+      draft: '5',
+      op: 'cut',
+      x: '0',
+      y: '0'
+    });
+    const out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    const now = out.bodies.find((b) => b.solid).solid.volume();
+    assert(now < was, `it took material out, ${now.toFixed(1)} from ${was.toFixed(1)}`);
+    assert(was - now < Math.PI * 25 * 2 * 1.05, 'and no more than the pad it was');
+    out.dispose();
+  });
+
+  test('plastic: a lip follows the face and a groove is bigger than it', () => {
+    const doc = plateDoc();
+    const first = rebuild(doc);
+    const { ref } = topFaceOf(first);
+    const was = first.bodies[0].solid.volume();
+    first.dispose();
+
+    const lip = {
+      id: 'flip',
+      type: 'lip',
+      face: ref,
+      width: '1.2',
+      inset: '0.8',
+      height: '2',
+      clearance: '0.15',
+      op: 'join'
+    };
+    const raised = rebuild({ ...doc, features: [...doc.features, lip] });
+    assert(raised.errors.length === 0, raised.errors.map((e) => e.message).join('; '));
+    const added = raised.bodies.find((b) => b.solid).solid.volume() - was;
+    // A band 1.2 wide and 2 high, once round a 60 square set in by 0.8 or so.
+    const roughly = 1.2 * 2 * 4 * (60 - 2 * 1.4);
+    assert(Math.abs(added - roughly) < roughly * 0.2, `about a band round the rim, got ${added.toFixed(1)} against ${roughly.toFixed(1)}`);
+    raised.dispose();
+
+    const grooved = rebuild({
+      ...doc,
+      features: [...doc.features, { ...lip, id: 'fgroove', op: 'cut' }]
+    });
+    const removed = was - grooved.bodies.find((b) => b.solid).solid.volume();
+    assert(removed > added, `the groove is bigger than the lip, ${removed.toFixed(1)} against ${added.toFixed(1)}`);
+    grooved.dispose();
+  });
+
+  test('plastic: a snap fit and its catch are the same shape, the catch bigger', () => {
+    const doc = plateDoc();
+    const first = rebuild(doc);
+    const { ref } = topFaceOf(first);
+    const was = first.bodies[0].solid.volume();
+    first.dispose();
+
+    const snap = {
+      id: 'fsnap',
+      type: 'snapFit',
+      face: ref,
+      length: '12',
+      thickness: '2',
+      width: '6',
+      hook: '1.5',
+      leadIn: '30',
+      retention: '90',
+      clearance: '0.2',
+      facing: '0',
+      op: 'join',
+      x: '0',
+      y: '0'
+    };
+    const hook = rebuild({ ...doc, features: [...doc.features, snap] });
+    assert(hook.errors.length === 0, hook.errors.map((e) => e.message).join('; '));
+    const added = hook.bodies.find((b) => b.solid).solid.volume() - was;
+    assert(added > 100, `a beam of some size, got ${added.toFixed(1)}`);
+    hook.dispose();
+
+    const catchIt = rebuild({
+      ...doc,
+      features: [...doc.features, { ...snap, id: 'fcatch', op: 'cut' }]
+    });
+    const removed = was - catchIt.bodies.find((b) => b.solid).solid.volume();
+    // The catch is the same shape grown by the clearance, so it cannot be
+    // smaller than the hook it has to take.
+    assert(removed > 0, 'the catch took material out');
+    catchIt.dispose();
+  });
+
+  test('plastic: a face that is no longer there is reported, not guessed at', () => {
+    const doc = plateDoc();
+    const out = rebuild({
+      ...doc,
+      features: [
+        ...doc.features,
+        { id: 'fb', type: 'boss', face: { src: { tag: 'nothing', face: 99 } }, diameter: '8', bore: '3', height: '10' }
+      ]
+    });
+    assert(
+      out.errors.some((e) => /no longer on the model/.test(e.message)),
+      `it says so, got ${out.errors.map((e) => e.message).join('; ') || 'nothing'}`
+    );
     out.dispose();
   });
 

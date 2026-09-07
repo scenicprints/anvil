@@ -8,8 +8,8 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.16.0**. 434 tests. Batches 11 to 18 have shipped. Batches
-19, 20, 20b and everything after them have not. Each batch below says which.
+Current version: **2.17.0**. 450 tests. Batches 11 to 19 have shipped. Batches
+20, 20b and everything after them have not. Each batch below says which.
 
 ---
 
@@ -1513,9 +1513,19 @@ surface.
 
 **Batch 18 is done.**
 
-**Batch 19. Plastic parts.** Four. Boss, Snap Fit, Rest, Lip. They are one
-family and want doing together, and they are the four most likely of the lot to
-matter to a printed part.
+**Batch 19. Plastic parts. Shipped in v2.17.0.** All four, under a Plastic menu:
+Boss, Rest, Snap Fit, Lip. One command over four sets of numbers, because they
+share everything awkward: finding the face, standing something square on it, and
+placing it. The shapes themselves are in `plastic.js` as plain outlines with no
+kernel in sight, which is what lets a lead-in angle be checked against a number
+rather than against a picture.
+
+Two things caught here that would catch anyone again. A boss rib is drawn flat
+and tipped up with a quarter turn about X; tipping it by swapping two axes
+instead adds exactly the same volume and lays every rib on its side, so the
+volume test passed and the model was wrong. And a snap catch has to run into the
+material rather than out of it, or cutting it from the face the hook stands on
+removes nothing at all.
 
 **Batch 20. Assembly and insertion.** Ten. Assemble: As-Built Joint, Joint
 Origin, Constrain Components. Insert: Insert Component from a file, Insert

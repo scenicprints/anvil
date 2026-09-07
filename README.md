@@ -708,6 +708,47 @@ change of shape rather than a repair. A cage with nothing wrong with it comes
 back untouched and says so, rather than being quietly rebuilt: a rebuild
 renumbers the points and takes every crease and selection with it.
 
+## Plastic parts
+
+Four features that all stand on a face, because that is what they have in
+common and it is the awkward part. Each of them is a handful of numbers a person
+already knows, and working the outline out from those numbers by hand every time
+is where the mistakes come from.
+
+**Boss** is a post with a hole down it. The bore is measured from the top down,
+because that is where the screw goes in and how deep it can reach is the number
+that matters; a bore as deep as the boss goes right through into whatever the
+boss is standing on. The fillet at the foot is not decoration. A boss without
+one snaps off at the base, which is where the whole load is, and on a printed
+part that is also where the layer lines run straight across the stress. Ribs
+are optional gussets against the wall, and the roadmap note about them is worth
+repeating here: a rib is drawn flat and then tipped up by a quarter turn about
+X. Swapping two axes to tip it instead adds exactly the same volume and lays
+every rib on its side, which is a bug no volume check will catch.
+
+**Rest** is a small pad two parts meet on. Three small pads touch properly. One
+big face never does, because nothing is flat enough, so it rocks on whichever
+two high spots it happens to have. The draft is what lets it come out of a mould
+and, on a printed part, what stops the first layer curling off the edge. Sunken
+is the same shape taken out of the face rather than a different shape.
+
+**Snap Fit** is a cantilever hook, and two angles decide whether it works. The
+lead-in is the shallow face the hook rides over on the way in, and a shallow one
+is the difference between a part that clicks together with a thumb and one that
+needs a mallet. The retention face is the other side: square is the strongest
+and is what most printed snaps use, and leaning it past square makes a hook that
+has to be prised rather than pulled. The same command cuts the catch, as the
+same shape grown by the clearance and running into the material rather than out
+of it, so the face to pick for a catch is the one the hook comes through.
+
+**Lip** is a band round the rim of a mating face, and the groove is the same
+band made wider by the clearance on both walls. Two halves of a printed
+enclosure that meet on a flat face will not stay lined up; this is what lines
+them up. The band follows the face's own outer edge rather than a shape drawn by
+hand, so it fits a rounded rectangle and an odd outline equally well and cannot
+drift out of step with the wall it belongs to. Run it twice with the same
+numbers, once on each half.
+
 **Stitch** and **Patch** are the two halves of Repair, on their own, and both
 are worth having apart from it. A mesh out of a scanner or a bad exporter writes
 every triangle with its own three corners, so two triangles that look joined
@@ -1216,7 +1257,7 @@ model file can never execute anything.
 npm test
 ```
 
-434 tests in a hidden window, checking measured quantities: volumes against
+450 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1250,7 +1291,10 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-mesh17.js` tessellates a solid and runs Stitch, Patch and Direct Edit over
+drilled plate. `demo-plastic.js` makes a plate and puts a ribbed boss, a sunken rest, a snap
+fit and a lip on it, measuring the volume before and after each, which is the
+one thing a picture of a boss cannot tell you. `demo-mesh17.js` tessellates a
+solid and runs Stitch, Patch and Direct Edit over
 it, then sets a material and a colour and checks the colour did not change the
 mass. `demo-formcreate.js` puts a square and a path into a document and builds a form
 off each of the From Curves commands. `demo-sculpt.js` works a box cage through

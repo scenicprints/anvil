@@ -34,6 +34,7 @@ import {
 import { resolveConstruction } from './construction.js';
 import { solveAssembly } from './assembly.js';
 import { solveSketch } from './solver.js';
+import * as PL from './plastic.js';
 import { buildTopology, basisFor } from './topology.js';
 import {
   buildEdgeTools,
@@ -1131,6 +1132,22 @@ export function rebuild(doc, options = {}) {
 
         case 'replaceFace':
           doReplaceFace(feature, doc, scope, scopeObj, errors);
+          break;
+
+        case 'boss':
+          doBoss(feature, doc, scope, scopeObj, applyBoolean, errors);
+          break;
+
+        case 'rest':
+          doRest(feature, doc, scope, scopeObj, applyBoolean, errors);
+          break;
+
+        case 'snapFit':
+          doSnapFit(feature, doc, scope, scopeObj, applyBoolean, errors);
+          break;
+
+        case 'lip':
+          doLip(feature, doc, scope, scopeObj, applyBoolean, errors);
           break;
 
         case 'baseFlange':
@@ -5482,6 +5499,271 @@ export function rebuild(doc, options = {}) {
     }
   }
 
+  /* --------------------------------------------------- plastic parts */
+
+  /**
+   * The face a plastic feature stands on, as a plane to build in.
+   *
+   * Everything in this section is built lying on the XY plane with its own
+   * origin at zero and then moved onto the face, which means each shape is
+   * written once in the frame it is easiest to think about.
+   */
+  function faceStand(feature, errs) {
+    const ref = feature.face;
+    if (!ref) throw new Error('Pick the face it stands on');
+    for (const b of bodies) {
+      if (!b.solid) continue;
+      let topo;
+      try {
+        topo = buildTopology(K.meshData(b.solid));
+      } catch {
+        continue;
+      }
+      const [face] = resolveFaceRefs(topo, [ref]);
+      if (!face) continue;
+      if (!face.planar) throw new Error('That face is curved, so nothing can stand square on it');
+      const basis = basisFor(face.normal);
+      return {
+        body: b,
+        face,
+        topo,
+        mesh: K.meshData(b.solid),
+        plane: {
+          origin: face.centre.slice(),
+          x: basis.x,
+          y: basis.y,
+          n: face.normal.slice()
+        }
+      };
+    }
+    errs.push({ feature: feature.id, message: 'The face this stands on is no longer on the model' });
+    return null;
+  }
+
+  /** Put a solid built at the origin onto a face, offset within it. */
+  function ontoFace(solid, stand, dx, dy, ks) {
+    const shifted = dx || dy ? K.translate(solid, [dx, dy, 0], ks) : solid;
+    return K.transform(shifted, planeMatrix(stand.plane).elements, ks);
+  }
+
+  /**
+   * A screw boss: a post with a hole down it, standing on a face.
+   *
+   * The fillet at the foot is not decoration. A boss without one snaps off at
+   * the base, which is where the whole load is, and on a printed part that is
+   * also where the layers run straight across the stress.
+   */
+  function doBoss(feature, doc, scope, ks, apply, errs) {
+    const stand = faceStand(feature, errs);
+    if (!stand) return;
+
+    const height = safeEval(feature.height, scope, 10);
+    const profile = PL.bossProfile({
+      diameter: safeEval(feature.diameter, scope, 8),
+      height,
+      bore: safeEval(feature.bore, scope, 3),
+      boreDepth: feature.through ? height : safeEval(feature.boreDepth, scope, height * 0.8),
+      fillet: safeEval(feature.fillet, scope, 1.5)
+    });
+    if (!profile) throw new Error('A boss needs a bore smaller than its outside');
+
+    const parts = [K.revolveContours([profile], 360, 0, ks)];
+
+    const ribs = Math.max(0, Math.round(safeEval(feature.ribs, scope, 0)));
+    if (ribs > 0) {
+      const rib = PL.bossRibProfile({
+        diameter: safeEval(feature.diameter, scope, 8),
+        reach: safeEval(feature.ribReach, scope, safeEval(feature.diameter, scope, 8) / 2),
+        height: safeEval(feature.ribHeight, scope, height * 0.7),
+        fillet: safeEval(feature.fillet, scope, 1.5)
+      });
+      const thickness = Math.max(0.1, safeEval(feature.ribThickness, scope, 1.5));
+      // Drawn in the same radius and height frame as the boss, so it is pushed
+      // across its thickness and then stood up, rather than being written out
+      // a second time in a frame of its own.
+      const flat = K.extrudeContours([rib], { height: thickness, center: true }, ks);
+      // Drawn flat with radius across and height up the page, then tipped so
+      // the height stands up the boss and the thickness lies across it. A
+      // quarter turn about X, which is a rotation: swapping two axes instead
+      // would turn the rib inside out.
+      const upright = K.transform(
+        flat,
+        new THREE.Matrix4().makeRotationX(Math.PI / 2).elements,
+        ks
+      );
+      for (let i = 0; i < ribs; i++) {
+        const turn = new THREE.Matrix4().makeRotationZ((i * Math.PI * 2) / ribs);
+        parts.push(K.transform(K.copy(upright, ks), turn.elements, ks));
+      }
+    }
+
+    const built = K.unionAll(parts, ks);
+    const dx = safeEval(feature.x, scope, 0);
+    const dy = safeEval(feature.y, scope, 0);
+    apply(feature, ontoFace(built, stand, dx, dy, ks), 'join');
+  }
+
+  /**
+   * A rest: a small pad two parts meet on.
+   *
+   * Three small pads touch properly. One big face never does, because nothing
+   * is flat enough, so it rocks on whichever two high spots it happens to have.
+   */
+  function doRest(feature, doc, scope, ks, apply, errs) {
+    const stand = faceStand(feature, errs);
+    if (!stand) return;
+
+    const spec = PL.restProfile({
+      shape: feature.shape || 'round',
+      diameter: safeEval(feature.diameter, scope, 10),
+      width: safeEval(feature.width, scope, 10),
+      depth: safeEval(feature.depth, scope, 10),
+      corner: safeEval(feature.corner, scope, 1),
+      height: safeEval(feature.height, scope, 2),
+      draft: safeEval(feature.draft, scope, 5)
+    });
+    if (!spec) throw new Error('That draft angle takes the rest to nothing before it reaches its height');
+
+    const cut = feature.op === 'cut';
+    let built =
+      spec.kind === 'turn'
+        ? K.revolveContours([spec.contour], 360, 0, ks)
+        : K.extrudeContours([spec.contour], { height: spec.height, taperDeg: spec.taper }, ks);
+    // A sunken rest is the same shape taken out of the face rather than a
+    // different shape, so it is built the same way and pushed under.
+    if (cut) built = K.translate(built, [0, 0, -spec.height], ks);
+
+    const dx = safeEval(feature.x, scope, 0);
+    const dy = safeEval(feature.y, scope, 0);
+    apply(feature, ontoFace(built, stand, dx, dy, ks), cut ? 'cut' : 'join');
+  }
+
+  /**
+   * A cantilever snap fit, or the catch it clicks into.
+   *
+   * Two angles decide whether it works. The lead-in is the shallow face the
+   * hook rides over going in, and a shallow one is the difference between a
+   * part that clicks together with a thumb and one that needs a mallet. The
+   * retention face is what holds it there.
+   */
+  function doSnapFit(feature, doc, scope, ks, apply, errs) {
+    const stand = faceStand(feature, errs);
+    if (!stand) return;
+
+    const cut = feature.op === 'cut';
+    const clearance = Math.max(0, safeEval(feature.clearance, scope, 0.2));
+    const grow = cut ? clearance : 0;
+    const profile = PL.snapProfile({
+      length: safeEval(feature.length, scope, 12),
+      thickness: safeEval(feature.thickness, scope, 2) + grow * 2,
+      hook: safeEval(feature.hook, scope, 1.5) + grow,
+      leadIn: safeEval(feature.leadIn, scope, 30),
+      retention: safeEval(feature.retention, scope, 90)
+    });
+    if (!profile) throw new Error('That lead-in angle needs a longer beam than this one');
+
+    const width = Math.max(0.1, safeEval(feature.width, scope, 6) + grow * 2);
+    const flat = K.extrudeContours([profile], { height: width, center: true }, ks);
+    // Drawn lying down, along the beam and up the hook. Stood up so the beam
+    // runs out of the face and the hook points across it.
+    const stand90 = new THREE.Matrix4().set(
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      1, 0, 0, 0,
+      0, 0, 0, 1
+    );
+    let built = K.transform(flat, stand90.elements, ks);
+    // The hook stands out of the face it was put on. The catch is the same
+    // shape going the other way, into the material, because the face to pick
+    // for a catch is the one the hook comes through.
+    if (cut) {
+      built = K.transform(built, new THREE.Matrix4().makeScale(1, 1, -1).elements, ks);
+    }
+    const facing = safeEval(feature.facing, scope, 0);
+    if (facing) {
+      built = K.transform(built, new THREE.Matrix4().makeRotationZ((facing * Math.PI) / 180).elements, ks);
+    }
+
+    const dx = safeEval(feature.x, scope, 0);
+    const dy = safeEval(feature.y, scope, 0);
+    apply(feature, ontoFace(built, stand, dx, dy, ks), cut ? 'cut' : 'join');
+  }
+
+  /**
+   * A lip round the rim of a mating face, or the groove it drops into.
+   *
+   * Two halves of a printed box that meet on a flat face will not stay lined
+   * up. This is what lines them up, and the clearance between the two is the
+   * number that decides whether they click together or have to be forced.
+   *
+   * The band follows the face's own outer edge rather than a shape drawn by
+   * hand, so it fits a rounded rectangle and an odd outline equally well and
+   * cannot drift out of step with the wall it belongs to.
+   */
+  function doLip(feature, doc, scope, ks, apply, errs) {
+    const stand = faceStand(feature, errs);
+    if (!stand) return;
+
+    const band = PL.lipBand({
+      width: safeEval(feature.width, scope, 1.2),
+      inset: safeEval(feature.inset, scope, 0.8),
+      height: safeEval(feature.height, scope, 2),
+      clearance: safeEval(feature.clearance, scope, 0.15),
+      groove: feature.op === 'cut'
+    });
+
+    const loop = outerLoopOf(stand);
+    if (!loop) throw new Error('That face has no outline to follow');
+    const outer = K.offsetContours([loop], band.outer, 'Miter', ks);
+    const inner = K.offsetContours([loop], band.inner, 'Miter', ks);
+
+    // The band itself: the inner offset taken out of the outer one. Done on the
+    // cross sections rather than on two solids, so what is extruded is already
+    // the ring and there is no boolean of two prisms to go wrong.
+    const ring = ks.track(outer.subtract(inner));
+    const solid = ks.track(ring.extrude(band.height, 0, 0, [1, 1], false));
+
+    const cut = feature.op === 'cut';
+    // A groove is cut down into the face; a lip stands up out of it.
+    const placed = cut ? K.translate(solid, [0, 0, -band.height], ks) : solid;
+    apply(feature, K.transform(placed, planeMatrix(stand.plane).elements, ks), cut ? 'cut' : 'join');
+  }
+
+  /**
+   * The outer edge of a face, in that face's own plane.
+   *
+   * Taken from the triangles the face is made of rather than from a sketch, so
+   * it is whatever the face really is. A face with holes in it has more than
+   * one boundary and the outer one is simply the biggest.
+   */
+  function outerLoopOf(stand) {
+    const sheet = SH.sheetFromFaces(stand.mesh, stand.topo, [stand.face.id]);
+    if (!sheet) return null;
+    const loops = SH.boundaryLoops(sheet);
+    if (!loops.length) return null;
+    const P = SH.sheetPoints(sheet);
+    const flat = (v) => {
+      const d = [
+        P[v][0] - stand.plane.origin[0],
+        P[v][1] - stand.plane.origin[1],
+        P[v][2] - stand.plane.origin[2]
+      ];
+      return [
+        d[0] * stand.plane.x[0] + d[1] * stand.plane.x[1] + d[2] * stand.plane.x[2],
+        d[0] * stand.plane.y[0] + d[1] * stand.plane.y[1] + d[2] * stand.plane.y[2]
+      ];
+    };
+    const rings = loops.map((l) => l.map(flat));
+    let best = 0;
+    for (let i = 1; i < rings.length; i++) {
+      if (Math.abs(PL.signedArea(rings[i])) > Math.abs(PL.signedArea(rings[best]))) best = i;
+    }
+    const ring = rings[best];
+    // The kernel offsets inwards on an anticlockwise ring, which is the sign
+    // this feature is written in terms of.
+    return PL.signedArea(ring) < 0 ? ring.slice().reverse() : ring;
+  }
+
   /* ------------------------------------------ what surfaces unlock */
 
   /**
@@ -7324,6 +7606,10 @@ export const FEATURE_LABELS = {
   thicken: 'Thicken',
   boundaryFill: 'Boundary Fill',
   replaceFace: 'Replace Face',
+  boss: 'Boss',
+  rest: 'Rest',
+  snapFit: 'Snap Fit',
+  lip: 'Lip',
   fillet: 'Fillet',
   chamfer: 'Chamfer',
   shell: 'Shell',
