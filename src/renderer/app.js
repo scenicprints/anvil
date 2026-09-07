@@ -10901,7 +10901,68 @@ function startPressPull() {
  * A face pulls itself; a profile extrudes. They are different features and the
  * same gesture, which is the point.
  */
+/**
+ * The arrow for an extrude dialog that is already open.
+ *
+ * Reaching for the ribbon's Extrude is the other way into the same feature, and
+ * it used to be a dead end. The dialog opens with a distance of zero, on
+ * purpose, so nothing appears before a length is given. But there was nothing
+ * to give a length with: no arrow, because an open dialog took the arrow away,
+ * and no value box, because the box belongs to a drag. So the profile was
+ * chosen, the callout said so, and the screen never changed. Typing into the
+ * dialog's own distance field worked, and nothing on screen said that was the
+ * only thing left that would.
+ *
+ * Fusion stands an arrow on the profile the moment it is picked, and dragging
+ * it is how the number gets filled in. This is that arrow. It drives the
+ * feature the dialog is already editing rather than making a new one.
+ */
+function editingPullTarget() {
+  const f = state.editing?.feature;
+  if (!f || f.type !== 'extrude') return null;
+  // Only the plain case. A revolve turns rather than travels, and to-object and
+  // two-sided extrudes are not one length along one axis.
+  if (f.extent !== 'distance' || f.direction === 'two') return null;
+
+  if (f.faces?.length) {
+    const record = (state.records || []).find((r) => r.id === f.faces[0].bodyId);
+    if (!record?.topology) return null;
+    const [face] = resolveFaceRefs(record.topology, [f.faces[0].face]);
+    if (!face?.planar) return null;
+    const b = basisFor(face.normal);
+    return {
+      kind: 'editing',
+      frame: { origin: face.centre, x: b.x, y: b.y, z: face.normal },
+      feature: f
+    };
+  }
+
+  const plane = f.sketch ? state.result?.sketchPlanes?.[f.sketch] : null;
+  const regions = f.sketch ? state.result?.sketchRegions?.[f.sketch] : null;
+  if (!plane || !regions?.length) return null;
+  // A seed is a point inside the region, matched by containment, which is the
+  // same test the rebuild uses. A null seed list means the whole sketch, so the
+  // arrow stands on the first region of it rather than nowhere.
+  const region = f.seeds?.length
+    ? regions.find((r) => regionHoldsSeed(r, f.seeds[0]))
+    : f.seeds === null
+      ? regions[0]
+      : null;
+  if (!region) return null;
+  const origin = regionCentreWorld(region, plane);
+  if (!origin) return null;
+  return {
+    kind: 'editing',
+    frame: { origin, x: plane.x, y: plane.y, z: plane.n },
+    feature: f
+  };
+}
+
 function pullTarget() {
+  // An open dialog gets its own arrow rather than none at all.
+  if (state.editing && !state.sketcher.active && !state.picking && !state.editForm) {
+    return editingPullTarget();
+  }
   if (state.sketcher.active || state.editing || state.picking || state.editForm) return null;
 
   if (state.selection.faces.size === 1 && !state.selection.edges.size) {
@@ -10991,6 +11052,29 @@ function pullPointerDown(e) {
   turnToSeeAxis(frame.z);
   const start = { x: e.clientX, y: e.clientY };
 
+  // The arrow on an open dialog drives the feature that dialog is editing.
+  // Nothing is created and nothing is opened: it is already there, waiting for
+  // the one number it has not been given.
+  if (target.kind === 'editing') {
+    state.pullDrag = {
+      target,
+      frame,
+      start,
+      feature: target.feature,
+      moved: false,
+      typed: false,
+      existing: true
+    };
+    showPullValue(e);
+    try {
+      state.vp.canvas.setPointerCapture(e.pointerId);
+      state.pullDrag.pointerId = e.pointerId;
+    } catch {
+      /* capture is a convenience, not a requirement */
+    }
+    return true;
+  }
+
   const feature =
     target.kind === 'face'
       ? {
@@ -11070,6 +11154,20 @@ function pullPointerUp(e) {
   }
   state.pullDrag = null;
   refreshPullHandle();
+
+  // A press on the arrow that never moved is a click, not a drag, and while a
+  // dialog is waiting to be pointed at the thing under the arrow is the profile
+  // the arrow is standing on. Swallowing that click meant a profile could be
+  // chosen and then never let go of, because every attempt to click it again
+  // landed on the arrow it had just put there.
+  if (d.existing && !d.moved && !d.typed && e && state.editing?.pickInto) {
+    hidePullValue();
+    const profile = profilePickArmed() ? pickProfile(e.clientX, e.clientY) : null;
+    if (profile) return pickIntoEdit({ kind: 'profile', ...profile });
+    const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
+    if (hit) return pickIntoEdit(hit);
+    return true;
+  }
 
   const input = state.pullValueEl?.querySelector('input');
   if (input) {
@@ -12267,6 +12365,11 @@ function commitEdit() {
   state.redo.length = 0;
   state.editing = null;
   el.inspector.classList.add('hidden');
+  // The callout that says which dialog is waiting to be pointed at belongs to
+  // that dialog. Cancel took it down and OK did not, so accepting an extrude
+  // left "EXTRUDE, click the profiles to use" floating by the pointer with no
+  // dialog behind it for the rest of the session.
+  syncPickBar();
   state.dirty = true;
   rebuildAll();
   bakeIfDirectModelling();
@@ -12288,6 +12391,7 @@ function cancelEdit() {
     state.editingJoint = null;
     state.editing = null;
     el.inspector.classList.add('hidden');
+    syncPickBar();
     rebuildAll();
     return;
   }

@@ -1584,7 +1584,12 @@ a sketch was finished; and the value box outliving the feature it belonged to
 and floating beside the pointer for the rest of the session. An earlier version
 of this demo pressed things with `element.click()`, which dispatches no pointer
 events at all, and passed every run while all three were broken. Anything that
-tests a gesture has to make the gesture. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
+tests a gesture has to make the gesture. `demo-extrude.js` covers the same
+feature reached the other way, from the ribbon on an empty document: press the
+button, point at the profile, drag the arrow that appears, click the profile
+again to let go of it and once more to take it back, type the exact size over
+what was dragged to, and check the solid measures 40 by 24 by 12 with no callout
+left hanging by the pointer afterwards. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
 click, rather than the bare `click()` every other demo uses, because that is a
 path no mouse can take and it hid a menu that shut itself before the press could
 land. And `demo-picking.js` checks the things a volume cannot see:
@@ -1661,6 +1666,23 @@ writes into the distance the dialog holds and the model rebuilds each frame, so
 what is on screen while pulling is what will be there when you let go. That is
 worth the rebuild it costs, and since v2.5.0 it mostly costs nothing: the
 timeline in front of the feature is cached.
+
+**The dialog gets the same arrow**, because reaching for the ribbon's Extrude is
+the other way into the same feature and it used to be a dead end. It opens with
+a distance of zero, deliberately, so nothing appears before a length is given,
+and it opens asking to be pointed at, so no selection has to be made before
+reaching for the command. Point at a profile and, until v2.24.0, that was as far
+as it went: the callout said "1 chosen", the dialog held a zero, and there was
+nothing on screen to change it with. The arrow was suppressed while a dialog was
+open, and the value box only exists during a drag, so there was no drag to have
+one. Typing into the dialog's own distance field worked, and nothing said that
+was the only thing left that would.
+
+Now the arrow stands on the profile the moment it is picked and drives the
+feature the dialog is already editing. A press on it that never moves is treated
+as a click on what is underneath rather than a drag of nothing, which is what
+lets the same profile be clicked again to let go of it: the arrow the first
+click puts up is standing exactly where the second click has to land.
 
 **Reaching for a tool starts the sketch.** Clicking Rectangle on the Sketch tab
 with nothing open asks which plane to put it on and then opens the sketch with

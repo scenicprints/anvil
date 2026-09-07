@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.23.1**. 516 tests.
+Current version: **2.24.0**. 516 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
@@ -53,6 +53,31 @@ Three rules came out of that, and they cost a lot to learn:
    changing your mind are most of what a person does.
 
 `tools/demo-pull.js` is written that way and covers all three failures.
+
+**And then a fourth, found the same way and only because he tried it.** The
+ribbon's Extrude was a dead end. It opens with a distance of zero, on purpose,
+and it opens asking to be pointed at. Point at a profile and that was as far as
+it went: the callout said "1 chosen", the dialog held a zero, and nothing on
+screen would change it. The arrow was suppressed while any dialog was open, and
+the value box only exists during a drag, so there was no drag to have one.
+
+Three fixes, and the second and third only exist because the first was made:
+
+- **The dialog gets the arrow.** `editingPullTarget()` stands one on whatever
+  the open extrude is working from, and the drag writes into that feature rather
+  than making a new one.
+- **A press on the arrow that never moves is a click on what is under it.**
+  Without that the arrow the first click puts up covers the profile, and it can
+  be chosen but never let go of.
+- **`commitEdit` never called `syncPickBar`.** Cancel took the callout down and
+  OK did not, so accepting an extrude left "EXTRUDE, click the profiles to use"
+  floating by the pointer, with no dialog behind it, for the rest of the session.
+
+`tools/demo-extrude.js` covers all of it, from an empty document.
+
+A fourth rule, then, and it is the one that would have caught all four:
+**walk the path a person walks on the day they open it.** Every demo before
+these started from a box that was already there. Nobody starts from a box.
 
 ---
 
