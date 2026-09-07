@@ -1217,14 +1217,53 @@ Each a project rather than a batch.
 | **Simulation** | A mesher and an FEA solver. Cost it in front of him before starting. |
 | **Generative design** | Fusion uses a compute farm. On one machine this has to be a smaller thing honestly named: a shape optimiser on a coarse voxel field. Cost it before starting. |
 
-### 6. Ruled out, on the record
+### 6. Hubs, data management and the cloud
 
-Drawings. CAM and toolpaths. PCB and Electronics. Cloud, hubs, projects,
-permissions, versioning, sharing, comments, branching, the Data Panel, the web
-and mobile clients, Fusion Manage, Configurations, and cloud compute of any
-kind. Anvil is offline on purpose and he has not asked otherwise.
+This was one dismissive paragraph until he asked where the hubs were, and the
+paragraph was wrong as well as thin. Lumping everything Fusion delivers over a
+network into "not for us" hid several features that need no network at all.
+Three buckets, and only the first is genuinely out.
 
----
+**6a. Needs a server. Out, and not a judgement call.**
+
+Hubs. Joining a hub by invitation or approval. Projects as shared spaces.
+Project and folder permissions. Cloud storage. The Data Panel. Sharing a design
+by link. Public links and viewer access. Collaborating with teammates on one
+design. Comment threads between people, replies and mentions. The Fusion web
+client. The mobile client. Fusion Manage and PLM. Cloud rendering, cloud
+simulation and generative compute. Component libraries served from a supplier:
+McMaster-Carr, TraceParts, manufacturer parts, Insert Fastener.
+
+Anvil is offline on purpose. None of this is a gap in it.
+
+**6b. Fusion delivers these through the cloud. The capability itself is local,
+and these were filed wrongly.**
+
+- **Configurations** is not a cloud feature at all. It is a Configuration Table
+  driving parametric variants of one design, and every part of it runs on one
+  machine. Eleven configurable aspects: Parameters, Part Number, Description,
+  Features, Visibility, Suppression, Physical Material, Appearance, Sheet Metal
+  Rules, Plastic Rules, Custom. Around fourteen table operations: add, activate,
+  rename, duplicate, delete, edit, sort by row and column, move rows and
+  columns, add parameters and aspects, and theme tables. **This is a real
+  modelling feature, it is missing, and it is reachable**: parameters, feature
+  suppression and a timeline already exist here, so a configuration is a named
+  set of overrides on things the document already has.
+- **Version history.** Fusion keeps every version of a design with a name and a
+  reason. Anvil has undo within a session and a file on disk. Named, restorable
+  versions are a local feature.
+- **Branch and merge** a design and reconcile the two. Local in principle and
+  the hardest thing in this bucket.
+- **Comments and markup on your own model**: a note pinned to a face or a
+  point, markers shown or hidden, a snapshot of the feedback. Useful alone, not
+  only in a team.
+- **A project as a folder of related documents**, with links between them that
+  survive a move. Insert Derive, already on the command list, is the same idea.
+- **Part Number and Description** as document properties. Small, and
+  Configurations needs them.
+
+**6c. Already here.** Undo and redo with named steps, the timeline, parameters,
+and physical materials on a body.
 
 ## Where the work goes next, decided 2026-09-06
 
@@ -1401,6 +1440,13 @@ matter to a printed part.
 Origin, Constrain Components. Insert: Insert Component from a file, Insert
 Derive, Decal, Canvas. Sheet Metal: Hem, Lofted Flange, and a flat pattern that
 tracks whether it is out of date.
+
+**Batch 20b. Configurations and document history.** The local half of section
+6b, and larger than it looks. The Configuration Table with its eleven
+configurable aspects, named restorable versions of a document, part number and
+description, and notes pinned to geometry. Configurations first: it is the one
+that changes how a part is used rather than how it is drawn, and everything it
+needs is already in the document.
 
 **Batches 21 and beyond. The workspaces he ruled in.** Render, Animation,
 Simulation, Generative Design. Each is a project rather than a batch. Cost
