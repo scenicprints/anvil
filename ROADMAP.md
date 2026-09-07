@@ -1092,22 +1092,37 @@ this does not, or something this does less well than it should.
 
 ### 2. Fusion commands that are simply absent
 
-Each verified against the help page named in the audit, not recalled.
+Each verified against a help page, not recalled. **This list has grown twice
+and is not yet closed**: it started at 17 and reached 29 the second time
+someone looked, because the first pass had only opened eight of Fusion's
+panels. The panels still not fully enumerated are named at the end.
 
 | Panel | Missing |
 |---|---|
 | Solid, Create | Boss, Snap Fit, Rest, Lip |
 | Sketch, Modify | Blend Curve |
+| Sketch, Constraints | **Collinear**, **Curvature** |
 | Surface, Modify | Untrim, Merge |
-| Mesh | Stitch, Patch, Direct Edit |
+| Mesh, Modify | Direct Edit, **Physical Material**, **Appearance**, **Compute All** |
+| Mesh, other | Stitch, Patch |
 | Sheet Metal, Create | Hem, Lofted Flange |
+| Sheet Metal, Flat | **Flat pattern as a tracked derived body that can go out of date** |
 | Construct | Perpendicular Plane, Plane Through Two Edges, Point Through Two Edges, User Coordinate System |
 | Inspect | Isocurve Analysis, Design Advice |
 | Assemble | As-Built Joint |
+| Insert | **Insert Component from a file**, **Insert Derive**, **Decal**, **Canvas** |
+| Form, Utilities | **Repair Body** |
+| Make | **3D Print**, which here is Export STL and no send to a slicer |
 
-Fastener Stack, Display Component Colors, Display Mesh Face Groups and Find
-Similar Components are on Fusion's Inspect panel and are library or cloud
-features rather than geometry, so they sit with the cloud work below.
+Library and cloud backed rather than geometry, so they belong with the cloud
+work below: Insert Fastener, McMaster-Carr, manufacturer parts, TraceParts,
+Fastener Stack, Display Component Colors, Display Mesh Face Groups, Find
+Similar Components, Enable Better Performance.
+
+**Panels not yet fully enumerated**, because Fusion has no single page listing
+them and each needs walking tool by tool: Sketch Create, Form Create, Form
+Modify, Solid Assemble, Select, and Sheet Metal Modify. Expect this list to
+grow again when they are.
 
 ### 3. Where this application's own tools stop
 
