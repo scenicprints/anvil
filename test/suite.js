@@ -7269,6 +7269,379 @@ async function run() {
     out.dispose();
   });
 
+  /* -------- sculpting a form -------- */
+
+  const CAGE_XY = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+  const cageBox = (div = [1, 1, 1]) => FM.boxCage(CAGE_XY, [40, 40, 40], div);
+  const moved = (a, b) =>
+    a.points.filter((p, i) => p.some((c, k) => Math.abs(c - b.points[i][k]) > 1e-9)).length;
+
+  test('sculpt: smooth pulls a spike back towards its neighbours', () => {
+    const cage = cageBox([2, 2, 2]);
+    // Pick a point with neighbours all round it and yank it out.
+    const adj = FM.adjacency(cage);
+    const v = cage.points.findIndex((_, i) => (adj.edgesAt[i] || []).length >= 3);
+    assert(v >= 0, 'found a point with neighbours');
+    const was = cage.points[v].slice();
+    cage.points[v] = [was[0] * 3, was[1] * 3, was[2] * 3];
+    const outBefore = Math.hypot(...cage.points[v]);
+
+    const out = FM.smoothPoints(cage, [v], { strength: 0.5, iterations: 1 });
+    const outAfter = Math.hypot(...out.points[v]);
+    assert(outAfter < outBefore, `it came back in, ${outAfter.toFixed(2)} from ${outBefore.toFixed(2)}`);
+    assert(moved(out, cage) === 1, 'and nothing else moved');
+  });
+
+  test('sculpt: smoothing does not depend on which point is numbered first', () => {
+    // Every step has to be worked out from the positions before that step. Done
+    // as it goes, a point relaxed after its neighbour sees a neighbour that has
+    // already moved, and the answer changes with the order of the list.
+    const cage = cageBox([2, 2, 2]);
+    const adj = FM.adjacency(cage);
+    const chosen = cage.points.map((_, i) => i).filter((i) => (adj.edgesAt[i] || []).length >= 3);
+    assert(chosen.length > 4, `enough points to shuffle, got ${chosen.length}`);
+    for (const v of chosen) cage.points[v] = cage.points[v].map((c) => c * 1.4);
+
+    const forward = FM.smoothPoints(cage, chosen, { strength: 0.7, iterations: 3 });
+    const backward = FM.smoothPoints(cage, chosen.slice().reverse(), { strength: 0.7, iterations: 3 });
+    for (const v of chosen) {
+      for (let k = 0; k < 3; k++) {
+        near(forward.points[v][k], backward.points[v][k], 1e-12, 'the same either way round');
+      }
+    }
+    assert(moved(forward, cage) === chosen.length, 'and every chosen point did move');
+  });
+
+  test('sculpt: straighten puts points on one line', () => {
+    const cage = cageBox([2, 2, 2]);
+    // A run along one edge of the box, nudged off line.
+    const run = cage.points
+      .map((p, i) => [p, i])
+      .filter(([p]) => Math.abs(p[1] + 20) < 1e-6 && Math.abs(p[2] + 20) < 1e-6)
+      .map(([, i]) => i);
+    assert(run.length >= 3, `a run of at least three, got ${run.length}`);
+    cage.points[run[1]] = [cage.points[run[1]][0], -14, -20];
+
+    const out = FM.straightenPoints(cage, run);
+    const pts = run.map((i) => out.points[i]);
+    // Every point on the line through the first and last of them.
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    const dir = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const l = Math.hypot(...dir);
+    for (const p of pts) {
+      const d = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+      const cross = Math.hypot(
+        d[1] * dir[2] - d[2] * dir[1],
+        d[2] * dir[0] - d[0] * dir[2],
+        d[0] * dir[1] - d[1] * dir[0]
+      );
+      near(cross / l, 0, 1e-6, 'on the line');
+    }
+  });
+
+  /** One ring of a cylinder cage's wall, at the level nearest the height given. */
+  function wallRing(cage, height) {
+    const levels = [...new Set(cage.points.map((p) => Math.round(p[2] * 1e4) / 1e4))];
+    let want = levels[0];
+    for (const z of levels) if (Math.abs(z - height) < Math.abs(want - height)) want = z;
+    return cage.points
+      .map((p, i) => [p, i])
+      .filter(([p]) => Math.abs(p[2] - want) < 1e-3 && Math.hypot(p[0], p[1]) > 1)
+      .map(([, i]) => i);
+  }
+
+  test('sculpt: cylindrify puts points at one radius about the axis', () => {
+    const cage = FM.cylinderCage(CAGE_XY, 20, 40, 8, 2, true);
+    const ring = wallRing(cage, 0);
+    assert(ring.length >= 4, `a ring, got ${ring.length}`);
+    // Push them in and out, then bring them back onto a cylinder.
+    ring.forEach((i, k) => {
+      const f = 1 + 0.3 * ((k % 3) - 1);
+      cage.points[i] = [cage.points[i][0] * f, cage.points[i][1] * f, cage.points[i][2]];
+    });
+    const wobbled = ring.map((i) => Math.hypot(cage.points[i][0], cage.points[i][1]));
+    const mean = wobbled.reduce((a, b) => a + b, 0) / wobbled.length;
+    assert(Math.max(...wobbled) - Math.min(...wobbled) > 1, 'they really are all over the place');
+
+    const out = FM.cylindrifyPoints(cage, ring, { dir: [0, 0, 1], origin: [0, 0, 0] });
+    const radii = ring.map((i) => Math.hypot(out.points[i][0], out.points[i][1]));
+    near(Math.max(...radii) - Math.min(...radii), 0, 1e-6, 'all at one radius');
+    // The radius kept is the one they averaged, so a ring that wobbles about a
+    // bore lands on the bore and not on some new size.
+    near(radii[0], mean, 1e-6, 'and it is the size they already were');
+  });
+
+  test('sculpt: a frozen point is not moved by anything', () => {
+    const cage = FM.setFrozen(cageBox([2, 2, 2]), [0], true);
+    const all = cage.points.map((_, i) => i);
+    const was = cage.points[0].slice();
+
+    const smoothed = FM.smoothPoints(cage, all, { strength: 1, iterations: 3 });
+    for (let k = 0; k < 3; k++) near(smoothed.points[0][k], was[k], 1e-12, 'smooth left it alone');
+
+    const straight = FM.straightenPoints(cage, all);
+    for (let k = 0; k < 3; k++) near(straight.points[0][k], was[k], 1e-12, 'straighten too');
+
+    // And a drag through the weights cannot reach it either.
+    const w = FM.softWeights(cage, [0, 1], { extent: 'faces', faces: 2 });
+    assert(!w.has(0), 'the drag has no weight on it');
+    assert(w.has(1), 'but does on its neighbour');
+
+    const freed = FM.setFrozen(cage, [0], false);
+    assert(FM.softWeights(freed, [0], {}).has(0), 'and unfreezing gives it back');
+  });
+
+  test('sculpt: erase and fill takes an edge out and leaves one face', () => {
+    const cage = cageBox([2, 2, 2]);
+    const faces = cage.faces.length;
+    const adj = FM.adjacency(cage);
+    const inner = [...adj.edges.values()].find((e) => e.faces.length === 2);
+    assert(inner, 'found an edge with a face either side');
+
+    const out = FM.eraseAndFill(cage, [[inner.a, inner.b]]);
+    assert(out, 'it did something');
+    assert(out.faces.length === faces - 1, `one fewer face, got ${out.faces.length} from ${faces}`);
+    // The merged face is a real face: no corner visited twice, and it has the
+    // corners of both the faces it came from.
+    for (const face of out.faces) {
+      assert(new Set(face).size === face.length, 'no face visits a point twice');
+    }
+    const six = out.faces.find((f) => f.length === 6);
+    assert(six, 'and two quads made a six sided face');
+  });
+
+  test('sculpt: an edge on the rim has nothing to merge into', () => {
+    const open = FM.deleteFaces(cageBox([2, 2, 2]), [0]);
+    const adj = FM.adjacency(open);
+    const rim = [...adj.edges.values()].find((e) => e.faces.length === 1);
+    assert(rim, 'found a rim edge');
+    assert(FM.eraseAndFill(open, [[rim.a, rim.b]]) === null, 'it refuses rather than deleting a face');
+  });
+
+  test('sculpt: bevel puts an edge either side of the one picked', () => {
+    const cage = cageBox([2, 2, 2]);
+    const points = cage.points.length;
+    const adj = FM.adjacency(cage);
+    const e = [...adj.edges.values()].find((x) => x.faces.length === 2);
+    const out = FM.bevelEdge(cage, e.a, e.b, 0.2);
+    assert(out, 'it bevelled');
+    assert(out.points.length > points, `more points than before, ${out.points.length} from ${points}`);
+    // The original edge is still there: a bevel adds edges, it does not replace
+    // the one it was given.
+    const after = FM.adjacency(out);
+    assert(after.edges.has(`${Math.min(e.a, e.b)}_${Math.max(e.a, e.b)}`), 'the edge itself survives');
+    for (const face of out.faces) {
+      assert(new Set(face).size === face.length, 'and every face is still a face');
+    }
+  });
+
+  test('sculpt: slide moves an edge along the surface, not off it', () => {
+    const cage = FM.cylinderCage(CAGE_XY, 20, 40, 8, 3, true);
+    const ring = wallRing(cage, 0);
+    assert(ring.length >= 4, `a ring to slide, got ${ring.length}`);
+    const radius = Math.hypot(cage.points[ring[0]][0], cage.points[ring[0]][1]);
+    const wasZ = ring.map((i) => cage.points[i][2]);
+
+    const out = FM.slideEdges(cage, ring, 0.5);
+    assert(out, 'it slid');
+    const nowZ = ring.map((i) => out.points[i][2]);
+    // The whole ring went the same way, which is the thing that is easy to get
+    // wrong: choosing a side per point shears the ring instead of sliding it.
+    const steps = nowZ.map((z, i) => z - wasZ[i]);
+    assert(steps.every((d) => Math.abs(d) > 1e-6), 'every point moved');
+    assert(steps.every((d) => Math.sign(d) === Math.sign(steps[0])), 'and all the same way');
+    // And they stayed at the radius they were, because they ran along an edge
+    // of the surface rather than through the air.
+    for (const i of ring) {
+      near(Math.hypot(out.points[i][0], out.points[i][1]), radius, 1e-6, 'still on the wall');
+    }
+  });
+
+  test('sculpt: merging two rims joins them point for point', () => {
+    // Two flat grids side by side, welded along the seam they share.
+    const left = FM.planeCage(CAGE_XY, 20, 20, 2, 2);
+    const right = FM.planeCage(
+      { origin: [20, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] },
+      20,
+      20,
+      2,
+      2
+    );
+    const joined = {
+      points: [...left.points, ...right.points.map((p) => p.slice())],
+      faces: [
+        ...left.faces.map((f) => f.slice()),
+        ...right.faces.map((f) => f.map((v) => v + left.points.length))
+      ],
+      creases: {},
+      corners: {}
+    };
+    const before = joined.points.length;
+
+    const near10 = (v, x) => Math.abs(joined.points[v][0] - x) < 1e-6;
+    const runA = joined.points
+      .map((_, i) => i)
+      .filter((i) => i < left.points.length && near10(i, 10))
+      .sort((a, b) => joined.points[a][1] - joined.points[b][1]);
+    const runB = joined.points
+      .map((_, i) => i)
+      .filter((i) => i >= left.points.length && near10(i, 10))
+      .sort((a, b) => joined.points[a][1] - joined.points[b][1]);
+    assert(runA.length === runB.length && runA.length >= 2, `matching rims, ${runA.length} each`);
+
+    const out = FM.mergeEdgeRuns(joined, runA, runB);
+    assert(out, 'they merged');
+    assert(out.points.length === before - runA.length, 'one point per pair went away');
+    assert(FM.boundaryLoops(out).length === 1, 'and the seam is closed: one rim, not two');
+  });
+
+  test('sculpt: rims of different lengths are refused', () => {
+    const cage = cageBox([2, 2, 2]);
+    assert(FM.mergeEdgeRuns(cage, [0, 1, 2], [3, 4]) === null, 'it will not guess a pairing');
+  });
+
+  test('sculpt: an interpolated point is one the surface passes through', () => {
+    const cage = cageBox([2, 2, 2]);
+    const v = 0;
+    const plain = FM.formMesh(cage, 3);
+    const marked = FM.setInterpolated(cage, [v], true);
+    const sharp = FM.formMesh(marked, 3);
+
+    const nearest = (mesh, p) => {
+      let best = Infinity;
+      for (let i = 0; i < mesh.vertProperties.length; i += mesh.numProp) {
+        const d = Math.hypot(
+          mesh.vertProperties[i] - p[0],
+          mesh.vertProperties[i + 1] - p[1],
+          mesh.vertProperties[i + 2] - p[2]
+        );
+        if (d < best) best = d;
+      }
+      return best;
+    };
+    const was = nearest(plain, cage.points[v]);
+    const now = nearest(sharp, cage.points[v]);
+    assert(now < was, `the surface came to the point, ${now.toFixed(4)} from ${was.toFixed(4)}`);
+    near(now, 0, 1e-6, 'and reached it');
+
+    const back = FM.setInterpolated(marked, [v], false);
+    near(nearest(FM.formMesh(back, 3), cage.points[v]), was, 1e-6, 'and it goes back to smooth');
+  });
+
+  /**
+   * An arc bulging out past the rim of a 40 square plane cage.
+   *
+   * Held clear of x = 20 by two, so no point of that rim starts on it: a point
+   * already in the right place does not move, and a count of what moved would
+   * then be counting the curve's shape rather than the command's work.
+   */
+  function bulgeCurve(bulge = 6, steps = 20) {
+    const run = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = -20 + (40 * i) / steps;
+      run.push([22 + bulge * Math.sin((Math.PI * i) / steps), t, 0]);
+    }
+    return run;
+  }
+
+  test('sculpt: match brings a rim onto the nearest place on a curve', () => {
+    const cage = FM.planeCage(CAGE_XY, 40, 40, 3, 3);
+    const rim = cage.points
+      .map((p, i) => [p, i])
+      .filter(([p]) => Math.abs(p[0] - 20) < 1e-6)
+      .map(([, i]) => i);
+    assert(rim.length >= 3, `a rim to match, got ${rim.length}`);
+    const target = bulgeCurve();
+
+    const out = FM.matchPoints(cage, rim, target, { mode: 'nearest' });
+    assert(out, 'it matched');
+    for (const v of rim) {
+      const hit = FM.closestOnRun(target, out.points[v]);
+      near(hit.distance, 0, 1e-6, 'every point landed on the curve');
+    }
+    // Nearest means nearest: they did not shuffle along it, so each stayed
+    // beside where it was.
+    for (const v of rim) {
+      assert(
+        Math.abs(out.points[v][1] - cage.points[v][1]) < 6,
+        'and none of them slid far along it'
+      );
+    }
+    assert(moved(out, cage) === rim.length, 'and nothing else moved');
+  });
+
+  test('sculpt: by curve lays the points out evenly from one end to the other', () => {
+    const cage = FM.planeCage(CAGE_XY, 40, 40, 3, 3);
+    const rim = cage.points
+      .map((p, i) => [p, i])
+      .filter(([p]) => Math.abs(p[0] - 20) < 1e-6)
+      .map(([, i]) => i);
+    const target = bulgeCurve();
+    const total = FM.arcLengths(target).pop();
+
+    const out = FM.matchPoints(cage, rim, target, { mode: 'spread' });
+    const along = rim
+      .map((v) => FM.closestOnRun(target, out.points[v]).along)
+      .sort((a, b) => a - b);
+    near(along[0], 0, 1e-4, 'the first is at the start of the curve');
+    near(along[along.length - 1], total, 1e-4, 'and the last is at the end');
+    const gaps = along.slice(1).map((s, i) => s - along[i]);
+    near(Math.max(...gaps) - Math.min(...gaps), 0, 1e-4, 'and the spacing is even');
+  });
+
+  test('sculpt: by curve can carry the rows behind it along too', () => {
+    const cage = FM.planeCage(CAGE_XY, 40, 40, 4, 4);
+    const rim = cage.points
+      .map((p, i) => [p, i])
+      .filter(([p]) => Math.abs(p[0] - 20) < 1e-6)
+      .map(([, i]) => i);
+    const target = bulgeCurve(10);
+
+    const alone = FM.matchPoints(cage, rim, target, { mode: 'spread' });
+    assert(moved(alone, cage) === rim.length, 'on its own only the rim moves');
+
+    const adj = FM.adjacency(cage);
+    const following = FM.matchPoints(cage, rim, target, {
+      mode: 'spread',
+      adjacency: adj,
+      weights: FM.softWeights(cage, rim, { extent: 'faces', faces: 2 }, adj)
+    });
+    assert(moved(following, cage) > rim.length, 'with a falloff the rows behind come too');
+    // And they come less far than the rim did, or it is a translation and not a
+    // falloff. Against the furthest the rim went, because in this mode each rim
+    // point goes its own distance.
+    const step = (v, from) => Math.hypot(...following.points[v].map((c, k) => c - from.points[v][k]));
+    const rimStep = Math.max(...rim.map((v) => step(v, cage)));
+    const behind = [...FM.softWeights(cage, rim, { extent: 'faces', faces: 2 }, adj)]
+      .filter(([v, w]) => w > 0 && w < 1)
+      .map(([v]) => v);
+    assert(behind.length, 'there are points behind the rim');
+    for (const v of behind) {
+      assert(step(v, cage) < rimStep + 1e-9, 'and each moved less than the rim');
+    }
+  });
+
+  test('sculpt: matching needs somewhere to match to', () => {
+    const cage = FM.planeCage(CAGE_XY, 40, 40, 3, 3);
+    assert(FM.matchPoints(cage, [0, 1], [], {}) === null, 'no curve, no match');
+    assert(FM.matchPoints(cage, [], bulgeCurve(), {}) === null, 'no points, no match');
+  });
+
+  test('sculpt: a frozen point stays put even when the rest is matched', () => {
+    const cage = FM.planeCage(CAGE_XY, 40, 40, 3, 3);
+    const rim = cage.points
+      .map((p, i) => [p, i])
+      .filter(([p]) => Math.abs(p[0] - 20) < 1e-6)
+      .map(([, i]) => i);
+    const held = FM.setFrozen(cage, [rim[0]], true);
+    const out = FM.matchPoints(held, rim, bulgeCurve(), { mode: 'nearest' });
+    for (let k = 0; k < 3; k++) {
+      near(out.points[rim[0]][k], cage.points[rim[0]][k], 1e-12, 'the pinned one did not move');
+    }
+    assert(moved(out, cage) === rim.length - 1, 'and the rest did');
+  });
+
   /* -------- repairing a form -------- */
 
   const PLANE_XY = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };

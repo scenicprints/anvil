@@ -50,6 +50,7 @@ export function cloneCage(cage) {
     faces: cage.faces.map((f) => f.slice()),
     creases: { ...cage.creases },
     corners: { ...cage.corners },
+    frozen: { ...(cage.frozen || {}) },
     symmetry: cage.symmetry ? { ...cage.symmetry } : undefined
   };
 }
@@ -698,6 +699,542 @@ export function faceCage(points) {
   return cage;
 }
 
+/* --------------------------------------------------------- sculpting */
+
+/**
+ * Relax chosen points towards the middle of what they are joined to.
+ *
+ * The one operation that undoes a mess without deciding what the shape should
+ * have been. It is a Laplacian, and the strength is how far towards the
+ * neighbours' average each step goes, so the same call run twice at a half is
+ * gentler than one run at one and lands in nearly the same place.
+ *
+ * Every step is worked out from the positions before that step, not as it goes,
+ * or the answer depends on which point happens to be numbered first.
+ */
+export function smoothPoints(cage, verts, opts = {}) {
+  const chosen = new Set(verts);
+  if (!chosen.size) return null;
+  const strength = Math.max(0, Math.min(1, opts.strength ?? 0.5));
+  const rounds = Math.max(1, Math.round(opts.iterations ?? 1));
+  const held = cage.frozen || {};
+  const adj = adjacency(cage);
+  const out = cloneCage(cage);
+
+  for (let r = 0; r < rounds; r++) {
+    const was = out.points.map((p) => p.slice());
+    for (const v of chosen) {
+      if (held[v]) continue;
+      const around = [];
+      for (const k of adj.edgesAt[v] || []) {
+        const e = adj.edges.get(k);
+        around.push(e.a === v ? e.b : e.a);
+      }
+      if (around.length < 2) continue;
+      let mid = [0, 0, 0];
+      for (const n of around) mid = add(mid, was[n]);
+      mid = mul(mid, 1 / around.length);
+      out.points[v] = add(was[v], mul(sub(mid, was[v]), strength));
+    }
+  }
+  return out;
+}
+
+/**
+ * Pull chosen points onto the straight line that fits them best.
+ *
+ * The line is the one through their middle along the direction they vary in
+ * most, which is the first principal direction, found by turning a starting
+ * guess into the data a few times rather than by writing out an eigenvector
+ * solver for a three by three.
+ */
+export function straightenPoints(cage, verts, opts = {}) {
+  const chosen = [...new Set(verts)];
+  if (chosen.length < 2) return null;
+  const held = cage.frozen || {};
+  const pts = chosen.map((v) => cage.points[v]);
+  const centre = averageOf(pts);
+  const dir = mainDirection(pts, centre);
+  if (!dir) return null;
+
+  const out = cloneCage(cage);
+  const strength = Math.max(0, Math.min(1, opts.strength ?? 1));
+  for (const v of chosen) {
+    if (held[v]) continue;
+    const d = sub(cage.points[v], centre);
+    const onLine = add(centre, mul(dir, dot(d, dir)));
+    out.points[v] = add(cage.points[v], mul(sub(onLine, cage.points[v]), strength));
+  }
+  return out;
+}
+
+/**
+ * Pull chosen points onto a cylinder about an axis.
+ *
+ * The radius is the average of what they already are, so a row of points that
+ * wobbles about a bore lands on the bore rather than on some new size. Given no
+ * axis it takes the direction they vary in most, which is right for a run along
+ * a shaft and wrong for a ring around one, so the axis can be said.
+ */
+export function cylindrifyPoints(cage, verts, opts = {}) {
+  const chosen = [...new Set(verts)];
+  if (chosen.length < 3) return null;
+  const held = cage.frozen || {};
+  const pts = chosen.map((v) => cage.points[v]);
+  const centre = opts.origin ? opts.origin.slice() : averageOf(pts);
+  const dir = opts.dir ? normOr(opts.dir) : mainDirection(pts, centre);
+  if (!dir) return null;
+
+  const radial = (p) => {
+    const d = sub(p, centre);
+    return sub(d, mul(dir, dot(d, dir)));
+  };
+  let radius = opts.radius;
+  if (!(radius > 0)) {
+    radius = 0;
+    for (const p of pts) radius += len(radial(p)) / pts.length;
+  }
+  if (!(radius > 0)) return null;
+
+  const out = cloneCage(cage);
+  const strength = Math.max(0, Math.min(1, opts.strength ?? 1));
+  for (const v of chosen) {
+    if (held[v]) continue;
+    const off = radial(cage.points[v]);
+    const l = len(off);
+    if (l < 1e-9) continue;
+    const want = add(sub(cage.points[v], off), mul(off, radius / l));
+    out.points[v] = add(cage.points[v], mul(sub(want, cage.points[v]), strength));
+  }
+  return out;
+}
+
+/** The average of a set of points. */
+function averageOf(pts) {
+  let c = [0, 0, 0];
+  for (const p of pts) c = add(c, p);
+  return mul(c, 1 / Math.max(1, pts.length));
+}
+
+/**
+ * The direction a set of points varies in most.
+ *
+ * Power iteration on the scatter matrix: start with a guess, push it through
+ * the data, and it turns towards the direction with the most spread in it. A
+ * dozen rounds is far more than a handful of cage points needs.
+ */
+function mainDirection(pts, centre) {
+  let v = [1, 0, 0];
+  for (let round = 0; round < 24; round++) {
+    let next = [0, 0, 0];
+    for (const p of pts) {
+      const d = sub(p, centre);
+      next = add(next, mul(d, dot(d, v)));
+    }
+    const l = len(next);
+    if (l < 1e-12) {
+      // The first guess lay square to everything. Try another one rather than
+      // returning a direction that was never in the data.
+      if (round === 0) {
+        v = [0, 1, 0];
+        continue;
+      }
+      return null;
+    }
+    v = mul(next, 1 / l);
+  }
+  return v;
+}
+
+function normOr(v) {
+  const l = len(v);
+  return l > 1e-12 ? mul(v, 1 / l) : null;
+}
+
+/**
+ * Slide a run of points along the edges that lead away from it.
+ *
+ * An edge loop in the wrong place is the commonest thing to want to move, and
+ * moving it by hand pulls it off the surface. Sliding keeps it on the surface by
+ * running each of its points along one of the two edges leaving the loop.
+ *
+ * Which of the two counts as forward is decided once, at the first point, and
+ * carried round the loop, or half the loop slides one way and half the other
+ * and the loop shears instead of sliding.
+ */
+export function slideEdges(cage, verts, t = 0.25) {
+  const chosen = new Set(verts);
+  if (!chosen.size || !t) return null;
+  const held = cage.frozen || {};
+  const adj = adjacency(cage);
+
+  const railsOf = (v) => {
+    const out = [];
+    for (const k of adj.edgesAt[v] || []) {
+      const e = adj.edges.get(k);
+      const other = e.a === v ? e.b : e.a;
+      if (!chosen.has(other)) out.push(other);
+    }
+    return out;
+  };
+
+  // Order the run so the side chosen at one point carries to the next.
+  const order = [...chosen].filter((v) => railsOf(v).length >= 2);
+  if (!order.length) return null;
+
+  const out = cloneCage(cage);
+  let reference = null;
+  for (const v of order) {
+    const rails = railsOf(v);
+    const ways = rails.map((n) => ({ n, dir: normOr(sub(cage.points[n], cage.points[v])) }));
+    const usable = ways.filter((w) => w.dir);
+    if (usable.length < 2) continue;
+    if (!reference) reference = usable[0].dir;
+    let best = usable[0];
+    for (const w of usable) {
+      if (dot(w.dir, reference) > dot(best.dir, reference)) best = w;
+    }
+    reference = best.dir;
+    if (held[v]) continue;
+    const step = t > 0 ? t : -t;
+    const along = t > 0 ? best : pickOther(usable, best);
+    if (!along) continue;
+    out.points[v] = add(cage.points[v], mul(sub(cage.points[along.n], cage.points[v]), step));
+  }
+  return out;
+}
+
+function pickOther(ways, notThis) {
+  for (const w of ways) if (w !== notThis) return w;
+  return null;
+}
+
+/**
+ * Take an edge out and let the two faces either side become one.
+ *
+ * Dissolving rather than deleting: the surface is unchanged, there is simply
+ * one fewer edge holding it. This is how a cage that was subdivided too far
+ * gets brought back without losing the shape.
+ *
+ * A boundary edge has only one face, so there is nothing to merge it into and
+ * it is left alone rather than quietly deleting the face.
+ */
+export function eraseAndFill(cage, pairs) {
+  let out = cloneCage(cage);
+  let done = 0;
+
+  for (const [a, b] of pairs || []) {
+    const adj = adjacency(out);
+    const e = adj.edges.get(edgeKey(a, b));
+    if (!e || e.faces.length !== 2) continue;
+    const [fi, fj] = e.faces;
+    const one = out.faces[fi];
+    const two = out.faces[fj];
+    if (!one || !two) continue;
+
+    /**
+     * The part of a face that survives, which is all of it except the edge.
+     *
+     * The edge runs one way round this face, and the run that is left is the
+     * one that starts where the edge finishes and comes back round to where it
+     * started. Walking from either end without looking at which way the edge
+     * runs gives the two corners of the edge itself, which is the short way and
+     * is exactly the part being removed.
+     */
+    const survivor = (face) => {
+      for (let i = 0; i < face.length; i++) {
+        const x = face[i];
+        const y = face[(i + 1) % face.length];
+        if ((x !== a || y !== b) && (x !== b || y !== a)) continue;
+        const run = [];
+        for (let k = 0; k < face.length; k++) run.push(face[(i + 1 + k) % face.length]);
+        return run;
+      }
+      return null;
+    };
+
+    const first = survivor(one);
+    const second = survivor(two);
+    if (!first || !second) continue;
+    // They run in opposite directions across the edge, so the second picks up
+    // exactly where the first leaves off.
+    if (first[0] !== second[second.length - 1]) continue;
+
+    // Each run ends on the corner the other starts from, so the two shared
+    // corners would otherwise appear twice.
+    const merged = [...first.slice(0, -1), ...second.slice(0, -1)];
+    if (merged.length < 3 || new Set(merged).size !== merged.length) continue;
+
+    const faces = out.faces.filter((_, i) => i !== fi && i !== fj);
+    faces.push(merged);
+    const creases = { ...out.creases };
+    delete creases[edgeKey(a, b)];
+    out = { ...out, faces, creases };
+    done++;
+  }
+  return done ? compactCage(out) : null;
+}
+
+/**
+ * Put an edge either side of one, which is how a subdivided edge is hardened.
+ *
+ * A single edge in a control cage smooths away; two edges close together hold a
+ * shape. That is what Fusion's Bevel Edge does and it is why a chamfer on a form
+ * is a matter of adding edges rather than of cutting a face.
+ *
+ * The loops go in across the edges leaving each end, at the offset given, so a
+ * small offset is a tight bevel.
+ */
+export function bevelEdge(cage, a, b, offset = 0.2) {
+  const t = Math.max(0.01, Math.min(0.49, offset));
+  const adj = adjacency(cage);
+  const e = adj.edges.get(edgeKey(a, b));
+  if (!e) return null;
+
+  // The edge leaving `a` inside each face, which is the one a new loop crosses.
+  const across = [];
+  for (const fi of e.faces) {
+    const face = cage.faces[fi];
+    const at = face.indexOf(a);
+    if (at < 0) continue;
+    const before = face[(at - 1 + face.length) % face.length];
+    const after = face[(at + 1) % face.length];
+    const other = before === b ? after : before;
+    if (other !== b) across.push(other);
+  }
+  if (!across.length) return null;
+
+  let out = cage;
+  let made = 0;
+  for (const c of across) {
+    const next = insertEdgeLoop(out, a, c, t);
+    if (next) {
+      out = next;
+      made++;
+    }
+  }
+  return made ? out : null;
+}
+
+/**
+ * Join two open edges into one, welding their points in pairs.
+ *
+ * The two runs have to have the same number of points: this is a merge, not a
+ * fit, and pretending otherwise would put a crease where two cages happen to
+ * have been divided differently. Each pair meets in the middle, so neither side
+ * is treated as the one that was right.
+ */
+export function mergeEdgeRuns(cage, runA, runB, opts = {}) {
+  if (!runA?.length || runA.length !== runB?.length) return null;
+  const out = cloneCage(cage);
+  const bias = Math.max(0, Math.min(1, opts.bias ?? 0.5));
+
+  const to = new Map();
+  for (let i = 0; i < runA.length; i++) {
+    const a = runA[i];
+    const b = runB[i];
+    if (a === b || to.has(b)) continue;
+    out.points[a] = add(out.points[a], mul(sub(out.points[b], out.points[a]), bias));
+    to.set(b, a);
+  }
+  if (!to.size) return null;
+
+  const at = (v) => (to.has(v) ? to.get(v) : v);
+  const faces = [];
+  for (const face of out.faces) {
+    const run = [];
+    for (const v of face) {
+      const w = at(v);
+      if (run.length && run[run.length - 1] === w) continue;
+      run.push(w);
+    }
+    while (run.length > 1 && run[0] === run[run.length - 1]) run.pop();
+    if (run.length > 2 && new Set(run).size === run.length) faces.push(run);
+  }
+  const creases = {};
+  for (const [k, w] of Object.entries(out.creases)) {
+    const [x, y] = k.split('_').map(Number);
+    if (at(x) !== at(y)) creases[edgeKey(at(x), at(y))] = w;
+  }
+  const corners = {};
+  for (const [v, w] of Object.entries(out.corners)) corners[at(Number(v))] = w;
+  const frozen = {};
+  for (const v of Object.keys(out.frozen || {})) frozen[at(Number(v))] = true;
+  return compactCage({ points: out.points, faces, creases, corners, frozen, symmetry: cage.symmetry });
+}
+
+/**
+ * Pin points so nothing moves them.
+ *
+ * The use of it is shaping one end of a form without disturbing the end that is
+ * already right. It is not a property of the shape, it is a property of the
+ * session, but it lives on the cage because that is what gets saved and what
+ * gets handed to the next person.
+ */
+export function setFrozen(cage, verts, on = true) {
+  if (!verts?.length) return null;
+  const out = cloneCage(cage);
+  out.frozen = { ...(out.frozen || {}) };
+  for (const v of verts) {
+    if (on) out.frozen[v] = true;
+    else delete out.frozen[v];
+  }
+  return out;
+}
+
+/**
+ * Make the surface pass exactly through a point, or let it go back to smooth.
+ *
+ * A subdivision surface normally passes near its control points rather than
+ * through them. Fusion calls the exception an interpolated point; here it is a
+ * corner weight, which is the same thing said in the language the subdivision
+ * already speaks, so no second mechanism has to be kept in step with the first.
+ */
+export function setInterpolated(cage, verts, on = true) {
+  if (!verts?.length) return null;
+  const out = cloneCage(cage);
+  out.corners = { ...(out.corners || {}) };
+  for (const v of verts) {
+    if (on) out.corners[v] = Math.max(out.corners[v] || 0, 4);
+    else delete out.corners[v];
+  }
+  return out;
+}
+
+/**
+ * Where a run of points meets a curve, and how far along it that is.
+ *
+ * Arc length rather than segment number, because a polyline off a fillet has a
+ * hundred short segments at one end and four long ones at the other, and
+ * spacing points by segment would bunch them all at the fillet.
+ */
+export function arcLengths(run) {
+  const at = [0];
+  for (let i = 1; i < run.length; i++) at.push(at[i - 1] + len(sub(run[i], run[i - 1])));
+  return at;
+}
+
+/** The closest point on a polyline, and how far along it that is. */
+export function closestOnRun(run, p) {
+  const at = arcLengths(run);
+  let best = null;
+  for (let i = 0; i + 1 < run.length; i++) {
+    const a = run[i];
+    const b = run[i + 1];
+    const ab = sub(b, a);
+    const l2 = dot(ab, ab);
+    const t = l2 > 1e-18 ? Math.max(0, Math.min(1, dot(sub(p, a), ab) / l2)) : 0;
+    const q = add(a, mul(ab, t));
+    const d = len(sub(p, q));
+    if (!best || d < best.distance) {
+      best = { point: q, distance: d, along: at[i] + Math.sqrt(l2) * t };
+    }
+  }
+  return best;
+}
+
+/** The point a given distance along a polyline. */
+export function pointAlongRun(run, along) {
+  const at = arcLengths(run);
+  const total = at[at.length - 1];
+  const s = Math.max(0, Math.min(total, along));
+  for (let i = 0; i + 1 < run.length; i++) {
+    if (s > at[i + 1]) continue;
+    const span = at[i + 1] - at[i];
+    const t = span > 1e-12 ? (s - at[i]) / span : 0;
+    return add(run[i], mul(sub(run[i + 1], run[i]), t));
+  }
+  return run[run.length - 1].slice();
+}
+
+/**
+ * Bring cage points onto a curve.
+ *
+ * Two ways, and which one is wanted depends on what the curve is for. Onto the
+ * nearest point of it is a match: an open edge of a form put onto the edge of a
+ * solid so the two meet, where every point is already roughly where it belongs
+ * and only needs to arrive. Spread along it is an edit: a row of points laid out
+ * evenly from one end of the curve to the other, which is what dragging a form
+ * to follow a drawn line means, and it moves points a long way on purpose.
+ *
+ * `weights` carries the same move out into the cage around the run, so the
+ * surface follows rather than creasing at the row that was moved. Frozen points
+ * never move, whichever way it is done.
+ */
+export function matchPoints(cage, verts, target, opts = {}) {
+  const chosen = [...new Set(verts)];
+  if (chosen.length < 1 || !target?.length || target.length < 2) return null;
+  const held = cage.frozen || {};
+  const strength = Math.max(0, Math.min(1, opts.strength ?? 1));
+  const out = cloneCage(cage);
+  const shifts = new Map();
+
+  if (opts.mode === 'spread') {
+    // In the order they lie along the curve, so a row picked in any order still
+    // comes out in one direction rather than crossing over itself.
+    const along = new Map();
+    for (const v of chosen) along.set(v, closestOnRun(target, cage.points[v])?.along ?? 0);
+    const order = chosen.slice().sort((a, b) => along.get(a) - along.get(b));
+    const total = arcLengths(target).pop();
+    order.forEach((v, i) => {
+      const s = order.length === 1 ? total / 2 : (total * i) / (order.length - 1);
+      shifts.set(v, sub(pointAlongRun(target, s), cage.points[v]));
+    });
+  } else {
+    for (const v of chosen) {
+      const hit = closestOnRun(target, cage.points[v]);
+      if (hit) shifts.set(v, sub(hit.point, cage.points[v]));
+    }
+  }
+  if (!shifts.size) return null;
+
+  for (const [v, shift] of shifts) {
+    if (held[v]) continue;
+    out.points[v] = add(cage.points[v], mul(shift, strength));
+  }
+
+  // The surrounding cage follows, if it was asked to. Each point takes the move
+  // of whichever chosen point it is weighted against most, which is the one it
+  // is nearest to in the cage.
+  if (opts.weights) {
+    const adj = opts.adjacency || adjacency(cage);
+    const nearestChosen = nearestOf(cage, chosen, adj);
+    for (const [v, w] of opts.weights) {
+      if (held[v] || shifts.has(v) || !(w > 0)) continue;
+      const source = nearestChosen.get(v);
+      const shift = source === undefined ? null : shifts.get(source);
+      if (!shift) continue;
+      out.points[v] = add(cage.points[v], mul(shift, strength * w));
+    }
+  }
+  return out;
+}
+
+/** For every point, which of the chosen ones is fewest edges away. */
+function nearestOf(cage, chosen, adj) {
+  const from = new Map();
+  let front = [];
+  for (const v of chosen) {
+    from.set(v, v);
+    front.push(v);
+  }
+  let guard = 0;
+  while (front.length && guard++ < 4096) {
+    const next = [];
+    for (const v of front) {
+      for (const k of adj.edgesAt[v] || []) {
+        const e = adj.edges.get(k);
+        const other = e.a === v ? e.b : e.a;
+        if (from.has(other)) continue;
+        from.set(other, from.get(v));
+        next.push(other);
+      }
+    }
+    front = next;
+  }
+  return from;
+}
+
 /* ------------------------------------------------------------- topology */
 
 /** Take faces out, and the points nothing uses any more with them. */
@@ -729,7 +1266,11 @@ export function compactCage(cage) {
   for (const [v, w] of Object.entries(cage.corners || {})) {
     if (map.has(Number(v))) corners[map.get(Number(v))] = w;
   }
-  return { points, faces, creases, corners, symmetry: cage.symmetry };
+  const frozen = {};
+  for (const v of Object.keys(cage.frozen || {})) {
+    if (map.has(Number(v))) frozen[map.get(Number(v))] = true;
+  }
+  return { points, faces, creases, corners, frozen, symmetry: cage.symmetry };
 }
 
 /**
@@ -1671,7 +2212,15 @@ export function softWeights(cage, chosen, opts = {}, adj = adjacency(cage)) {
   const weight = new Map();
   for (const v of chosen) weight.set(v, 1);
   const mode = opts.extent || 'none';
-  if (mode === 'none') return weight;
+  // Frozen points are pinned, and that has to be the last word rather than a
+  // suggestion: the whole use of freezing is to shape one part of a form
+  // without disturbing the part that is already right.
+  const held = cage.frozen || {};
+  const pin = (w) => {
+    for (const v of Object.keys(held)) w.delete(Number(v));
+    return w;
+  };
+  if (mode === 'none') return pin(weight);
 
   const shape = (t) => {
     const x = Math.max(0, Math.min(1, 1 - t));
@@ -1701,7 +2250,7 @@ export function softWeights(cage, chosen, opts = {}, adj = adjacency(cage)) {
       front = next;
       if (!front.size) break;
     }
-    return weight;
+    return pin(weight);
   }
 
   // By distance, from whichever chosen point is nearest.
@@ -1713,7 +2262,7 @@ export function softWeights(cage, chosen, opts = {}, adj = adjacency(cage)) {
     if (best >= reach) continue;
     weight.set(v, shape(best / reach) * scale);
   }
-  return weight;
+  return pin(weight);
 }
 
 /**

@@ -847,6 +847,52 @@ subdivision, so two holds an edge for two levels and the third rounds it off.
 Creased hard all round, Catmull-Clark reproduces the cage exactly, which is how
 a form can be a box of precisely 20 as easily as a blob.
 
+The **Shape** menu is the sculpting half of the tab, and every one of these
+works on what is picked rather than on a dialog full of numbers, because the way
+a form is worked is pick, do, look.
+
+**Smooth** relaxes points towards the middle of what they are joined to. It is
+the one operation that undoes a mess without deciding what the shape should have
+been. Every pass is worked out from the positions before that pass, not as it
+goes, or the answer depends on which point happens to be numbered first.
+**Straighten** puts points on the line that fits them best, and **Cylindrify**
+puts them on a cylinder at the radius they already averaged, so a ring that
+wobbles about a bore lands on the bore rather than on some new size. Given no
+axis, both take the direction the points vary in most, which is right along a
+shaft and wrong around one, so the axis can be said.
+
+**Slide Edge** runs a loop along the surface instead of through the air, which
+is how a loop in the wrong place gets moved without denting anything. Which of
+the two ways out of the loop counts as forward is decided once and carried all
+the way round: decided per point, half the loop slides one way and half the
+other and it shears instead of sliding.
+
+**Bevel Edge** puts an edge either side of the one picked. A bevel on a control
+cage is not a cut face, it is more edges: one edge smooths away and two close
+together hold a shape. **Erase And Fill** is the opposite, taking an edge out
+and letting the two faces either side become one, which is how a cage that was
+subdivided too far comes back without losing its shape. An edge on the rim has
+nothing on the other side, so it is left alone rather than quietly deleting a
+face.
+
+**Merge Edge** joins two open edges point for point. Both runs have to have the
+same number of points: this is a merge, not a fit, and joining runs divided
+differently would put a crease along the seam that nobody asked for. **Match**
+brings an open edge onto the nearest place on a curve, which is what makes a
+form meet the edge of a solid. **Edit Form By Curve** is the same machinery the
+other way round: a row of points laid out evenly along a curve from one end to
+the other, moving them a long way on purpose, with the rows behind following if
+asked.
+
+**Freeze** pins points so nothing moves them, which is how one end of a form
+gets shaped without disturbing the end that is already right. It is the last
+word rather than a suggestion: a drag, a smooth and a match all leave a frozen
+point exactly where it was. **Interpolate** makes the surface pass exactly
+through a point rather than near it. Fusion calls that an interpolated point;
+here it is a corner weight, which is the same thing said in the language the
+subdivision already speaks, so there is no second mechanism to keep in step with
+the first.
+
 **Mirror** cuts the cage on a plane, throws the far side away and replaces it
 with a reflection of the near one, so the two halves are the same thing rather
 than two things that happen to match, and it remembers that. **Circular** does
@@ -1112,7 +1158,7 @@ model file can never execute anything.
 npm test
 ```
 
-400 tests in a hidden window, checking measured quantities: volumes against
+417 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1146,7 +1192,9 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-ucs.js` builds a coordinate system and checks its planes
+drilled plate. `demo-sculpt.js` works a box cage through the Shape menu, smoothing, bevelling,
+freezing and then failing to move what it froze, erasing an edge and
+interpolating a point. `demo-ucs.js` builds a coordinate system and checks its planes
 turn up in the dropdowns under its own name, takes a spun profile off a hex bar,
 and breaks a form cage on purpose to watch Repair find both faults and then find
 nothing the second time. `demo-select.js` drills a plate with five bores and works through every rule:

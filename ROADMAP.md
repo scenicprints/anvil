@@ -8,9 +8,9 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.13.0**. 400 tests. Batches 11 to 14 and 18 have shipped.
-Batches 15, 16, 17, 19, 20, 20b and everything after them have not. Each batch
-below says which.
+Current version: **2.14.0**. 417 tests. Batches 11 to 15 and 18 have shipped.
+Batches 16, 17, 19, 20, 20b and everything after them have not. Each batch below
+says which.
 
 ---
 
@@ -1437,11 +1437,24 @@ every face under two square millimetres" is the difference between a model you
 can work on and one you cannot. It also makes every other batch cheaper,
 because every one of them begins by choosing something.
 
-**Batch 15. Form Modify.** Twelve. The thirteen already here are the
-topological verbs, insert edge, subdivide, weld, crease, bridge. The missing
-twelve are the sculpting ones: Bevel Edge, Slide Edge, Match, Interpolate,
-Cylindrify, Straighten, Smooth, Merge Edge, Erase and Fill, Edit By Curve,
-Freeze, Unfreeze. That is the difference between editing a cage and shaping one.
+**Batch 15. Form Modify. Shipped in v2.14.0.** All twelve sculpting verbs, under
+a Shape menu on the Form tab: Smooth, Straighten, Cylindrify, Slide Edge, Bevel
+Edge, Erase And Fill, Merge Edge, Match, Edit Form By Curve, Freeze, Unfreeze,
+Interpolate.
+
+Two of them are worth knowing about before touching this code again. A bevel on
+a control cage is more edges, not a cut face: one edge smooths away and two
+close together hold a shape, so Bevel Edge inserts loops either side rather than
+doing surgery. And Interpolate is a corner weight rather than a flag of its own,
+because Catmull-Clark already has a way to say "pass exactly through this
+point", and a second mechanism would be one more thing to keep in step.
+
+Freezing is enforced in `softWeights`, which every drag goes through, rather
+than in each command. That is why a frozen point survives a drag, a smooth and a
+match alike.
+
+The thirteen that were already here are the topological verbs: insert edge,
+subdivide, weld, crease, bridge.
 
 **Batch 16. Form Create.** Six. Extrude, Revolve, Sweep and Loft in the Form
 environment, building a T-Spline rather than a solid, plus the Pipe and Face

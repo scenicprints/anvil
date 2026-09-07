@@ -1797,6 +1797,45 @@ async function runCommand(cmd) {
     case 'formUnweld':
       cmdFormWeld(true);
       break;
+    case 'formSmooth':
+      cmdFormSmooth();
+      break;
+    case 'formStraighten':
+      cmdFormStraighten();
+      break;
+    case 'formCylindrify':
+      cmdFormCylindrify();
+      break;
+    case 'formSlide':
+      cmdFormSlide();
+      break;
+    case 'formBevel':
+      cmdFormBevel();
+      break;
+    case 'formErase':
+      cmdFormErase();
+      break;
+    case 'formMergeEdge':
+      cmdFormMergeEdge();
+      break;
+    case 'formFreeze':
+      cmdFormFreeze(true);
+      break;
+    case 'formUnfreeze':
+      cmdFormFreeze(false);
+      break;
+    case 'formMatch':
+      cmdFormMatch('nearest');
+      break;
+    case 'formByCurve':
+      cmdFormMatch('spread');
+      break;
+    case 'formInterpolate':
+      cmdFormInterpolate(true);
+      break;
+    case 'formUninterpolate':
+      cmdFormInterpolate(false);
+      break;
     case 'formFlatten':
       cmdFormFlatten();
       break;
@@ -5159,6 +5198,21 @@ const RIBBON_MENUS = {
   formTidy: [
     ['formFlatten', 'Flatten'],
     ['formUniform', 'Make Uniform']
+  ],
+  formShape: [
+    ['formSmooth', 'Smooth'],
+    ['formStraighten', 'Straighten'],
+    ['formCylindrify', 'Cylindrify'],
+    ['formSlide', 'Slide Edge'],
+    ['formBevel', 'Bevel Edge'],
+    ['formErase', 'Erase And Fill'],
+    ['formMergeEdge', 'Merge Edge'],
+    ['formFreeze', 'Freeze'],
+    ['formUnfreeze', 'Unfreeze'],
+    ['formMatch', 'Match'],
+    ['formByCurve', 'Edit Form By Curve'],
+    ['formInterpolate', 'Interpolate'],
+    ['formUninterpolate', 'Un-interpolate']
   ],
   formSelect: [
     ['formGrow', 'Grow'],
@@ -12423,6 +12477,417 @@ function cmdFormWeld(unweld) {
       setStatus(`${verts.length} point${verts.length === 1 ? '' : 's'} ${unweld ? 'unwelded' : 'welded'}.`);
     }
   });
+}
+
+/**
+ * The sculpting verbs, which all work on what is picked in the cage.
+ *
+ * Every one of them takes points or edges rather than a dialog full of numbers,
+ * because the whole way a form is worked is pick, do, look. The few that need a
+ * number ask for one and remember it.
+ */
+function cmdFormSmooth() {
+  withForm('Smooth', (body) => {
+    const verts = cageVertsFromSelection(body);
+    if (!verts.length) {
+      setStatus('Select the points or edges to relax.');
+      return;
+    }
+    const kept = state.formSmooth || { strength: '0.5', iterations: '2' };
+    showInspector(
+      'Smooth',
+      [
+        { key: 'strength', label: 'How far each pass goes', type: 'expr', value: kept.strength },
+        { key: 'iterations', label: 'Passes', type: 'expr', value: kept.iterations },
+        {
+          key: '__note',
+          label: '',
+          type: 'note',
+          text: `${verts.length} point${verts.length === 1 ? '' : 's'}. Two gentle passes land in nearly the same place as one hard one and keep more of the shape.`
+        }
+      ],
+      (v) => {
+        state.formSmooth = { ...v };
+        const scope = resolveParameters(state.doc.parameters);
+        const strength = safeEval(v.strength, scope, 0.5);
+        const iterations = Math.round(safeEval(v.iterations, scope, 2));
+        if (editCage('smooth', body, (cage) => FM.smoothPoints(cage, verts, { strength, iterations }))) {
+          setStatus(`${verts.length} point${verts.length === 1 ? '' : 's'} relaxed.`);
+        }
+      }
+    );
+  });
+}
+
+function cmdFormStraighten() {
+  withForm('Straighten', (body) => {
+    const verts = cageVertsFromSelection(body);
+    if (verts.length < 3) {
+      setStatus('Select three or more points, or the edges through them.');
+      return;
+    }
+    if (editCage('straighten', body, (cage) => FM.straightenPoints(cage, verts))) {
+      setStatus(`${verts.length} points brought onto one line.`);
+    }
+  });
+}
+
+function cmdFormCylindrify() {
+  withForm('Cylindrify', (body) => {
+    const verts = cageVertsFromSelection(body);
+    if (verts.length < 3) {
+      setStatus('Select three or more points, or the edges through them.');
+      return;
+    }
+    const kept = state.formCyl || { axis: '', radius: '' };
+    showInspector(
+      'Cylindrify',
+      [
+        {
+          key: 'axis',
+          label: 'About which axis',
+          type: 'select',
+          value: kept.axis,
+          options: [['', 'Work it out from the points'], ...axisOptions()]
+        },
+        { key: 'radius', label: 'Radius, blank to keep what it is', type: 'text', value: kept.radius },
+        {
+          key: '__note',
+          label: '',
+          type: 'note',
+          text: 'Worked out from the points, the axis is the direction they vary in most. That is right along a shaft and wrong around one, so say which for a ring.'
+        }
+      ],
+      (v) => {
+        state.formCyl = { ...v };
+        const scope = resolveParameters(state.doc.parameters);
+        const opts = {};
+        if (v.axis) {
+          const axis = worldAxisFor(axisSpecFromOption(v.axis));
+          if (axis) {
+            opts.dir = axis.dir;
+            opts.origin = axis.origin;
+          }
+        }
+        const r = String(v.radius || '').trim();
+        if (r) opts.radius = safeEval(r, scope, 0);
+        if (editCage('cylindrify', body, (cage) => FM.cylindrifyPoints(cage, verts, opts))) {
+          setStatus(`${verts.length} points brought onto a cylinder.`);
+        }
+      }
+    );
+  });
+}
+
+function cmdFormSlide() {
+  withForm('Slide Edge', (body) => {
+    const verts = pointsOfEdges(selectedCageEdges(body));
+    if (verts.length < 2) {
+      setStatus('Select the edges to slide.');
+      return;
+    }
+    const kept = state.formSlide || { amount: '0.25' };
+    showInspector(
+      'Slide Edge',
+      [
+        { key: 'amount', label: 'How far, minus one to one', type: 'expr', value: kept.amount },
+        {
+          key: '__note',
+          label: '',
+          type: 'note',
+          text: 'The edges run along the surface rather than off it, so the shape is kept and only the spacing changes. Negative goes the other way.'
+        }
+      ],
+      (v) => {
+        state.formSlide = { ...v };
+        const scope = resolveParameters(state.doc.parameters);
+        const t = Math.max(-0.9, Math.min(0.9, safeEval(v.amount, scope, 0.25)));
+        if (editCage('slide edge', body, (cage) => FM.slideEdges(cage, verts, t))) {
+          setStatus(`${verts.length} points slid.`);
+        }
+      }
+    );
+  });
+}
+
+function cmdFormBevel() {
+  withForm('Bevel Edge', (body) => {
+    const edges = selectedCageEdges(body);
+    if (!edges.length) {
+      setStatus('Select an edge to bevel.');
+      return;
+    }
+    const kept = state.formBevel || { offset: '0.2' };
+    showInspector(
+      'Bevel Edge',
+      [
+        { key: 'offset', label: 'How tight, 0.01 to 0.49', type: 'expr', value: kept.offset },
+        {
+          key: '__note',
+          label: '',
+          type: 'note',
+          text: 'A bevel on a cage is an edge either side rather than a cut face. One edge smooths away; two close together hold the shape.'
+        }
+      ],
+      (v) => {
+        state.formBevel = { ...v };
+        const scope = resolveParameters(state.doc.parameters);
+        const offset = safeEval(v.offset, scope, 0.2);
+        const [a, b] = edges[0];
+        if (editCage('bevel edge', body, (cage) => FM.bevelEdge(cage, a, b, offset))) {
+          setStatus('Edge bevelled.');
+        }
+      }
+    );
+  });
+}
+
+function cmdFormErase() {
+  withForm('Erase And Fill', (body) => {
+    const edges = selectedCageEdges(body);
+    if (!edges.length) {
+      setStatus('Select the edges to take out.');
+      return;
+    }
+    if (editCage('erase and fill', body, (cage) => FM.eraseAndFill(cage, edges))) {
+      setStatus(`${edges.length} edge${edges.length === 1 ? '' : 's'} taken out, the faces merged.`);
+    } else {
+      setStatus('Those edges are on the rim, so there is nothing on the other side to merge into.');
+    }
+  });
+}
+
+/**
+ * Join two open edges into one.
+ *
+ * Both runs have to be the same length. This is a merge, not a fit: joining
+ * runs divided differently would put a crease along the seam, and a crease that
+ * was never asked for is worse than being told the two do not match.
+ */
+function cmdFormMergeEdge() {
+  withForm('Merge Edge', (body) => {
+    const edges = selectedCageEdges(body);
+    const runs = openRunsFrom(body, edges);
+    if (!runs || runs.length !== 2) {
+      setStatus('Select two open edges of the same length, one from each side of the seam.');
+      return;
+    }
+    const [a, b] = runs;
+    if (a.length !== b.length) {
+      setStatus(`Those runs are ${a.length} and ${b.length} points. They have to match.`);
+      return;
+    }
+    if (editCage('merge edge', body, (cage) => FM.mergeEdgeRuns(cage, a, b))) {
+      setStatus(`${a.length} pairs of points joined.`);
+    }
+  });
+}
+
+function cmdFormFreeze(on) {
+  withForm(on ? 'Freeze' : 'Unfreeze', (body) => {
+    const verts = cageVertsFromSelection(body);
+    if (!verts.length) {
+      setStatus(on ? 'Select the points to pin.' : 'Select the points to let go.');
+      return;
+    }
+    if (editCage(on ? 'freeze' : 'unfreeze', body, (cage) => FM.setFrozen(cage, verts, on))) {
+      setStatus(
+        on
+          ? `${verts.length} point${verts.length === 1 ? '' : 's'} pinned. Nothing will move them.`
+          : `${verts.length} point${verts.length === 1 ? '' : 's'} let go.`
+      );
+    }
+  });
+}
+
+function cmdFormInterpolate(on) {
+  withForm(on ? 'Interpolate' : 'Un-interpolate', (body) => {
+    const verts = cageVertsFromSelection(body);
+    if (!verts.length) {
+      setStatus('Select the points the surface should pass through.');
+      return;
+    }
+    if (editCage(on ? 'interpolate' : 'un-interpolate', body, (cage) => FM.setInterpolated(cage, verts, on))) {
+      setStatus(
+        on
+          ? `The surface now passes through ${verts.length} point${verts.length === 1 ? '' : 's'}.`
+          : `${verts.length} point${verts.length === 1 ? '' : 's'} back to smooth.`
+      );
+    }
+  });
+}
+
+/**
+ * Bring part of a form onto a curve.
+ *
+ * Two commands over one operation, because the two things people want here are
+ * opposite ways round. Match takes an open edge of a form that is nearly where
+ * it belongs and puts it exactly on the edge of something else, so the two meet.
+ * Edit By Curve takes a row of points and lays them out along a curve from one
+ * end to the other, which moves them a long way on purpose and is how a form is
+ * made to follow a line that was drawn for it.
+ *
+ * The curve is whatever edges are picked on another body. Nothing new has to be
+ * learned to say where it is, and an edge of a solid is the commonest thing a
+ * form has to meet.
+ */
+function cmdFormMatch(mode) {
+  const title = mode === 'spread' ? 'Edit Form By Curve' : 'Match';
+  withForm(title, (body) => {
+    const verts = cageVertsFromSelection(body);
+    if (!verts.length) {
+      setStatus(`Select the form points to move, and the edges to ${mode === 'spread' ? 'follow' : 'meet'}.`);
+      return;
+    }
+    const target = targetRunApartFrom(body.id);
+    if (!target) {
+      setStatus('Also select the edges on another body that say where they should go.');
+      return;
+    }
+
+    const kept = state.formMatch || { strength: '1', extent: 'none', faces: '2' };
+    showInspector(
+      title,
+      [
+        { key: 'strength', label: 'How far of the way there', type: 'expr', value: kept.strength },
+        {
+          key: 'extent',
+          label: 'Does the rest follow',
+          type: 'select',
+          value: mode === 'spread' ? kept.extent || 'faces' : 'none',
+          options: [
+            ['none', 'Only the points picked'],
+            ['faces', 'And the rows behind them']
+          ]
+        },
+        { key: 'faces', label: 'How many rows', type: 'expr', value: kept.faces },
+        {
+          key: '__note',
+          label: '',
+          type: 'note',
+          text:
+            mode === 'spread'
+              ? `${verts.length} point${verts.length === 1 ? '' : 's'} laid out along ${target.length} points of curve, evenly from one end to the other.`
+              : `${verts.length} point${verts.length === 1 ? '' : 's'} onto the nearest place on the curve.`
+        }
+      ],
+      (v) => {
+        state.formMatch = { ...v };
+        const scope = resolveParameters(state.doc.parameters);
+        const strength = safeEval(v.strength, scope, 1);
+        const faces = Math.round(safeEval(v.faces, scope, 2));
+
+        const done = editCage(mode === 'spread' ? 'edit by curve' : 'match', body, (cage) => {
+          const opts = { mode, strength };
+          if (v.extent === 'faces') {
+            const adj = FM.adjacency(cage);
+            opts.adjacency = adj;
+            opts.weights = FM.softWeights(cage, verts, { extent: 'faces', faces }, adj);
+          }
+          return FM.matchPoints(cage, verts, target, opts);
+        });
+        if (done) {
+          setStatus(
+            mode === 'spread'
+              ? `${verts.length} point${verts.length === 1 ? '' : 's'} laid along the curve.`
+              : `${verts.length} point${verts.length === 1 ? '' : 's'} brought onto the curve.`
+          );
+        }
+      }
+    );
+  });
+}
+
+/**
+ * The picked edges of every body except this one, chained into one curve.
+ *
+ * Chained rather than taken as a bag: two edges of a fillet run end to end and
+ * are one curve, and laying points along them in the order they were clicked
+ * would double back.
+ */
+function targetRunApartFrom(bodyId) {
+  const runs = [];
+  for (const key of state.selection.edges) {
+    const { bodyId: owner, index } = splitKey(key);
+    if (owner === bodyId) continue;
+    const record = (state.records || []).find((r) => r.id === owner);
+    const edge = record?.topology?.edges[index];
+    if (edge?.points?.length > 1) runs.push(edge.points.map((p) => p.slice()));
+  }
+  if (!runs.length) return null;
+  if (runs.length === 1) return runs[0];
+
+  // Join them end to end, taking whichever loose end is nearest each time.
+  const gap = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const out = runs.shift();
+  let guard = 0;
+  while (runs.length && guard++ < 512) {
+    const tail = out[out.length - 1];
+    let best = null;
+    runs.forEach((run, i) => {
+      for (const flip of [false, true]) {
+        const ends = flip ? run.slice().reverse() : run;
+        const d = gap(tail, ends[0]);
+        if (!best || d < best.d) best = { d, i, ends };
+      }
+    });
+    if (!best) break;
+    runs.splice(best.i, 1);
+    out.push(...best.ends.slice(1));
+  }
+  return out;
+}
+
+/** Cage points from whatever is picked: faces, edges, or both. */
+function cageVertsFromSelection(body) {
+  const out = new Set(pointsOfEdges(selectedCageEdges(body)));
+  const cage = body.cage;
+  if (cage) {
+    for (const fi of selectedCageFaces(body)) {
+      for (const v of cage.faces[fi] || []) out.add(v);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The picked edges walked into runs along the open rim.
+ *
+ * A merge needs two runs and needs to know which points pair with which, and
+ * the only way to know that is to follow each rim in order rather than to take
+ * the picked edges as a bag.
+ */
+function openRunsFrom(body, edges) {
+  const cage = body.cage;
+  if (!cage || !edges.length) return null;
+  const wanted = new Set(edges.map(([a, b]) => `${Math.min(a, b)}_${Math.max(a, b)}`));
+  const next = new Map();
+  for (const [a, b] of edges) {
+    if (!next.has(a)) next.set(a, []);
+    if (!next.has(b)) next.set(b, []);
+    next.get(a).push(b);
+    next.get(b).push(a);
+  }
+
+  const runs = [];
+  const used = new Set();
+  for (const start of next.keys()) {
+    if (used.has(start) || next.get(start).length !== 1) continue;
+    const run = [start];
+    used.add(start);
+    let at = start;
+    let guard = 0;
+    while (guard++ < 4096) {
+      const onward = (next.get(at) || []).find((n) => !used.has(n));
+      if (onward === undefined) break;
+      if (!wanted.has(`${Math.min(at, onward)}_${Math.max(at, onward)}`)) break;
+      run.push(onward);
+      used.add(onward);
+      at = onward;
+    }
+    if (run.length > 1) runs.push(run);
+  }
+  return runs;
 }
 
 function cmdFormFlatten() {
