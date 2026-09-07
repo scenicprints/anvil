@@ -1092,37 +1092,81 @@ this does not, or something this does less well than it should.
 
 ### 2. Fusion commands that are simply absent
 
-Each verified against a help page, not recalled. **This list has grown twice
-and is not yet closed**: it started at 17 and reached 29 the second time
-someone looked, because the first pass had only opened eight of Fusion's
-panels. The panels still not fully enumerated are named at the end.
+Every panel walked, 2026-09-06. The count went 17, then 29, then **66**, because
+the first pass had opened eight of Fusion's panels and the second twelve. This
+is the pass where every panel was opened.
 
-| Panel | Missing |
-|---|---|
-| Solid, Create | Boss, Snap Fit, Rest, Lip |
-| Sketch, Modify | Blend Curve |
-| Sketch, Constraints | **Collinear**, **Curvature** |
-| Surface, Modify | Untrim, Merge |
-| Mesh, Modify | Direct Edit, **Physical Material**, **Appearance**, **Compute All** |
-| Mesh, other | Stitch, Patch |
-| Sheet Metal, Create | Hem, Lofted Flange |
-| Sheet Metal, Flat | **Flat pattern as a tracked derived body that can go out of date** |
-| Construct | Perpendicular Plane, Plane Through Two Edges, Point Through Two Edges, User Coordinate System |
-| Inspect | Isocurve Analysis, Design Advice |
-| Assemble | As-Built Joint |
-| Insert | **Insert Component from a file**, **Insert Derive**, **Decal**, **Canvas** |
-| Form, Utilities | **Repair Body** |
-| Make | **3D Print**, which here is Export STL and no send to a slicer |
+**Solid, Create** (4)
+Boss, Snap Fit, Rest, Lip. All four are plastic part features.
 
-Library and cloud backed rather than geometry, so they belong with the cloud
-work below: Insert Fastener, McMaster-Carr, manufacturer parts, TraceParts,
-Fastener Stack, Display Component Colors, Display Mesh Face Groups, Find
-Similar Components, Enable Better Performance.
+**Sketch, Create** (2)
+3-Point Circle. Spun Profile. Every other family matches: three rectangles,
+three arcs, three polygons, five slots, two splines, conic, ellipse, point,
+text, mirror, both patterns, and six of Fusion's seven project and include
+tools.
 
-**Panels not yet fully enumerated**, because Fusion has no single page listing
-them and each needs walking tool by tool: Sketch Create, Form Create, Form
-Modify, Solid Assemble, Select, and Sheet Metal Modify. Expect this list to
-grow again when they are.
+**Sketch, Constraints** (2)
+Collinear. Curvature, which is the G2 constraint.
+
+**Sketch, Modify** (1)
+Blend Curve.
+
+**Surface, Modify** (2)
+Untrim. Merge.
+
+**Mesh** (6)
+Direct Edit, Stitch, Patch, Physical Material, Appearance, Compute All.
+
+**Sheet Metal** (3)
+Hem. Lofted Flange. A flat pattern as a tracked derived body that knows when it
+is out of date and can be updated, rather than a body made once.
+
+**Construct** (4)
+Perpendicular Plane, Plane Through Two Edges, Point Through Two Edges, User
+Coordinate System.
+
+**Inspect** (2)
+Isocurve Analysis. Design Advice.
+
+**Assemble** (3)
+As-Built Joint. Joint Origin. Constrain Components, which is Fusion's older
+constraint based positioning kept alongside joints.
+
+**Insert** (4)
+Insert Component from a file. Insert Derive. Decal. Canvas.
+
+**Make** (1)
+3D Print. Here that is Export STL with no send to a slicer.
+
+**Form, Create** (6)
+Extrude, Revolve, Sweep and Loft, which in the Form environment build a T-Spline
+body from sketch geometry rather than a solid. Two primitives: Pipe and Face.
+
+**Form, Modify** (12)
+Edit By Curve, Merge Edge, Erase and Fill, Bevel Edge, Slide Edge, Smooth,
+Cylindrify, Straighten, Match, Interpolate, Freeze, Unfreeze. Of Fusion's
+twenty five Form Modify tools, thirteen are here.
+
+**Form, Utilities** (1)
+Repair Body.
+
+**Select** (13)
+The whole panel, which barely exists here. Selection modes: Window, Freeform,
+Paint, Adjacent Faces. Selection tools: Select By Name, Select By Boundary,
+Select By Size, Invert Selection, Seed And Boundary. Priority filters for body,
+face, edge and component. Isolate and Unisolate. This application has All Edges
+and Show All, and picking filters that dialogs set for themselves.
+
+Library or cloud backed rather than geometry, so they belong with the cloud work
+below: Insert Fastener, McMaster-Carr, manufacturer parts, TraceParts, Fastener
+Stack, Display Component Colors, Display Mesh Face Groups, Find Similar
+Components, Select All Occurrences, Select Similar Occurrences, Show All
+Components, Enable Better Performance.
+
+**Where the sixty six sit**, largest first: Select 13, Form Modify 12, Mesh 6,
+Form Create 6, Solid Create 4, Construct 4, Insert 4, Assemble 3, Sheet Metal 3,
+Sketch Create 2, Sketch Constraints 2, Surface Modify 2, Inspect 2, Sketch
+Modify 1, Form Utilities 1, Make 1.
 
 ### 3. Where this application's own tools stop
 
