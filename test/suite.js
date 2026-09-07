@@ -39,7 +39,8 @@ import {
   meshExtent,
   designAdvice,
   thicknessAt,
-  meshSize
+  meshSize,
+  spunProfile
 } from '../src/renderer/analysis.js';
 import { sectionedMesh } from '../src/renderer/features.js';
 import { buildTopology } from '../src/renderer/topology.js';
@@ -7076,6 +7077,270 @@ async function run() {
       near(got.p[i], corner[i], 1e-4, `on the corner, axis ${i}`);
     }
     res.dispose();
+  });
+
+  /* -------- spun profile -------- */
+
+  /** One body from a document, with its mesh, ready to measure. */
+  function oneMesh(doc) {
+    const out = rebuild(doc);
+    const body = out.bodies.find((b) => b.solid);
+    return { out, mesh: K.meshData(body.solid) };
+  }
+
+  test('spun: a bar reads as solid to the axis, at the corner radius', () => {
+    // A six sided prism 10 across the flats. Spun, it is a bar as wide as its
+    // corners, which is 10 over the cosine of thirty degrees.
+    const doc = newDocument();
+    const sk = newSketch('XY', 'Hex');
+    const R = 5 / Math.cos(Math.PI / 6);
+    sk.points = [];
+    for (let i = 0; i < 6; i++) {
+      const a = (i * Math.PI) / 3;
+      sk.points.push({ x: R * Math.cos(a), y: R * Math.sin(a) });
+    }
+    sk.entities = [];
+    for (let i = 0; i < 6; i++) {
+      sk.entities.push({ id: i + 1, type: 'line', p: [i, (i + 1) % 6] });
+    }
+    sk.nextEntityId = 7;
+    doc.sketches[sk.id] = sk;
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: uid('f'), type: 'extrude', sketch: sk.id, distance: '30', direction: 'one' }
+    ];
+    const { out, mesh } = oneMesh(doc);
+
+    const got = spunProfile(mesh, { origin: [0, 0, 0], dir: [0, 0, 1] });
+    assert(got, 'it measured something');
+    // The whole point of measuring through the material: a hexagon's corners
+    // are all at one radius, so reading the points alone would call a solid bar
+    // a hollow tube.
+    assert(!got.hollow, 'a solid bar, not a tube');
+    near(got.maxRadius, R, R * 0.01, 'as wide as the corners');
+    near(got.length, 30, 0.01, 'and as long as it is');
+    out.dispose();
+  });
+
+  test('spun: a tube reads as a tube, with both radii', () => {
+    const doc = newDocument();
+    doc.features = [
+      prim('pipe', { diameter: '20', wall: '3', height: '25', centered: true })
+    ];
+    const { out, mesh } = oneMesh(doc);
+    const got = spunProfile(mesh, { origin: [0, 0, 0], dir: [0, 0, 1] });
+    assert(got && got.hollow, 'it is hollow');
+    near(got.maxRadius, 10, 0.2, 'ten out');
+    near(got.minRadius, 7, 0.2, 'and seven in');
+    near(got.length, 25, 0.01, 'the length it was made');
+    out.dispose();
+  });
+
+  test('spun: a bar off to one side spins out to a ring, not a bar', () => {
+    // A block sitting away from the axis sweeps an annulus. This is the check
+    // that the reading is about the axis given rather than about the shape's
+    // own middle.
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '4', depth: '4', height: '10', centered: true, x: '20' })
+    ];
+    const { out, mesh } = oneMesh(doc);
+    const got = spunProfile(mesh, { origin: [0, 0, 0], dir: [0, 0, 1] }, { spokes: 24 });
+    assert(got && got.hollow, 'it sweeps a ring');
+    assert(got.minRadius > 16 && got.minRadius < 19, `inner about 18, got ${got.minRadius.toFixed(2)}`);
+    assert(got.maxRadius > 21 && got.maxRadius < 23, `outer about 22, got ${got.maxRadius.toFixed(2)}`);
+    out.dispose();
+  });
+
+  test('spun: the outline closes, and closes onto the axis when it is solid', () => {
+    const doc = newDocument();
+    doc.features = [prim('cylinder', { diameter: '20', height: '30', centered: true })];
+    const { out, mesh } = oneMesh(doc);
+    const got = spunProfile(mesh, { origin: [0, 0, 0], dir: [0, 0, 1] });
+    assert(!got.hollow, 'a solid cylinder is solid');
+    near(got.loop[0][1], 0, 1e-9, 'the outline starts on the axis');
+    near(got.loop[got.loop.length - 1][1], 0, 1e-9, 'and finishes on it');
+    // Every reading is the same radius, because a cylinder is the one shape
+    // whose spun profile is itself.
+    const radii = got.outer.map((pt) => pt[1]);
+    near(Math.max(...radii) - Math.min(...radii), 0, 0.01, 'and it is straight along its length');
+    out.dispose();
+  });
+
+  /* -------- coordinate systems -------- */
+
+  test('ucs: a frame is square even when the picks are not', () => {
+    // X along the world X, and a second direction deliberately off at a slant.
+    // Y has to come out square to X, not where it was pointed.
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({
+      id: uid('f'),
+      type: 'construction',
+      entry: {
+        id: 'ucs1',
+        name: 'Fixture',
+        type: 'ucs',
+        axisX: { worldAxis: 'x' },
+        axisY: { worldAxis: 'y' }
+      }
+    });
+    const res = rebuild(doc);
+    const got = res.construction.get('ucs1');
+    assert(got && got.kind === 'ucs', `it built, got ${got && got.kind}`);
+    near(dot3(got.x, got.y), 0, 1e-9, 'x and y are square');
+    near(dot3(got.y, got.z), 0, 1e-9, 'y and z are square');
+    near(dot3(got.z, got.x), 0, 1e-9, 'z and x are square');
+    for (const v of [got.x, got.y, got.z]) {
+      near(Math.hypot(v[0], v[1], v[2]), 1, 1e-9, 'and every one of them is a unit');
+    }
+    // Right handed, so a rotation about z takes x towards y the way it does in
+    // the world.
+    const xy = [
+      got.x[1] * got.y[2] - got.x[2] * got.y[1],
+      got.x[2] * got.y[0] - got.x[0] * got.y[2],
+      got.x[0] * got.y[1] - got.x[1] * got.y[0]
+    ];
+    near(dot3(xy, got.z), 1, 1e-9, 'and it is right handed');
+    res.dispose();
+  });
+
+  test('ucs: its three planes and three axes can be referenced', () => {
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({
+      id: uid('f'),
+      type: 'construction',
+      entry: {
+        id: 'ucs2',
+        name: 'Fixture',
+        type: 'ucs',
+        axisX: { worldAxis: 'y' },
+        axisY: { worldAxis: 'z' }
+      }
+    });
+    const res = rebuild(doc);
+    for (const part of ['xy', 'xz', 'yz']) {
+      const got = res.construction.get(`ucs2/${part}`);
+      assert(got && got.kind === 'plane', `${part} is a plane`);
+      near(dot3(got.x, got.y), 0, 1e-9, `${part} is not sheared`);
+      near(dot3(got.n, got.x), 0, 1e-9, `${part}'s normal is square to it`);
+    }
+    for (const part of ['x', 'y', 'z']) {
+      const got = res.construction.get(`ucs2/${part}`);
+      assert(got && got.kind === 'axis', `${part} is an axis`);
+    }
+    const at = res.construction.get('ucs2/origin');
+    assert(at && at.kind === 'point', 'and there is a point at its origin');
+    // Named for the frame, so a dropdown reads "Fixture XY" and not an id.
+    assert(/Fixture/.test(res.construction.get('ucs2/xy').name), 'the planes carry its name');
+    res.dispose();
+  });
+
+  test('ucs: a sketch can be drawn on one of its planes', () => {
+    // The whole reason to have one: a rectangle drawn on the frame's own XY
+    // comes out where the frame is, not where the world is.
+    const doc = newDocument();
+    doc.features.push({
+      id: uid('f'),
+      type: 'construction',
+      entry: {
+        id: 'ucs3',
+        name: 'Tilted',
+        type: 'ucs',
+        axisX: { worldAxis: 'y' },
+        axisY: { worldAxis: 'z' }
+      }
+    });
+    const sk = rectSketch(20, 10);
+    sk.plane = { construction: 'ucs3/xy' };
+    doc.sketches[sk.id] = sk;
+    doc.features.push(
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: uid('f'), type: 'extrude', sketch: sk.id, distance: '5', direction: 'one' }
+    );
+    const out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    const body = out.bodies.find((b) => b.solid);
+    assert(body, 'it made something');
+    near(body.solid.volume(), 20 * 10 * 5, 1, 'the right size');
+    // The frame's z is the world x, so the extrude went along world x.
+    const mesh = K.meshData(body.solid);
+    const size = meshSize(mesh);
+    near(size[0], 5, 0.01, 'pushed along the frame, which here is world x');
+    out.dispose();
+  });
+
+  /* -------- repairing a form -------- */
+
+  const PLANE_XY = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+
+  test('repair: a form with nothing wrong with it is left alone', () => {
+    const cage = FM.boxCage(PLANE_XY, [40, 40, 40], [1, 1, 1]);
+    const { fixed } = FM.repairCage(cage);
+    assert(!fixed.changed, `nothing to do, got ${JSON.stringify(fixed)}`);
+  });
+
+  test('repair: two points in the same place become one', () => {
+    const cage = FM.boxCage(PLANE_XY, [40, 40, 40], [1, 1, 1]);
+    const points = cage.points.length;
+    // Drag one corner exactly onto its neighbour, which is what a snap that
+    // went too far leaves behind.
+    cage.points[1] = cage.points[0].slice();
+    const { cage: out, fixed } = FM.repairCage(cage, { tolerance: 1e-4 });
+    assert(fixed.welded === 1, `one point joined, got ${fixed.welded}`);
+    assert(out.points.length < points, 'and the cage got smaller');
+    // The faces that had both corners are now triangles, not faces with a
+    // corner visited twice.
+    for (const face of out.faces) {
+      assert(new Set(face).size === face.length, 'no face visits a point twice');
+      assert(face.length >= 3, 'and none is under three corners');
+    }
+  });
+
+  test('repair: the same face made twice is made once', () => {
+    const cage = FM.boxCage(PLANE_XY, [40, 40, 40], [1, 1, 1]);
+    const faces = cage.faces.length;
+    // The same face again, started from a different corner and running the
+    // other way, which is how a duplicate really turns up.
+    cage.faces.push(cage.faces[0].slice().reverse());
+    const { cage: out, fixed } = FM.repairCage(cage);
+    assert(fixed.duplicate === 1, `one duplicate found, got ${fixed.duplicate}`);
+    assert(out.faces.length === faces, 'and the count is back where it was');
+  });
+
+  test('repair: a face folded on itself is dropped', () => {
+    const cage = FM.boxCage(PLANE_XY, [40, 40, 40], [1, 1, 1]);
+    const faces = cage.faces.length;
+    const [a, b] = cage.faces[0];
+    cage.faces.push([a, b, a, b]);
+    const { cage: out, fixed } = FM.repairCage(cage);
+    assert(fixed.degenerate === 1, `one dropped, got ${fixed.degenerate}`);
+    assert(out.faces.length === faces, 'leaving the cage as it was');
+  });
+
+  test('repair: holes are only closed when asked for', () => {
+    const cage = FM.boxCage(PLANE_XY, [40, 40, 40], [1, 1, 1]);
+    const open = FM.deleteFaces(cage, [0]);
+    assert(FM.boundaryLoops(open).length === 1, 'it has a hole in it');
+
+    const left = FM.repairCage(open);
+    assert(FM.boundaryLoops(left.cage).length === 1, 'and repair leaves it open');
+    assert(!left.fixed.filled, 'and says it closed nothing');
+
+    const closed = FM.repairCage(open, { fillHoles: true });
+    assert(closed.fixed.filled === 1, `one hole closed, got ${closed.fixed.filled}`);
+    assert(FM.boundaryLoops(closed.cage).length === 0, 'and now it is shut');
+  });
+
+  test('repair: a crease across a joined pair does not survive as an edge', () => {
+    const cage = FM.boxCage(PLANE_XY, [40, 40, 40], [1, 1, 1]);
+    const [a, b] = cage.faces[0];
+    cage.creases[`${Math.min(a, b)}_${Math.max(a, b)}`] = 1;
+    cage.points[b] = cage.points[a].slice();
+    const { cage: out } = FM.repairCage(cage);
+    for (const key of Object.keys(out.creases)) {
+      const [x, y] = key.split('_').map(Number);
+      assert(x !== y, 'no crease runs from a point to itself');
+    }
   });
 
   /* -------- selection -------- */

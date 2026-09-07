@@ -732,6 +732,128 @@ export function compactCage(cage) {
   return { points, faces, creases, corners, symmetry: cage.symmetry };
 }
 
+/**
+ * Put a form body back into a state the subdivision can work on.
+ *
+ * A cage goes wrong in a handful of ways, all of them from editing rather than
+ * from building: points end up on top of each other after a drag, a face is
+ * left with two corners at the same point, the same face gets made twice, and
+ * points are left behind that nothing uses. None of it shows on screen until
+ * the subdivision produces a crease out of nowhere or a hole where there is a
+ * face, at which point it is hard to find by looking.
+ *
+ * Every repair is reported. A cage that had nothing wrong with it comes back
+ * unchanged and says so, rather than being quietly rebuilt, because a rebuild
+ * renumbers the points and takes every crease and selection with it.
+ */
+export function repairCage(cage, opts = {}) {
+  const tolerance = opts.tolerance ?? 1e-4;
+  const fixed = { welded: 0, degenerate: 0, duplicate: 0, orphaned: 0, flipped: 0, filled: 0 };
+
+  // ---- points sitting on top of each other
+  const grid = new Map();
+  const key = (p) =>
+    `${Math.round(p[0] / tolerance)}_${Math.round(p[1] / tolerance)}_${Math.round(p[2] / tolerance)}`;
+  const moveTo = new Map();
+  cage.points.forEach((p, i) => {
+    const k = key(p);
+    if (grid.has(k)) {
+      moveTo.set(i, grid.get(k));
+      fixed.welded++;
+    } else {
+      grid.set(k, i);
+    }
+  });
+  const at = (v) => (moveTo.has(v) ? moveTo.get(v) : v);
+
+  // ---- faces that are no longer faces
+  const faces = [];
+  const seen = new Set();
+  for (const face of cage.faces) {
+    // A corner repeated straight after itself is a fold in the outline, not a
+    // corner, and welding is what usually makes one.
+    const run = [];
+    for (const v of face) {
+      const w = at(v);
+      if (run.length && run[run.length - 1] === w) continue;
+      run.push(w);
+    }
+    while (run.length > 1 && run[0] === run[run.length - 1]) run.pop();
+
+    if (run.length < 3 || new Set(run).size !== run.length) {
+      fixed.degenerate++;
+      continue;
+    }
+    // The same face made twice, whichever corner it was started from and
+    // whichever way round it runs.
+    const sorted = run.slice().sort((a, b) => a - b).join('_');
+    if (seen.has(sorted)) {
+      fixed.duplicate++;
+      continue;
+    }
+    seen.add(sorted);
+    faces.push(run);
+  }
+
+  // ---- points nothing uses
+  const used = new Set();
+  for (const face of faces) for (const v of face) used.add(v);
+  fixed.orphaned = cage.points.filter((_, i) => !used.has(i) && !moveTo.has(i)).length;
+
+  let out = compactCage({
+    points: cage.points,
+    faces,
+    creases: remapCreases(cage.creases, at),
+    corners: remapCorners(cage.corners, at),
+    symmetry: cage.symmetry
+  });
+
+  // ---- holes, when asked for. Filling one is a change of shape, so it is
+  // never done unasked: a form that is meant to be open is a normal thing.
+  if (opts.fillHoles) {
+    let guard = 0;
+    while (guard++ < 64) {
+      const loops = boundaryLoops(out);
+      if (!loops.length) break;
+      const before = out.faces.length;
+      const filled = fillHole(out, loops[0], 'single');
+      if (!filled || filled.faces.length === before) break;
+      out = filled;
+      fixed.filled++;
+    }
+  }
+
+  // ---- winding
+  const wasClockwise = out.faces.map((f) => f.join('_'));
+  const oriented = orientCage(out);
+  fixed.flipped = oriented.faces.filter((f, i) => f.join('_') !== wasClockwise[i]).length;
+
+  fixed.changed =
+    fixed.welded + fixed.degenerate + fixed.duplicate + fixed.orphaned + fixed.filled + fixed.flipped;
+  return { cage: oriented, fixed };
+}
+
+/** Creases follow their points when two points become one. */
+function remapCreases(creases, at) {
+  const out = {};
+  for (const [k, w] of Object.entries(creases || {})) {
+    const [a, b] = k.split('_').map(Number);
+    const x = at(a);
+    const y = at(b);
+    // A crease along an edge whose two ends have become one point is not an
+    // edge any more.
+    if (x === y) continue;
+    out[edgeKey(x, y)] = w;
+  }
+  return out;
+}
+
+function remapCorners(corners, at) {
+  const out = {};
+  for (const [v, w] of Object.entries(corners || {})) out[at(Number(v))] = w;
+  return out;
+}
+
 /** Split every chosen face into one quad per corner. */
 export function subdivideFaces(cage, faceIds) {
   const drop = new Set(faceIds);

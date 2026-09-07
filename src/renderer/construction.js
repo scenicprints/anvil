@@ -113,8 +113,20 @@ export function resolveConstruction(entries, ctx) {
   for (const entry of entries || []) {
     try {
       const built = buildEntry(entry, { ...ctx, planeOf, axisOf, pointOf, pathOf, resolved });
-      if (built) resolved.set(entry.id, { ...built, id: entry.id, name: entry.name });
-      else errors.push({ id: entry.id, message: `${entry.name || entry.type} could not be built` });
+      if (built) {
+        resolved.set(entry.id, { ...built, id: entry.id, name: entry.name });
+        // A coordinate system is not one thing, it is seven, and every one of
+        // them has to be referenceable or it is only a picture of a frame. They
+        // go in under their own ids so a plane dropdown, a sketch, a mirror and
+        // a measurement all find them without knowing a UCS exists.
+        if (built.kind === 'ucs') {
+          for (const [suffix, piece] of ucsParts(built, entry.name)) {
+            resolved.set(`${entry.id}/${suffix}`, { ...piece, id: `${entry.id}/${suffix}` });
+          }
+        }
+      } else {
+        errors.push({ id: entry.id, message: `${entry.name || entry.type} could not be built` });
+      }
     } catch (err) {
       errors.push({ id: entry.id, message: err.message });
     }
@@ -347,6 +359,51 @@ function buildEntry(entry, ctx) {
       return { kind: 'point', p: scale(add(pa, pb), 0.5) };
     }
 
+    case 'ucs': {
+      // A frame of its own to work in. Fusion's version is the one Construct
+      // command that is not a single formula: it is an origin and three
+      // directions, and what makes it useful is that its planes and axes can be
+      // used anywhere the world's own can.
+      //
+      // The origin comes from a point, a face, or nothing, which is the world
+      // origin. The first direction is taken as given and the second is squared
+      // up against it rather than trusted, because two picked edges are almost
+      // never exactly at right angles and a frame that is not square shears
+      // every sketch drawn on it.
+      const origin =
+        ctx.pointOf(entry.origin) || ctx.planeOf(entry.origin)?.origin || [0, 0, 0];
+
+      const primary = ctx.axisOf(entry.axisX);
+      const secondary = ctx.axisOf(entry.axisY);
+      let x = primary ? norm(primary.dir) : [1, 0, 0];
+      if (len(x) < 0.5) x = [1, 0, 0];
+
+      let y;
+      if (secondary) {
+        const raw = norm(secondary.dir);
+        // Square it up: keep only the part of it across the first direction.
+        const across = sub(raw, scale(x, dot(raw, x)));
+        y = len(across) > 1e-6 ? norm(across) : null;
+      }
+      if (!y) {
+        const fallback = basisFor(x);
+        y = fallback.x;
+      }
+      const z = norm(cross(x, y));
+      // And rebuild y from the other two, so the three really are square to
+      // each other however the picks were rounded.
+      y = norm(cross(z, x));
+
+      const flip = entry.flip ? -1 : 1;
+      return {
+        kind: 'ucs',
+        origin,
+        x,
+        y: scale(y, 1),
+        z: scale(z, flip)
+      };
+    }
+
     case 'pointThreePlanes': {
       const a = ctx.planeOf(entry.planeA);
       const b = ctx.planeOf(entry.planeB);
@@ -479,7 +536,29 @@ function twoPlanePoint(a, b, dir) {
   return [solve(0), solve(1), solve(2)];
 }
 
+/**
+ * The planes, axes and point a coordinate system stands for.
+ *
+ * Named the way someone reading a tree would name them: the frame's own name
+ * and then which part of it, so "Fixture XY" rather than an id.
+ */
+export function ucsParts(ucs, name) {
+  const stem = name || 'UCS';
+  const plane = (a, b, n) => ({ kind: 'plane', origin: ucs.origin, x: a, y: b, n });
+  const axis = (dir) => ({ kind: 'axis', origin: ucs.origin, dir });
+  return [
+    ['xy', { ...plane(ucs.x, ucs.y, ucs.z), name: `${stem} XY` }],
+    ['xz', { ...plane(ucs.x, ucs.z, scale(ucs.y, -1)), name: `${stem} XZ` }],
+    ['yz', { ...plane(ucs.y, ucs.z, ucs.x), name: `${stem} YZ` }],
+    ['x', { ...axis(ucs.x), name: `${stem} X` }],
+    ['y', { ...axis(ucs.y), name: `${stem} Y` }],
+    ['z', { ...axis(ucs.z), name: `${stem} Z` }],
+    ['origin', { kind: 'point', p: ucs.origin, name: `${stem} origin` }]
+  ];
+}
+
 export const CONSTRUCTION_LABELS = {
+  ucs: 'Coordinate System',
   planePerpendicular: 'Plane Square Across an Axis',
   planeTwoEdges: 'Plane Through 2 Edges',
   pointTwoEdges: 'Point Where 2 Edges Meet',

@@ -680,6 +680,34 @@ small, being able to say "edges only" for a while is the difference between
 picking what you meant and picking eleven times. **Isolate** hides everything
 but what is selected.
 
+A **coordinate system** is the one Construct command that is not a single
+formula. It is an origin and three directions, and what it is worth is that its
+planes and axes can be used anywhere the world's own can: sketch on a fixture's
+own XY, mirror about its YZ, measure along its Z. The second direction given is
+squared up against the first rather than taken as it was pointed, because two
+picked edges are almost never exactly at right angles and a frame that is not
+square shears every sketch drawn on it. One entry produces seven things, and
+every one of them is referenceable, or it is only a picture of a frame.
+
+**Spun Profile** draws the outline a body sweeps out when it is spun about an
+axis. A hex head spun about its shank is a cylinder as wide as the corners of
+its flats, and that is the number that says whether a socket clears it. It has
+to be measured against the material and not against the corners: a hexagon's
+vertices all sit at one radius, so a profile read off the points alone reports a
+hollow tube where there is a solid bar. Rays fired out from the axis give the
+runs of radius that really hold material, and the inner edge is only drawn when
+there is a bore at every station rather than at some of them.
+
+**Repair Body** puts a form cage back into a state the subdivision can work on.
+The faults it finds do not show on screen: a point dragged onto another point, a
+face left with two corners in the same place, the same face made twice. The cage
+looks right and the smooth surface it stands for grows a crease out of nowhere,
+or a hole where there is plainly a face. Filling holes is offered rather than
+assumed, because a form that is open is a normal thing and closing one is a
+change of shape rather than a repair. A cage with nothing wrong with it comes
+back untouched and says so, rather than being quietly rebuilt: a rebuild
+renumbers the points and takes every crease and selection with it.
+
 **Design Advice** measures everything about a part that is likely to give
 trouble downstream. Fusion's version mostly points at moulding; this one points
 at the two things a part here actually meets, a printer and sometimes a cutter.
@@ -1084,7 +1112,7 @@ model file can never execute anything.
 npm test
 ```
 
-387 tests in a hidden window, checking measured quantities: volumes against
+400 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1118,7 +1146,10 @@ does, `demo-blend.js` draws a three point circle, makes two lines collinear and
 blends two arcs, then reads the curvature on both sides of the join;
 `demo-advice.js` builds a part with a wall too thin and a bore too narrow, runs
 Design Advice through the Analyse menu, and untrims and merges the faces of a
-drilled plate. `demo-select.js` drills a plate with five bores and works through every rule:
+drilled plate. `demo-ucs.js` builds a coordinate system and checks its planes
+turn up in the dropdowns under its own name, takes a spun profile off a hex bar,
+and breaks a form cage on purpose to watch Repair find both faults and then find
+nothing the second time. `demo-select.js` drills a plate with five bores and works through every rule:
 similar picks the four that match, grow and shrink go out and back, by size
 takes the small ones, and a box dragged each way takes what it should.
 `demo-step.js` writes a STEP file entity by entity, reads it back, and checks

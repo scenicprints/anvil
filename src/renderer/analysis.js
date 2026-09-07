@@ -608,6 +608,191 @@ export function rayCaster(mesh) {
 }
 
 /**
+ * Every place a ray meets a mesh, in order along it.
+ *
+ * The thickness sweep only wants the first one, but anything that has to know
+ * what is solid and what is air along a line wants all of them: crossings
+ * alternate in and out, which is the whole of how a point is told to be inside
+ * a closed body.
+ */
+export function rayHits(mesh) {
+  const cast = rayCasterAll(mesh);
+  return cast;
+}
+
+function rayCasterAll(mesh) {
+  const stride = mesh.numProp;
+  const vp = mesh.vertProperties;
+  const tv = mesh.triVerts;
+  const n = tv.length / 3;
+  const T = new Float64Array(n * 9);
+  for (let t = 0; t < n; t++) {
+    for (let k = 0; k < 3; k++) {
+      const v = tv[t * 3 + k] * stride;
+      T[t * 9 + k * 3] = vp[v];
+      T[t * 9 + k * 3 + 1] = vp[v + 1];
+      T[t * 9 + k * 3 + 2] = vp[v + 2];
+    }
+  }
+
+  return (ox, oy, oz, dx, dy, dz) => {
+    const out = [];
+    for (let i = 0; i < T.length; i += 9) {
+      const ax = T[i];
+      const ay = T[i + 1];
+      const az = T[i + 2];
+      const e1x = T[i + 3] - ax;
+      const e1y = T[i + 4] - ay;
+      const e1z = T[i + 5] - az;
+      const e2x = T[i + 6] - ax;
+      const e2y = T[i + 7] - ay;
+      const e2z = T[i + 8] - az;
+      const px = dy * e2z - dz * e2y;
+      const py = dz * e2x - dx * e2z;
+      const pz = dx * e2y - dy * e2x;
+      const det = e1x * px + e1y * py + e1z * pz;
+      if (det > -1e-12 && det < 1e-12) continue;
+      const inv = 1 / det;
+      const tx = ox - ax;
+      const ty = oy - ay;
+      const tz = oz - az;
+      const u = (tx * px + ty * py + tz * pz) * inv;
+      if (u < 0 || u > 1) continue;
+      const qx = ty * e1z - tz * e1y;
+      const qy = tz * e1x - tx * e1z;
+      const qz = tx * e1y - ty * e1x;
+      const v = (dx * qx + dy * qy + dz * qz) * inv;
+      if (v < 0 || u + v > 1) continue;
+      const hit = (e2x * qx + e2y * qy + e2z * qz) * inv;
+      if (hit > 1e-9) out.push(hit);
+    }
+    out.sort((a, b) => a - b);
+    return out;
+  };
+}
+
+/**
+ * The outline a shape sweeps out when it is spun about an axis.
+ *
+ * A bolt head spun about its own shank is a cylinder as wide as the corners of
+ * its flats, and that number is what decides whether a socket clears it. The
+ * same reading is what a lathe would have to cut to make the part, which is
+ * where the command comes from.
+ *
+ * It has to be measured against the material rather than against the corners.
+ * A hexagon's vertices are all at one radius, so a profile taken from the
+ * points alone reports a hollow tube where there is a solid bar. So the reading
+ * is taken by firing rays out from the axis: crossings alternate in and out, and
+ * what they give at each station is the run of radii that actually hold
+ * material. The outer edge is the furthest of them and the inner edge is where
+ * the material starts, which is zero wherever the axis runs through solid.
+ *
+ * Points come back in the axis's own frame, the first number along it and the
+ * second out from it. Nothing here knows about a sketch plane.
+ */
+export function spunProfile(mesh, axis, opts = {}) {
+  const stations = Math.max(8, Math.min(512, opts.stations || 64));
+  const spokes = Math.max(3, Math.min(64, opts.spokes || 12));
+  const origin = axis.origin || [0, 0, 0];
+  const dir = unit3(axis.dir || [0, 0, 1]);
+  const vp = mesh.vertProperties;
+  const stride = mesh.numProp;
+  if (!vp?.length) return null;
+
+  let lo = Infinity;
+  let hi = -Infinity;
+  let reach = 0;
+  for (let v = 0; v < vp.length; v += stride) {
+    const dx = vp[v] - origin[0];
+    const dy = vp[v + 1] - origin[1];
+    const dz = vp[v + 2] - origin[2];
+    const t = dx * dir[0] + dy * dir[1] + dz * dir[2];
+    if (t < lo) lo = t;
+    if (t > hi) hi = t;
+    const r = Math.hypot(dx - dir[0] * t, dy - dir[1] * t, dz - dir[2] * t);
+    if (r > reach) reach = r;
+  }
+  if (!(hi > lo)) return null;
+
+  const frame = basis3(dir);
+  const cast = rayCasterAll(mesh);
+  const span = hi - lo;
+  const outer = [];
+  const inner = [];
+
+  for (let i = 0; i < stations; i++) {
+    // Just inside each end rather than exactly on it: a ray fired along the
+    // plane of the end cap grazes it and counts crossings nobody agrees about.
+    const at = lo + (span * (i + 0.5)) / stations;
+    const ox = origin[0] + dir[0] * at;
+    const oy = origin[1] + dir[1] * at;
+    const oz = origin[2] + dir[2] * at;
+
+    let far = 0;
+    let near = Infinity;
+    for (let k = 0; k < spokes; k++) {
+      const a = (2 * Math.PI * k) / spokes;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const ux = frame.x[0] * ca + frame.y[0] * sa;
+      const uy = frame.x[1] * ca + frame.y[1] * sa;
+      const uz = frame.x[2] * ca + frame.y[2] * sa;
+      const hits = cast(ox, oy, oz, ux, uy, uz);
+      if (!hits.length) continue;
+      if (hits[hits.length - 1] > far) far = hits[hits.length - 1];
+      // An odd number of crossings ahead means this spoke started in the
+      // material, so the material reaches the axis here.
+      const first = hits.length % 2 === 1 ? 0 : hits[0];
+      if (first < near) near = first;
+    }
+    if (far <= 0) continue;
+    outer.push([at, far]);
+    inner.push([at, Number.isFinite(near) ? near : 0]);
+  }
+
+  if (outer.length < 2) return null;
+  outer[0] = [lo, outer[0][1]];
+  outer[outer.length - 1] = [hi, outer[outer.length - 1][1]];
+  inner[0] = [lo, inner[0][1]];
+  inner[inner.length - 1] = [hi, inner[inner.length - 1][1]];
+
+  const bore = Math.min(...inner.map((p) => p[1]));
+  const hollow = bore > Math.max(1e-6, reach * 1e-3);
+  return {
+    outer,
+    inner: hollow ? inner : null,
+    loop: hollow
+      ? [...outer, ...inner.slice().reverse()]
+      : [[lo, 0], ...outer, [hi, 0]],
+    hollow,
+    length: span,
+    maxRadius: Math.max(...outer.map((p) => p[1])),
+    minRadius: hollow ? bore : 0
+  };
+}
+
+function unit3(v) {
+  const l = Math.hypot(v[0], v[1], v[2]);
+  return l > 1e-12 ? [v[0] / l, v[1] / l, v[2] / l] : [0, 0, 1];
+}
+
+/** Two directions square to an axis and to each other. */
+function basis3(n) {
+  const seed = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const x = unit3([
+    n[1] * seed[2] - n[2] * seed[1],
+    n[2] * seed[0] - n[0] * seed[2],
+    n[0] * seed[1] - n[1] * seed[0]
+  ]);
+  const y = [
+    n[1] * x[2] - n[2] * x[1],
+    n[2] * x[0] - n[0] * x[2],
+    n[0] * x[1] - n[1] * x[0]
+  ];
+  return { x, y };
+}
+
+/**
  * Wall thickness under a point on a surface, measured by looking through it.
  *
  * A ray sent straight into the material comes out the other side, and how far

@@ -8,9 +8,9 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.12.0**. 387 tests. Batches 11 to 14 and most of 18 have
-shipped. Batches 15, 16, 17, 19, 20, 20b and everything after them have not, and
-neither has the rest of 18. Each batch below says which.
+Current version: **2.13.0**. 400 tests. Batches 11 to 14 and 18 have shipped.
+Batches 15, 16, 17, 19, 20, 20b and everything after them have not. Each batch
+below says which.
 
 ---
 
@@ -1462,13 +1462,18 @@ Blend Curve; Surface Untrim and Merge; Inspect Design Advice; Make 3D Print,
 which writes a 3MF and hands it to the slicer rather than exporting into a
 folder to be found later.
 
+**The rest shipped in v2.13.0**: the **User Coordinate System**, which is one
+entry that registers seven referenceable things; **Spun Profile**, measured
+against the material with rays rather than against the corners; and Form
+**Repair Body**.
+
 Two on the original list turned out to be there already and had been miscounted
 against the source rather than checked in it: sketch **Curvature** is the
 curvature comb under Analyse, and **Isocurve Analysis** is the Isoparametric
 Curve command, which extracts the curves rather than shading them over the
-surface. What is genuinely left of this batch: the **User Coordinate System**,
-the only one of the four Construct commands that is not a single formula;
-sketch **Spun Profile**; Form **Repair Body**.
+surface.
+
+**Batch 18 is done.**
 
 **Batch 19. Plastic parts.** Four. Boss, Snap Fit, Rest, Lip. They are one
 family and want doing together, and they are the four most likely of the lot to

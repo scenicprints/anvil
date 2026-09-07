@@ -72,7 +72,8 @@ import {
   accessibilityColours,
   curvatureComb,
   designAdvice,
-  meshSize
+  meshSize,
+  spunProfile
 } from './analysis.js';
 
 /* ------------------------------------------------------------------ */
@@ -1556,6 +1557,9 @@ async function runCommand(cmd) {
     case 'projectToSurface':
       cmdProjectToSurface();
       break;
+    case 'spunProfile':
+      cmdSpunProfile();
+      break;
     case 'isoCurve':
       cmdIsoCurve();
       break;
@@ -1816,6 +1820,9 @@ async function runCommand(cmd) {
       break;
     case 'formDisplaySmooth':
       cmdFormDisplay('smooth');
+      break;
+    case 'formRepair':
+      cmdFormRepair();
       break;
     case 'formThicken':
       cmdFormThicken();
@@ -5107,6 +5114,7 @@ const RIBBON_MENUS = {
     ['intersectionCurve', 'Intersection Curve'],
     ['projectToSurface', 'Project To Surface'],
     ['isoCurve', 'Isoparametric Curve'],
+    ['spunProfile', 'Spun Profile'],
     ['meshSection', 'Mesh Section']
   ],
   insert: [
@@ -6032,6 +6040,16 @@ function planeOptions() {
   ];
   for (const f of state.doc.features) {
     if (f.type !== 'construction') continue;
+    if (f.entry.type === 'ucs') {
+      // A coordinate system contributes three planes, not one, and they are
+      // what makes it worth having: a sketch on a fixture's own XY is the
+      // whole point of setting one up.
+      const stem = f.entry.name || 'Coordinate System';
+      for (const [suffix, label] of [['xy', 'XY'], ['xz', 'XZ'], ['yz', 'YZ']]) {
+        out.push([`c:${f.entry.id}/${suffix}`, `${stem} ${label}`]);
+      }
+      continue;
+    }
     if (!String(f.entry.type).startsWith('plane')) continue;
     out.push([`c:${f.entry.id}`, f.entry.name || CONSTRUCTION_LABELS[f.entry.type]]);
   }
@@ -6054,6 +6072,13 @@ function axisOptions() {
   ];
   for (const f of state.doc.features) {
     if (f.type !== 'construction') continue;
+    if (f.entry.type === 'ucs') {
+      const stem = f.entry.name || 'Coordinate System';
+      for (const suffix of ['x', 'y', 'z']) {
+        out.push([`c:${f.entry.id}/${suffix}`, `${stem} ${suffix.toUpperCase()}`]);
+      }
+      continue;
+    }
     if (!String(f.entry.type).startsWith('axis')) continue;
     out.push([`c:${f.entry.id}`, f.entry.name || CONSTRUCTION_LABELS[f.entry.type]]);
   }
@@ -7081,7 +7106,8 @@ function startConstruction() {
     ['pointThreePlanes', 'Point Where 3 Planes Meet'],
     ['planePerpendicular', 'Plane Square Across an Axis'],
     ['planeTwoEdges', 'Plane Through 2 Edges'],
-    ['pointTwoEdges', 'Point Where 2 Edges Meet']
+    ['pointTwoEdges', 'Point Where 2 Edges Meet'],
+    ['ucs', 'Coordinate System']
   ];
 
   const entry = {
@@ -7178,6 +7204,46 @@ function startConstruction() {
       clear: (f) => {
         f.entry.edgeB = null;
       }
+    },
+    {
+      key: '__ucsX',
+      label: 'Which way X goes',
+      type: 'select',
+      options: axisOptions(),
+      showIf: (f) => f.entry.type === 'ucs',
+      get: (f) => optionForAxis(f.entry.axisX),
+      set: (f, v) => {
+        f.entry.axisX = axisSpecFromOption(v);
+      }
+    },
+    {
+      key: '__ucsY',
+      label: 'And roughly which way Y goes',
+      type: 'select',
+      options: axisOptions(),
+      showIf: (f) => f.entry.type === 'ucs',
+      get: (f) => optionForAxis(f.entry.axisY),
+      set: (f, v) => {
+        f.entry.axisY = axisSpecFromOption(v);
+      }
+    },
+    {
+      key: '__ucsFlip',
+      label: 'Turn Z the other way',
+      type: 'bool',
+      showIf: (f) => f.entry.type === 'ucs',
+      get: (f) => !!f.entry.flip,
+      set: (f, v) => {
+        f.entry.flip = !!v;
+      }
+    },
+    {
+      key: '__ucsNote',
+      label: '',
+      type: 'note',
+      showIf: (f) => f.entry.type === 'ucs',
+      text:
+        'Y is squared up against X rather than taken as given, so two picked edges that are nearly at right angles still make a frame that is exactly at right angles.'
     },
     {
       key: '__acrossAxis',
@@ -10113,6 +10179,134 @@ function cmdIsoCurve() {
   setStatus(`${made} isoparametric curve${made === 1 ? '' : 's'}.`);
 }
 
+/**
+ * The outline a body sweeps out when it is spun about an axis.
+ *
+ * A hex head spun about its shank is a cylinder as wide as the corners of the
+ * flats, and that is the number that says whether a socket clears it. The same
+ * outline is what a lathe would have to cut to make the part, which is where
+ * Fusion's command comes from.
+ *
+ * It has to be measured against the material and not against the corners. A
+ * hexagon's vertices all sit at one radius, so a profile read off the points
+ * alone reports a hollow tube where there is a solid bar. Rays fired out from
+ * the axis give the runs of radius that really hold material, and those are
+ * what is drawn.
+ */
+function cmdSpunProfile() {
+  if (!state.sketcher.active) {
+    setStatus('Spun Profile draws into a sketch. Open one first.');
+    return;
+  }
+  const solids = (state.result?.bodies || []).filter(
+    (b) => b.solid && !state.hiddenBodies.has(b.id)
+  );
+  if (!solids.length) {
+    setStatus('Spun Profile needs a solid body to measure.');
+    return;
+  }
+  const chosen = state.selection.bodies.size
+    ? solids.filter((b) => state.selection.bodies.has(b.id))
+    : solids;
+
+  const kept = state.spun || { axis: 'world:z', stations: '64' };
+  showInspector(
+    'Spun Profile',
+    [
+      {
+        key: 'axis',
+        label: 'Spun about',
+        type: 'select',
+        value: kept.axis,
+        options: axisOptions()
+      },
+      { key: 'stations', label: 'How many readings along it', type: 'expr', value: kept.stations },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'}. The axis has to lie in this sketch's plane, or there is nothing to draw the profile on.`
+      }
+    ],
+    (v) => {
+      state.spun = { ...v };
+      const scope = resolveParameters(state.doc.parameters);
+      const spec = axisSpecFromOption(v.axis);
+      const axis = worldAxisFor(spec);
+      if (!axis) {
+        setStatus('That axis could not be worked out.');
+        return;
+      }
+
+      const plane = state.sketcher.plane;
+      const n = plane.n;
+      const dotN = axis.dir[0] * n[0] + axis.dir[1] * n[1] + axis.dir[2] * n[2];
+      if (Math.abs(dotN) > 1e-3) {
+        setStatus('That axis crosses this sketch rather than lying in it, so a profile of it would be a lie.');
+        return;
+      }
+      // Out from the axis, staying in the sketch. There is only one such
+      // direction up to sign, and which sign it is decides which side of the
+      // axis the profile is drawn on.
+      const out = norm3([
+        n[1] * axis.dir[2] - n[2] * axis.dir[1],
+        n[2] * axis.dir[0] - n[0] * axis.dir[2],
+        n[0] * axis.dir[1] - n[1] * axis.dir[0]
+      ]);
+      if (!out) {
+        setStatus('That axis and this sketch point the same way.');
+        return;
+      }
+
+      const stations = Math.round(safeEval(v.stations, scope, 64));
+      const runs = [];
+      for (const body of chosen) {
+        const profile = spunProfile(K.meshData(body.solid), axis, { stations });
+        if (!profile) continue;
+        runs.push(
+          profile.loop.map(([t, r]) => [
+            axis.origin[0] + axis.dir[0] * t + out[0] * r,
+            axis.origin[1] + axis.dir[1] * t + out[1] * r,
+            axis.origin[2] + axis.dir[2] * t + out[2] * r
+          ])
+        );
+      }
+      if (!runs.length) {
+        setStatus('Nothing to spin about that axis.');
+        return;
+      }
+
+      pushUndo('spun profile');
+      const made = state.sketcher.insertWorldCurves(runs, { asLines: true });
+      state.dirty = true;
+      rebuildAll();
+      setStatus(`${made} line${made === 1 ? '' : 's'} of spun profile.`);
+    }
+  );
+}
+
+/** A world axis from the spec a dropdown hands back. */
+function worldAxisFor(spec) {
+  if (!spec) return null;
+  if (spec.worldAxis) {
+    const dir =
+      spec.worldAxis === 'x' ? [1, 0, 0] : spec.worldAxis === 'y' ? [0, 1, 0] : [0, 0, 1];
+    return { origin: [0, 0, 0], dir };
+  }
+  if (spec.construction) {
+    const found = state.result?.construction?.get(spec.construction);
+    if (found && found.kind === 'axis') {
+      return { origin: found.origin.slice(), dir: found.dir.slice() };
+    }
+  }
+  return null;
+}
+
+function norm3(v) {
+  const l = Math.hypot(v[0], v[1], v[2]);
+  return l > 1e-9 ? [v[0] / l, v[1] / l, v[2] / l] : null;
+}
+
 /* ---------------------------------------------------------------- */
 /* Sheet metal                                                       */
 /* ---------------------------------------------------------------- */
@@ -12329,6 +12523,91 @@ function cmdFinishForm() {
     targets: 'all'
   };
   openFeatureEditor(feature, 'Finish Form', finishFormFields());
+}
+
+/**
+ * Put a form body back into a state the subdivision can work on.
+ *
+ * The faults this finds do not show on screen. A point dragged onto another
+ * point, a face left with two corners in the same place, the same face made
+ * twice: the cage looks right and the smooth surface it stands for develops a
+ * crease out of nowhere or a hole where there is plainly a face. Looking for
+ * that by eye is the worst hour in modelling and this is a second.
+ *
+ * Filling holes is offered and not assumed. A form that is open is a normal
+ * thing, and closing one is a change of shape rather than a repair.
+ */
+function cmdFormRepair() {
+  if (state.sketcher.active) finishSketch();
+  const forms = formBodies();
+  if (!forms.length) {
+    setStatus('Repair works on a form. There are none yet.');
+    return;
+  }
+  const chosen = forms.filter((b) => state.selection.bodies.has(b.id));
+  const targets = chosen.length ? chosen : forms;
+
+  showInspector(
+    'Repair Body',
+    [
+      { key: 'tolerance', label: 'Points closer than this are one point', type: 'expr', value: '0.01' },
+      { key: 'fillHoles', label: 'Close any holes as well', type: 'bool', value: false },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: `${targets.length} form${targets.length === 1 ? '' : 's'}. A form that is meant to be open is a normal thing, so holes are only closed if you ask.`
+      }
+    ],
+    (v) => {
+      const scope = resolveParameters(state.doc.parameters);
+      const tolerance = Math.max(1e-6, safeEval(v.tolerance, scope, 0.01));
+      const said = [];
+      let touched = 0;
+
+      for (const body of targets) {
+        let found = null;
+        const done = editCage('repair form', body, (cage) => {
+          const out = FM.repairCage(cage, { tolerance, fillHoles: !!v.fillHoles });
+          found = out.fixed;
+          // Nothing wrong means nothing done. Handing back a rebuilt cage would
+          // renumber every point and take the creases and the selection with it.
+          return found.changed ? out.cage : null;
+        });
+        if (!found) continue;
+        if (done) touched++;
+        said.push(`${body.name}: ${repairWords(found)}`);
+      }
+
+      if (!said.length) {
+        setStatus('Nothing to repair.');
+        return;
+      }
+      showInspector(
+        'Repair Body',
+        said.map((text, i) => ({ key: `__r${i}`, label: '', type: 'note', text })),
+        () => {}
+      );
+      setStatus(
+        touched ? `Repaired ${touched} form${touched === 1 ? '' : 's'}.` : 'Nothing to repair.'
+      );
+    }
+  );
+}
+
+/** What a repair did, in words rather than a row of counters. */
+function repairWords(fixed) {
+  const parts = [];
+  const say = (n, one, many) => {
+    if (n) parts.push(`${n} ${n === 1 ? one : many}`);
+  };
+  say(fixed.welded, 'point joined to another', 'points joined to others');
+  say(fixed.degenerate, 'face that was no longer a face', 'faces that were no longer faces');
+  say(fixed.duplicate, 'face made twice', 'faces made twice');
+  say(fixed.orphaned, 'point nothing used', 'points nothing used');
+  say(fixed.filled, 'hole closed', 'holes closed');
+  say(fixed.flipped, 'face turned the right way', 'faces turned the right way');
+  return parts.length ? parts.join(', ') : 'nothing wrong with it';
 }
 
 function cmdFormThicken() {
