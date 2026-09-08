@@ -530,11 +530,113 @@ selection palette that governs how clicking picks mesh faces.
 
 ---
 
+## Design > Sheet Metal
+
+| Fusion | Anvil |
+|---|---|
+| Base / Edge / Contour flange | has (base and edge; contour needs checking) |
+| Lofted flange | has (lofted runs) |
+| Hem | has |
+| Bend / Fold | has |
+| Unfold / Refold | has |
+| Flat pattern | has, with DXF out |
+| Corner seams and relief cuts | has (mitre corners, relief cuts) |
+| **Sheet metal rules**: create, edit, **override per feature**, configure | partial — Anvil has a rule library, override is *pending* |
+
+Anvil's sheet metal is closer to parity than any other workspace bar the
+sketcher. The reference pages for each flange type are *pending* against its
+option sets.
+
+## Design > Form (T-Splines)
+
+Create from sketches: extrude, revolve, sweep, loft, plus T-Spline primitives.
+Anvil has a Form tab built on a Catmull-Clark control cage with creases, corner
+weights and freezing, and an Edit Form manipulator.
+
+The full Form toolbar is large — edit form, insert edge, subdivide, merge,
+bridge, fill hole, erase and fill, weld and unweld vertices, crease and uncrease,
+bevel edge, slide edge, pull, flatten, match, interpolate, thicken, freeze,
+unfreeze, and the symmetry tools. *Pending* against Anvil's set, which is a
+subset of it.
+
+---
+
+## Design > Assemblies
+
+### Relationships — near complete
+
+| Fusion | Anvil |
+|---|---|
+| Joint | has |
+| Joint types: rigid, revolute, slider, cylindrical, pin-slot, planar, ball | has, all seven |
+| As-Built Joint | has |
+| Joint Origin | has |
+| Rigid Group | has |
+| Drive Joints | has |
+| Motion Link | has |
+| Joint Motion Limits | has |
+| **Assembly Constraints** (the older constraint system alongside joints) | **missing** |
+| **Duplicate With Joints** | **missing** |
+| Edit joints | has |
+
+Anvil's known limit stands: joints are open chains only, and a closed loop is
+reported rather than solved.
+
+### Components and external references — mostly missing
+
+| Fusion | Anvil |
+|---|---|
+| New Component | has |
+| Ground to parent | **missing** |
+| **Edit In Place** (edit an external component inside the assembly) | **missing** |
+| **Update components in an assembly** | **missing** |
+| **Derived design features** (reference geometry from another design) | **missing** |
+| **Break the link** to an external component, and on assembly contexts | **missing** |
+| Switch the design's workflow / enable modeling | **missing** |
+
+This whole group depends on a design being able to reference *another design on
+disk*, which Anvil has no notion of: a `.anvil` file is self-contained. It is the
+largest single architectural gap in the inventory, and everything in this row
+follows from it rather than being separate work.
+
+---
+
+## Designs, documents and data
+
+Fusion's document handling assumes a cloud hub. Anvil's is a `.anvil` file on
+disk. Recording it all anyway, because most of it has a local meaning.
+
+| Fusion | Anvil |
+|---|---|
+| Create and save designs | has |
+| Open designs | has |
+| Edit a design | has |
+| Rename designs | **missing** (rename the file outside the app) |
+| Move designs | n/a — folders on disk |
+| Copy designs | **missing** as a command |
+| Move to Trash / delete | n/a |
+| **Update designs** (pull newer versions of referenced components) | **missing**, follows external references |
+| **Open older versions** | partial — Anvil keeps versions in the document |
+| **View design history and related data** | partial — versions exist, no history view |
+| Export designs | has (STL, STEP, 3MF, DXF) |
+| Insert designs into another | **missing**, follows external references |
+| Add the active design to an assembly | **missing** |
+| Import a new version of an existing design | **missing** |
+| Recover designs | **missing** — no crash recovery |
+| Convert a design's type (parametric or direct) | has (direct modelling mode) |
+| Upload designs / web client / component tab | n/a — cloud |
+| Supported file formats | partial — see the import and export lists |
+
+**Recover designs is the one to take seriously.** Anvil has an undo stack and
+versions inside the document, and nothing that survives the process dying with
+unsaved work.
+
+---
+
 ## Sections still to crawl
 
 Design: Solid (remainder) · Design: Surface · Design: Mesh ·
-Design: Form · Design: Sheet Metal · Design: Assemblies (joints, components,
-contact sets, motion) · Designs (documents, timeline, parameters, appearance) ·
+Timeline, parameters and appearance ·
 Configurations · Generative Design · Render · Animation · Simulation ·
 Manufacture · Electronics · Drawings · Hubs, projects, folders and members ·
 Advanced capabilities · Tokens · Autodesk Assistant · Fusion MCPs ·
