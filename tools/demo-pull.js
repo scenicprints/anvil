@@ -238,6 +238,42 @@ await clickAt(cx, cy);
 }
 await undo();
 
+/* ---- an edge pulls a fillet, which is the third thing Press Pull routes ---- */
+// A profile opens Extrude and a face opens Offset Face, and both already
+// worked. Clicking an edge used to do nothing at all.
+await dropSelection();
+{
+  const mid = dev.state.vp.worldToScreen(15, 0, 10);
+  await clickAt(mid.clientX, mid.clientY);
+  report.edgePick = {
+    edges: dev.state.selection.edges.size,
+    faces: dev.state.selection.faces.size,
+    arrow: arrow()?.len ?? 0,
+    box: !!valueBox()
+  };
+  const input = valueBox();
+  if (input) {
+    input.focus();
+    input.value = '3';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await wait(600);
+    report.filletWhileTyping = {
+      title: document.getElementById('inspectorTitle')?.textContent,
+      radius: dev.state.editing?.feature?.sets?.[0]?.radius,
+      volume: Number(dev.bodies[0].solid.volume().toFixed(1))
+    };
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await wait(800);
+  }
+  const after = Number(dev.bodies[0].solid.volume().toFixed(1));
+  // A 3 mm round along a 30 mm square corner takes r^2(1 - pi/4) off per unit
+  // of length, so about 58 mm^3 off an 18000 box.
+  const expected = 18000 - 30 * 9 * (1 - Math.PI / 4);
+  report.edgeFillet = { volume: after, expected: Number(expected.toFixed(1)) };
+  report.edgeRoundedTheCorner = Math.abs(after - expected) < expected * 0.02;
+}
+await undo();
+
 /* ---- escaping out of a pull leaves nothing behind ---- */
 await dropSelection();
 await clickAt(cx, cy);

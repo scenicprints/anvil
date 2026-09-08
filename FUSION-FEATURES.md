@@ -297,14 +297,13 @@ which dialog opens.
 | Clicked | Fusion opens | Anvil |
 |---|---|---|
 | Sketch profile | Extrude | has |
-| **Edge** | **Fillet** | **missing** |
+| **Edge** | **Fillet** | has, v2.29.0 |
 | Face | Offset Face | has |
 
-Anvil's arrow-on-the-selection gesture is the same idea and already routes a
-profile to an extrude and a face to a press pull. **Clicking an edge does
-nothing.** Routing an edge to a fillet with the same drag-or-type manipulator is
-a small piece of work in a part of the app that is already built, and it is the
-third of the three things Press Pull is for.
+Anvil's arrow-on-the-selection gesture is the same idea, and as of v2.29.0 it
+routes all three. An edge stands the arrow on the bisector of its two faces,
+which is the direction a fillet grows in whether it is rounding a corner off or
+filling one in, and the value box asks for a radius rather than a distance.
 
 Fusion's Press Pull also honours Tangent Chain when selecting faces.
 
@@ -376,7 +375,7 @@ parting-line work.
 | Type | Sharp Offset, **Rounded Offset** | **missing** — sharp only |
 | Object | Faces to remove, or a whole Body with no opening | has |
 | Direction | Inside, Outside, Both | has |
-| Inside Thickness / Outside Thickness | two values when the direction is Both | partial — one thickness |
+| Inside Thickness / Outside Thickness | two values when the direction is Both | has, v2.29.0 |
 | Tangent Chain | | **missing** |
 
 ### Boundary Fill — partial

@@ -380,6 +380,14 @@ export function normalizeSplit(f) {
 
 export function normalizeShell(f) {
   if (!f.side) f.side = 'inside';
+  // Straddling the surface used to split one thickness evenly, which is the
+  // only thing one number could have meant. Inside and outside are separate
+  // now, so what an old document meant is written out: half each. A shell made
+  // in this session always sets both, so an absent outside is reliably old.
+  if (f.thicknessOut === undefined) {
+    f.thicknessOut = f.side === 'both' ? `(${f.thickness}) / 2` : f.thickness;
+    if (f.side === 'both') f.thickness = `(${f.thickness}) / 2`;
+  }
   return f;
 }
 
@@ -4042,13 +4050,15 @@ export function rebuild(doc, options = {}) {
     normalizeShell(feature);
     const targets = pickBodies(feature, bodies);
     if (!targets.length) return bodies;
-    const thickness = safeEval(feature.thickness, scope, 2);
-    if (thickness <= 0) return bodies;
     // Inside keeps the outer surface where it is and eats inwards. Outside
-    // keeps the inner surface and grows out. Both straddles the original.
+    // keeps the inner surface and grows out. Both straddles the original, and
+    // takes its own thickness each way rather than halving one.
     const side = feature.side || 'inside';
-    const grow = side === 'outside' ? thickness : side === 'both' ? thickness / 2 : 0;
-    const eat = side === 'outside' ? 0 : side === 'both' ? thickness / 2 : thickness;
+    const inside = safeEval(feature.thickness, scope, 2);
+    const outside = safeEval(feature.thicknessOut ?? feature.thickness, scope, inside);
+    const grow = side === 'inside' ? 0 : outside;
+    const eat = side === 'outside' ? 0 : inside;
+    if (grow <= 0 && eat <= 0) return bodies;
 
     const out = bodies.slice();
     for (const b of targets) {

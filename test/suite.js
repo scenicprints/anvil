@@ -3136,6 +3136,38 @@ async function run() {
     assert(res.bodies[0].solid.volume() < 40 * 40 * 40, 'and it still removed material');
   });
 
+  test('shell: straddling takes a thickness each way', () => {
+    // One number halved was all "both" could mean before, so a wall that sits
+    // mostly outside the shape it came from could not be asked for at all.
+    const doc = boxDoc(30, 30, 30);
+    doc.features.push({
+      id: uid('f'),
+      type: 'shell',
+      bodies: 'all',
+      side: 'both',
+      thickness: '1',
+      thicknessOut: '4',
+      openFaces: []
+    });
+    const res = rebuild(doc);
+    assert(res.bodies.length === 1, JSON.stringify(res.errors));
+    const bb = res.bodies[0].solid.boundingBox();
+    near(bb.max[0] - bb.min[0], 38, 1.2, 'four out on each side');
+    res.dispose();
+  });
+
+  test('shell: an old straddling wall still builds the same', () => {
+    // Written before inside and outside were separate, one thickness meant
+    // half each way. Those documents are given the two numbers on load.
+    const doc = boxDoc(30, 30, 30);
+    const f = { id: uid('f'), type: 'shell', bodies: 'all', side: 'both', thickness: '3', openFaces: [] };
+    doc.features.push(f);
+    const res = rebuild(doc);
+    const bb = res.bodies[0].solid.boundingBox();
+    near(bb.max[0] - bb.min[0], 33, 1.2, 'still one and a half each way');
+    res.dispose();
+  });
+
   test('shell: which side the wall goes changes the outside size', () => {
     const shell = (side) => {
       const doc = boxDoc(30, 30, 30);

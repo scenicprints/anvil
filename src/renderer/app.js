@@ -2633,6 +2633,29 @@ function singleSelectedFace() {
 }
 
 /**
+ * The one selected edge, when exactly one is selected and it is an edge a
+ * fillet could stand on.
+ *
+ * A tangent edge is turned away: where two faces meet smoothly there is no
+ * outward direction to drag along and no corner to round.
+ */
+function singleSelectedEdge() {
+  if (state.selection.edges.size !== 1 || state.selection.faces.size) return null;
+  const { bodyId, index } = splitKey([...state.selection.edges][0]);
+  const record = (state.records || []).find((r) => r.id === bodyId);
+  const edge = record?.topology?.edges[index];
+  if (!edge?.refPoint || !edge.nA || !edge.nB) return null;
+  const z = [
+    edge.nA[0] + edge.nB[0],
+    edge.nA[1] + edge.nB[1],
+    edge.nA[2] + edge.nB[2]
+  ];
+  const len = Math.hypot(z[0], z[1], z[2]);
+  if (len < 1e-6) return null;
+  return { record, edge, out: [z[0] / len, z[1] / len, z[2] / len] };
+}
+
+/**
  * A sketch attached to a face. The reference is stored so the sketch can find
  * the face again after a rebuild, and the frame it was created with is kept as
  * a fallback for when the face is gone.
@@ -4334,7 +4357,20 @@ function shellFields() {
         f.openFaces = [];
       }
     },
-    { key: 'thickness', label: 'Wall thickness', type: 'expr' },
+    {
+      key: 'thickness',
+      label: (f) => (f.side === 'both' ? 'Inside thickness' : 'Wall thickness'),
+      type: 'expr'
+    },
+    {
+      // Straddling the surface takes a thickness each way. One number halved
+      // was the old reading, and it could not make a wall that sits mostly
+      // outside the shape it came from.
+      key: 'thicknessOut',
+      label: 'Outside thickness',
+      type: 'expr',
+      showIf: (f) => f.side === 'both'
+    },
     {
       key: 'side',
       label: 'Direction',
@@ -11129,6 +11165,21 @@ function pullTarget() {
     };
   }
 
+  // Fusion's Press Pull is a router: a profile opens Extrude, a face opens
+  // Offset Face, and an edge opens Fillet. The arrow was already the first two.
+  // The bisector of the two faces is the direction a fillet grows in, whether
+  // it is rounding a corner off or filling one in.
+  const edge = singleSelectedEdge();
+  if (edge) {
+    const b = basisFor(edge.out);
+    return {
+      kind: 'edge',
+      frame: { origin: edge.edge.refPoint, x: b.x, y: b.y, z: edge.out },
+      record: edge.record,
+      edge: edge.edge
+    };
+  }
+
   if (state.selection.profiles.length === 1 && !state.selection.faces.size) {
     const pick = state.selection.profiles[0];
     const plane = state.result?.sketchPlanes?.[pick.sketch];
@@ -11252,6 +11303,24 @@ function pullPointerDown(e) {
 
 /** The feature a pull on this target creates. */
 function pullFeatureFor(target) {
+  if (target.kind === 'edge') {
+    return {
+      id: uid('f'),
+      type: 'fillet',
+      bodies: [target.record.id],
+      sets: [
+        {
+          edges: [edgeReference(target.edge)],
+          radius: '0',
+          filletType: 'constant',
+          endRadius: null,
+          chamferType: 'equal',
+          distance2: '1',
+          angle: '45'
+        }
+      ]
+    };
+  }
   if (target.kind === 'face') {
     return {
       id: uid('f'),
@@ -11290,13 +11359,14 @@ function pullFeatureFor(target) {
  * disagree with it.
  */
 function openPullEditor(target, feature) {
-  openFeatureEditor(
-    feature,
-    target.kind === 'face' ? 'Press Pull' : 'Extrude',
-    target.kind === 'face' ? pressPullFields() : extrudeFields(),
-    false,
-    { keepView: true, keepFocus: true }
-  );
+  const title = { edge: 'Fillet', face: 'Press Pull' }[target.kind] || 'Extrude';
+  const fields =
+    target.kind === 'edge'
+      ? blendFieldsFor(feature, 'fillet')
+      : target.kind === 'face'
+        ? pressPullFields()
+        : extrudeFields();
+  openFeatureEditor(feature, title, fields, false, { keepView: true, keepFocus: true });
 }
 
 function pullPointerMove(e) {
@@ -11404,12 +11474,18 @@ function setPullDistance(mm) {
   const d = state.pullDrag;
   if (!d) return;
   const rounded = Math.abs(mm) < 1e-9 ? 0 : Number(mm.toFixed(4));
-  d.feature.distance = String(rounded);
-  // A face offset carries its sign, and cuts in when it is negative. An
-  // extrude has no sign: it is a length one way, turned round by `flip`.
-  if (d.feature.type === 'extrude') {
-    d.feature.distance = String(Math.abs(rounded));
-    d.feature.flip = rounded < 0;
+  // A fillet has a radius rather than a distance, and no sign at all: dragged
+  // back past nothing there is no fillet, not an inside-out one.
+  if (d.feature.type === 'fillet') {
+    d.feature.sets[0].radius = String(Math.max(0, rounded));
+  } else {
+    d.feature.distance = String(rounded);
+    // A face offset carries its sign, and cuts in when it is negative. An
+    // extrude has no sign: it is a length one way, turned round by `flip`.
+    if (d.feature.type === 'extrude') {
+      d.feature.distance = String(Math.abs(rounded));
+      d.feature.flip = rounded < 0;
+    }
   }
   // The same number the dialog's own field shows. A feature stores what the
   // expression evaluates to, with no unit conversion in between, so converting
@@ -11437,7 +11513,7 @@ function showPullValue(e) {
   const wrap = document.createElement('label');
   wrap.className = 'sk-entry-field';
   const cap = document.createElement('span');
-  cap.textContent = 'Distance';
+  cap.textContent = state.pullHandle?.kind === 'edge' ? 'Radius' : 'Distance';
   const input = document.createElement('input');
   input.type = 'text';
   input.spellcheck = false;
@@ -11463,7 +11539,8 @@ function showPullValue(e) {
     }
     const feature = state.editing?.feature;
     if (!feature) return;
-    feature.distance = text;
+    if (feature.type === 'fillet' && feature.sets?.length) feature.sets[0].radius = text;
+    else feature.distance = text;
     renderFields();
     scheduleRebuild();
   });
@@ -12013,10 +12090,14 @@ function renderFields() {
     wrap.className = f.type === 'bool' ? 'field inline' : 'field';
 
     const value = f.get ? f.get(feature) : getPath(feature, f.key);
+    // A label may be a function of the feature, for the rows whose name depends
+    // on a setting above them: a shell's thickness is "Wall thickness" until
+    // the wall straddles the surface, and then it is the inside one.
+    const labelText = typeof f.label === 'function' ? f.label(feature) : f.label;
 
     if (f.type === 'action') {
       const btn = document.createElement('button');
-      btn.textContent = f.label;
+      btn.textContent = labelText;
       btn.addEventListener('click', () => {
         f.run(feature);
         // Adding a set changes what rows there are, and the dialog's field list
@@ -12043,7 +12124,7 @@ function renderFields() {
       // A row that is filled in by clicking in the viewport. The button arms
       // it; what is already chosen is written beside the label.
       const label = document.createElement('label');
-      label.textContent = f.label;
+      label.textContent = labelText;
       wrap.appendChild(label);
       const row = document.createElement('div');
       row.className = 'row';
@@ -12082,12 +12163,12 @@ function renderFields() {
         rebuildAll();
       });
       const label = document.createElement('label');
-      label.textContent = f.label;
+      label.textContent = labelText;
       wrap.appendChild(input);
       wrap.appendChild(label);
     } else if (f.type === 'select') {
       const label = document.createElement('label');
-      label.textContent = f.label;
+      label.textContent = labelText;
       wrap.appendChild(label);
       const sel = document.createElement('select');
       for (const [val, text] of f.options) {
@@ -12112,7 +12193,7 @@ function renderFields() {
       wrap.appendChild(sel);
     } else if (f.type === 'text') {
       const label = document.createElement('label');
-      label.textContent = f.label;
+      label.textContent = labelText;
       wrap.appendChild(label);
       const input = document.createElement('input');
       input.type = 'text';
@@ -12124,7 +12205,7 @@ function renderFields() {
       wrap.appendChild(input);
     } else {
       const label = document.createElement('label');
-      label.textContent = f.label;
+      label.textContent = labelText;
       wrap.appendChild(label);
       const row = document.createElement('div');
       row.className = 'row';
