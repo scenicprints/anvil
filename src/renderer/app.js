@@ -1168,6 +1168,19 @@ function profilePickArmed() {
   return armed === 'profiles' || armed === 'sections';
 }
 
+/**
+ * The one profile on screen, when there is exactly one.
+ *
+ * `profileTargets` is what is actually drawn and clickable, which is the same
+ * "visible in your design" the Extrude reference means: a sketch switched off
+ * in the browser is not in it.
+ */
+function onlyVisibleProfile() {
+  const targets = state.profileTargets || [];
+  if (targets.length !== 1) return null;
+  return targets[0].userData.profile || null;
+}
+
 function pickProfile(clientX, clientY) {
   if (!state.profileTargets?.length) return null;
   const rc = state.vp.raycastRay(clientX, clientY);
@@ -4827,12 +4840,25 @@ function startFeatureDialog(type) {
       return;
     }
     feature = newExtrudeFeature();
+    // "When you invoke the Extrude tool, and there is only one profile visible
+    // in your design, it is automatically selected." Fusion's own Extrude
+    // reference says so, and it is the difference between drawing a rectangle
+    // and having a solid, and drawing a rectangle and being asked which of the
+    // one things on screen you meant.
+    const only = onlyVisibleProfile();
+    if (only && !feature.seeds?.length && !feature.faces.length) {
+      feature.sketch = only.sketch;
+      feature.seeds = [only.seed];
+    }
     openFeatureEditor(feature, 'Extrude', extrudeFields());
-    // Fusion opens ready to be pointed at, so nothing has to be picked before
-    // reaching for the command.
-    if (!feature.seeds.length && !feature.faces.length) {
+    // Otherwise it opens ready to be pointed at, so nothing has to be picked
+    // before reaching for the command.
+    if (!feature.seeds?.length && !feature.faces.length) {
       setEditPick('profiles');
       setStatus('Click the profiles or planar faces to extrude.');
+    } else {
+      setEditPick('profiles');
+      setStatus('Drag the arrow, or type a distance. Click profiles to add more.');
     }
     return;
   }

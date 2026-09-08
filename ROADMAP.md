@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.27.0**. 518 tests.
+Current version: **2.28.0**. 518 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
@@ -140,6 +140,41 @@ it offering to do the same thing again over the thing just built.
 - **Half a point to point move moved the part to the origin.** A missing point
   read as 0, 0, 0, so picking only the "from" flung the body across the screen
   and whatever you were about to aim at had moved. Both ends or nothing.
+
+## Read Fusion's own reference before matching Fusion
+
+He asked why the Fusion documentation he had given access to was not being used,
+and he was right to. One reading of three help pages settled several arguments
+that had been guessed at, and turned up gaps worth knowing about.
+
+**Already acted on.** The Extrude reference says: "When you invoke the Extrude
+tool, and there is only one profile visible in your design, it is automatically
+selected." Anvil now does, which removes a click from the commonest path there
+is.
+
+**Sourced gaps, not yet built.** Recorded here so they are not re-derived from
+memory:
+
+- **Fillet** has three types, and Anvil has one. **Rule Fillet** with the rule
+  "All Edges" is Fusion's named way to round a whole part, which is exactly what
+  Anvil used to do silently and now hides behind the `all` flag: it wants to be
+  a type in the dropdown. **Full Round Fillet** rounds over three adjacent faces
+  and is picked by hovering a centre face. Also missing: **Tangent Chain**
+  (select tangentially connected edges as one), **Continuity** G1/G2,
+  **Corner Type** rolling ball or setback, and the **Asymmetric** radius type.
+  Anvil's hold-line type is not in Fusion's list at all.
+- **Move/Copy** moves components, bodies, **faces** and **sketch objects**;
+  Anvil moves bodies. Its move types are **Free Move** (a manipulator, and
+  explicitly not captured parametrically), Translate, Rotate, Point to Point and
+  **Point to Position**. Translate has a **Direction**: component XYZ, design
+  XYZ, or **Pick Direction** along an edge or axis. There is a **Set Pivot**,
+  and a **Create Copy** checkbox. Anvil has translate, rotate and point to
+  point, bodies only, no copy.
+- **Extrude** has **Thin Extrude** as a type rather than a wall setting, and
+  its To Object extent has an **Extend** setting: to the selected face, to
+  adjacent faces, to a body, or through a body. Its **Objects To Cut** row lets
+  an edited cut either recompute which bodies it affects from what is visible,
+  or keep the ones it was made with.
 
 The pattern behind all three: **an empty field is not a value.** Zero distance,
 no edges, no point. Each of them had something standing in for "not yet", and

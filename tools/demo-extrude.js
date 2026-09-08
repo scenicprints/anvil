@@ -13,9 +13,14 @@
  * distance field worked, and nothing on screen said that was the only thing
  * left that would.
  *
- * So: press the button, point at the profile, drag the arrow that appears,
- * type the exact size over what was dragged to, and check the solid measures
- * what was asked for and that nothing is left floating afterwards.
+ * So: press the button, check it took the one profile on screen without being
+ * asked, drag the arrow that appears, type the exact size over what was dragged
+ * to, and check the solid measures what was asked for and that nothing is left
+ * floating afterwards.
+ *
+ * The auto-selection is Fusion's, quoted from its Extrude reference: "When you
+ * invoke the Extrude tool, and there is only one profile visible in your
+ * design, it is automatically selected."
  */
 
 const dev = window.anvilDev;
@@ -115,14 +120,18 @@ await wait(900);
 /* ---- the ribbon button, with nothing chosen ---- */
 document.querySelector('[data-cmd="extrude"]').click();
 await wait(800);
-report.afterButton = { ...onScreen(), ...model() };
-// It opens asking to be pointed at, which is the whole reason the command does
-// not demand a selection be made before reaching for it.
-report.opensAskingToBePointedAt =
-  report.afterButton.callout && report.afterButton.dialog && report.afterButton.chosen === 0;
+report.afterButton = { ...onScreen(), ...model(), arrow: arrow()?.len ?? 0 };
+// "When you invoke the Extrude tool, and there is only one profile visible in
+// your design, it is automatically selected." Fusion's Extrude reference. There
+// is one rectangle on screen, so the command should not be asking which of the
+// one things it is, and the arrow should already be standing on it.
+report.tookTheOnlyProfile =
+  report.afterButton.dialog && report.afterButton.chosen === 1 && report.afterButton.arrow > 40;
 
-/* ---- point at the profile ---- */
+/* ---- clicking it lets go, clicking again takes it back ---- */
 const centre = dev.state.vp.worldToScreen(0, 0, 0);
+await clickAt(centre.clientX, centre.clientY);
+report.letGoAtOnce = dev.state.editing?.feature?.seeds?.length ?? null;
 await clickAt(centre.clientX, centre.clientY);
 await wait(500);
 report.afterPointing = { ...onScreen(), ...model(), arrow: arrow()?.len ?? 0 };
@@ -152,15 +161,10 @@ report.afterPointing = { ...onScreen(), ...model(), arrow: arrow()?.len ?? 0 };
 // ended: a dialog holding a zero and no way on screen to change it.
 report.pointingStandsAnArrowUp = report.afterPointing.chosen === 1 && report.afterPointing.arrow > 40;
 
-/* ---- the same profile again lets it go, and again takes it back ---- */
-await clickAt(centre.clientX, centre.clientY);
-report.letGoAgain = dev.state.editing?.feature?.seeds?.length ?? null;
-await clickAt(centre.clientX, centre.clientY);
-report.tookItBack = dev.state.editing?.feature?.seeds?.length ?? null;
 // A press on the arrow that never moved is a click on what is under it. Without
-// that, the arrow the first click puts up covers the profile and it can be
-// chosen but never let go of.
-report.profileStillTogglesUnderTheArrow = report.letGoAgain === 0 && report.tookItBack === 1;
+// that, the arrow covers the profile and it can be chosen but never let go of.
+report.profileStillTogglesUnderTheArrow =
+  report.letGoAtOnce === 0 && report.afterPointing.chosen === 1;
 
 /* ---- drag the arrow, then type the size over what was dragged to ---- */
 {

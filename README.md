@@ -1674,6 +1674,13 @@ dropped you into Press Pull. From the outside that is the app deciding on its
 own to extrude, and it is what made a face impossible to simply select and then
 sketch on. A press that never moved now falls through to ordinary selection.
 
+**Extrude takes the only profile on screen without being asked.** Fusion's own
+Extrude reference says it does: "When you invoke the Extrude tool, and there is
+only one profile visible in your design, it is automatically selected." That is
+the difference between drawing a rectangle and having a solid, and drawing a
+rectangle and being asked which of the one things on screen you meant. With more
+than one visible it opens waiting to be pointed at, as before.
+
 **A new extrude joins only where it stands on something.** The operation
 defaults to Join when the sketch is drawn on a face of a body, which is what
 adding a boss to a part looks like, and to New Body everywhere else. It used to
