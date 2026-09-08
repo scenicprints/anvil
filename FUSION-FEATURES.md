@@ -15,8 +15,9 @@ Status means:
 - **missing** — not built.
 - **n/a** — belongs to a part of Fusion Anvil is not (CAM, PCB, cloud data).
 
-Crawl progress is tracked at the bottom. Sections marked *pending* have not been
-read yet.
+What has been read page by page, and what has only been listed, is recorded
+under **Crawl status** near the bottom. Anything marked *pending* is a dialog
+whose options have not been compared option by option yet.
 
 ---
 
@@ -633,14 +634,213 @@ unsaved work.
 
 ---
 
-## Sections still to crawl
+## Configurations — missing
+
+One design carrying several variants: rows of a table, each row a set of
+parameter values, feature suppressions and component choices, all resolved into
+one member of the family. Sheet metal rules can be configured per row too.
+
+Anvil has a `configure.js` module and a Configurations command. What it does
+against Fusion's table is *pending*, but the concept is present.
+
+## Generative Design — partial
+
+Fusion's Generative Design is a workspace, not a command, laid out left to right
+as the order of work:
+
+| Panel | What it holds | Anvil |
+|---|---|---|
+| Study | create and manage studies, and their settings | **missing** — one run, no studies |
+| Edit Model | a contextual environment with the ordinary modelling tools, used to make **obstacle** and **preserve** geometry | partial — Anvil locks material at fixtures and loads only |
+| Design Space | assign a geometry type to each body: design space, preserve, obstacle, starting shape | **missing** — Anvil uses one body |
+| Design Conditions | constraints and loads | has |
+| Design Criteria | objectives, and **manufacturing constraints** (additive, milling, die casting, 2-axis cutting) | **missing** |
+| Materials | several materials tried across a study | partial — one material |
+| Generate | pre-check, run, watch progress | partial |
+| Explore | a contextual environment for comparing outcomes: filter, sort, scatter plot, compare | **missing** — Anvil produces one result |
+
+Anvil's generative design is one solve of one body against one material with one
+objective. Fusion's is a **study**: many outcomes across combinations of
+material and manufacturing method, then a tool for choosing between them. The
+solver underneath is the part Anvil has; the study and explore layers are what
+is missing, and they are most of the value in the workspace.
+
+**Obstacle and preserve geometry is the cheapest thing here.** Anvil already
+locks material under fixtures and loads. Letting a whole body be marked keep-out
+or keep-in is a small extension of the same flag, and it is what makes generative
+output fit an assembly rather than merely be strong.
+
+---
+
+## Render — partial
+
+| Fusion | Anvil |
+|---|---|
+| Appearance | has |
+| Scene settings / environmental lighting | partial |
+| **Point Light** | **missing** |
+| **Spot Light** | **missing** |
+| **Photometric Light** | **missing** |
+| Dielectric priority for overlapping transparent volumes | **missing** |
+| Insert canvas (image) | has |
+| Decal | has |
+| In-canvas render / render gallery | partial — Anvil renders by accumulation |
+| Render configurations | **missing** |
+
+Anvil renders by jittering the camera and lights and averaging the frames.
+**Placeable lights are the gap**: three types in Fusion, each with its own
+dialog, against Anvil's fixed rig.
+
+## Animation — partial
+
+| Fusion | Anvil |
+|---|---|
+| Storyboards | has |
+| Steps and a timeline | has |
+| Transform components | has |
+| **Auto Explode** (one level and all levels) | has |
+| Manual explode | partial |
+| Callouts / captions | has |
+| **Restore home / view changes as animation steps** | *pending* |
+| Publish video | **missing** |
+| Create a drawing from an animation | **missing** |
+| Animate configurations | **missing** |
+
+---
+
+## Simulation — partial
+
+Every Fusion simulation study runs in the cloud on Autodesk's solvers. Anvil's
+runs on the machine in front of you, which is a real difference in kind, not
+only in coverage.
+
+| Study type | Anvil |
+|---|---|
+| Static stress | has |
+| Shape optimisation | has (as Generative Design) |
+| Modal frequencies | **missing** |
+| Thermal (steady state) | **missing** |
+| Thermal stress | **missing** |
+| Structural buckling | **missing** |
+| Nonlinear static stress | **missing** |
+| Quasi-static event simulation | **missing** |
+| Dynamic event simulation | **missing** |
+| Electronics cooling | **missing** |
+| Plastic injection moulding | **missing** |
+| Contacts between bodies in a study | **missing** |
+
+Anvil has one of the eleven, plus shape optimisation. Its static stress reports
+displacement and von Mises; Fusion's also reports safety factor, reactions and
+failure criteria.
+
+**Modal frequencies and buckling are the two that fall out of what is already
+built.** Both are eigenvalue problems on the same stiffness matrix the static
+solver assembles, so the meshing, the element and the boundary conditions are
+all done. Thermal is a different physics but a simpler one: the same grid, one
+value per node instead of three.
+
+---
+
+## Drawings — missing entirely
+
+Anvil has no drawing workspace. This is the largest block of work in the whole
+inventory, and the one a printed part arguably needs least, but it is also the
+only way a design leaves the machine as a document rather than as geometry.
+
+A drawing is made from a design or from an animation, on sheets, with templates
+carrying title blocks, borders, document and sheet settings, placeholder views
+and placeholder tables.
+
+| Panel | Commands |
+|---|---|
+| Create | Base View, Projected View, Section View, Detail View, Break View, Create Sketch |
+| Modify | Move, Rotate, Delete |
+| Geometry | Center Line, Center Mark, Center Mark Pattern, Edge Extension, Create Sketch |
+| Dimensions | Dimension, Ordinate, Linear, Aligned, Angular, Radius, Diameter, Baseline, Chain, Dimension Break |
+| Text | Text, Leader |
+| Symbols | Surface Texture, Feature Control Frame, Datum Identifier |
+| Insert | Image |
+| Tables | Table (parts list), Balloon, Bend Identifier, Renumber, Align Balloon |
+| Export | PDF, DWG, sheet as DXF, table as CSV |
+
+Anvil has one adjacent piece already: sheet metal flat patterns export to DXF.
+The bend identifier in the Tables panel is the drawing-side counterpart of that.
+
+---
+
+## Manufacture (CAM) — missing entirely
+
+A separate application inside Fusion, not a set of commands to bolt on. Recorded
+so the inventory is complete.
+
+Machines, tool library, setups, then four process families: **Milling**,
+**Turning**, **Additive**, **Fabrication** (cutting). Operation parameters,
+toolpath simulation, and post processing to G-code.
+
+For a 3D-printed-parts tool the only part with an obvious pull is the additive
+side, and even there the market is served by slicers. Anvil exports STL and 3MF,
+which is where it hands over.
+
+## Electronics (PCB) — missing entirely
+
+Schematic capture, PCB layout, library management, and the 3D coupling between
+board and enclosure. A separate application again. The one part that touches
+Anvil's world is fitting an enclosure around a board, which today means importing
+the board as a mesh or step.
+
+## Hubs, projects, folders and members — missing entirely
+
+The whole cloud data layer, and the part of Fusion that Anvil deliberately is
+not: `.anvil` files are plain JSON on disk with no account and no server.
+
+Hubs · projects, roles and folders · the Data Panel and Home tab · create a
+project · access projects and folders · project details · create, rename and
+trash folders · find project members · search across projects · pin projects ·
+track project activity · wiki pages · project administration · member groups ·
+permissions.
+
+Two things in here have a local meaning and are worth stealing:
+
+- **Search across everything**, rather than opening files to find out what is in
+  them. Anvil has a command search; it has no search over saved documents.
+- **Track project activity**, which locally is "what did I change and when".
+  Anvil keeps versions inside a document already, so a per-file history view is
+  a short step.
+
+The rest — roles, members, permissions, wikis, the web client — has no meaning
+without a server, and building one is a different product.
+
+## Advanced capabilities, tokens, Autodesk Assistant, Fusion MCPs — n/a
+
+Extensions gated by subscription, cloud credits for solving, an in-app assistant,
+and Fusion's own Model Context Protocol servers. Commercial and cloud
+scaffolding rather than modelling features. The Design Extension is the one that
+matters for reading the rest of this file: **Boss, Snap Fit, Rest and Lip and
+Groove all sit behind it**, so they are not part of what a Fusion subscription
+gives you by default.
+
+---
+
+## Crawl status
+
+**Read page by page:** Solid Create (extrude, revolve, sweep, loft, rib, web,
+emboss, primitives, coil), Solid Modify (fillet, chamfer, draft, shell, combine,
+split body, split face, replace face, offset face, align, silhouette split,
+boundary fill, press pull, edit face, tangent chain), Move/Copy, Plastic (boss,
+snap fit), Sketch palette and 3D sketch, Surface create and modify lists, Mesh
+modify list, Sheet metal rules and flanges, Assemblies relationships and designs,
+Generative Design toolbar, Simulation study types, Drawing workspace.
+
+**Listed but not yet read option by option:** each surface and form tool's own
+dialog, the sheet metal flange references, rest and lip, scale, delete face,
+configurations, the render light dialogs, animation, and the Fusion-wide pieces
+(timeline, parameters, appearance, materials, measure, inspect, view settings,
+selection filters, keyboard shortcuts, preferences).
+
+**Deliberately not expanded:** Manufacture, Electronics, and the cloud data
+layer, which are separate applications rather than commands.
 
 Design: Solid (remainder) · Design: Surface · Design: Mesh ·
-Timeline, parameters and appearance ·
-Configurations · Generative Design · Render · Animation · Simulation ·
-Manufacture · Electronics · Drawings · Hubs, projects, folders and members ·
-Advanced capabilities · Tokens · Autodesk Assistant · Fusion MCPs ·
-Get Started (interface, workspaces, basic tasks)
 
 ## How to read a page
 
