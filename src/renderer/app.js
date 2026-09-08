@@ -191,6 +191,18 @@ async function boot() {
   // Its own listener rather than a line in handleViewportMove, because that
   // returns early while a sketch is open and the callout has to keep up
   // regardless of who is handling the click.
+  // Construction lines and projected geometry are scaffolding: wanted while you
+  // are placing things against them, in the way once you are not.
+  for (const [id, key] of [
+    ['chkShowConstruction', 'showConstruction'],
+    ['chkShowProjected', 'showProjected']
+  ]) {
+    $(`#${id}`)?.addEventListener('change', (e) => {
+      state.sketcher[key] = e.target.checked;
+      state.sketcher.rebuild();
+    });
+  }
+
   $('#viewwrap').addEventListener('pointermove', (e) => {
     state.lastPointer = { x: e.clientX, y: e.clientY };
     placeCallout();

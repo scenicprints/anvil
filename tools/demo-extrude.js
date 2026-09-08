@@ -131,6 +131,29 @@ report.viewAfterLookAt = camDir();
 // The sketch is on XY, so square to it means looking straight down Z.
 report.lookAtWentSquareOn = Math.abs(report.viewAfterLookAt[2]) > 0.99;
 
+/* ---- construction geometry can be hidden while the sketch is open ---- */
+{
+  sk.constructionMode = true;
+  sk.setTool('line');
+  await clickAt(...plane(-25, -18));
+  await clickAt(...plane(25, -18));
+  sk.setTool('select');
+  sk.constructionMode = false;
+  await wait(400);
+  const drawn = () => dev.state.sketcher.group.children.length;
+  const withIt = drawn();
+  const box = document.getElementById('chkShowConstruction');
+  box.checked = false;
+  box.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(400);
+  const withoutIt = drawn();
+  box.checked = true;
+  box.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(400);
+  report.constructionToggle = { withIt, withoutIt, backAgain: drawn() };
+  report.constructionCanBeHidden = withoutIt < withIt && drawn() === withIt;
+}
+
 document.querySelector('[data-cmd="finishSketch"]').click();
 await wait(900);
 

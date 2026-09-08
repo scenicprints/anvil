@@ -460,8 +460,8 @@ with the degree editable on a control-point spline.
 | **Slice** (cut through bodies at the sketch plane while sketching) | **missing** |
 | Show Profile | has |
 | Show Points / Dimensions / Constraints | partial |
-| Show Construction Geometries | **missing** as a toggle |
-| Show Projected Geometries | **missing** as a toggle |
+| Show Construction Geometries | has, v2.33.0 |
+| Show Projected Geometries | has, v2.33.0 |
 | 3D Sketch on/off | has |
 
 **Slice is the one worth having.** Sketching inside a part you cannot see into is
@@ -620,15 +620,18 @@ revolve, sweep and loft into a T-Spline. Anvil has every one.
 | **Edit By Curve** (drive edges with a curve) | **missing** |
 | **Tangent handles** | **missing** |
 | **Snap vertices to objects** | **missing** |
-| **Display Mode** (box, control frame, smooth) | **missing** |
+| Display Mode (box, control frame, smooth) | has. All three, per form, on the undo stack |
 | **Control points and surface points** as separate things to grab | **missing** |
 
 Anvil also has `makeUniform`, which Fusion does not list.
 
-Four gaps, and three of them are about *how you grab a point* rather than about
+Three gaps, and all of them are about *how you grab a point* rather than about
 what the cage can do: tangent handles, snapping a vertex onto other geometry, and
-switching between the box, control-frame and smooth displays. Display Mode is the
-cheapest and the one people reach for constantly.
+Edit By Curve.
+
+Display Mode was listed here as missing and is not: `cmdFormDisplay` carries box,
+control frame and smooth, per form and on the undo stack. Checked against the
+source rather than against my own earlier note.
 
 ---
 

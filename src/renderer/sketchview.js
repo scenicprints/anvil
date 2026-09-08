@@ -221,6 +221,11 @@ export class SketchEditor {
     // section where a body crosses the plane. It is rebuilt from the model
     // every time, so it is drawn but never selected, dragged or dimensioned.
     this.derived = null;
+    // What of the sketch is drawn. Construction lines and geometry projected
+    // in from the model are both scaffolding: useful while you are placing
+    // things against them, and in the way once you are not.
+    this.showConstruction = true;
+    this.showProjected = true;
     this.onRegionsChanged = null;
 
     this._pointTexture = this._makePointTexture();
@@ -3438,7 +3443,7 @@ export class SketchEditor {
 
     // Geometry that came from the model, drawn first so the sketch's own
     // curves sit over it.
-    if (this.derived?.entities?.length) {
+    if (this.showProjected && this.derived?.entities?.length) {
       const P = this.derived.points;
       for (const ent of this.derived.entities) {
         const run = tessellate({ points: P, entities: this.derived.entities }, ent);
@@ -3461,6 +3466,7 @@ export class SketchEditor {
     // Curves.
     for (const ent of this.sketch.entities) {
       if (ent.type === 'point') continue;
+      if (ent.construction && !this.showConstruction) continue;
       // One entity can be many loops, so each is drawn on its own rather than
       // strung together into one run that jumps between letters.
       for (const run of entityRuns(this.sketch, ent)) {
