@@ -182,3 +182,73 @@ export function similarFaces(topo, chosen, tol = 0.02) {
   });
   return [...out];
 }
+
+/**
+ * The edges that carry on smoothly from the ones given.
+ *
+ * Fusion calls this Tangent Chain and has it ticked by default in Fillet and
+ * Chamfer. Picking one edge of a rounded outline and getting the whole outline
+ * is the difference between one click and thirty on any part that is not all
+ * flats.
+ *
+ * `tangentRun` above is the face version and is not this: it walks across faces
+ * that meet smoothly. This walks along edges that continue each other, which is
+ * a different question. Two edges continue if they share an end and leave it in
+ * nearly opposite directions, so a corner where four edges meet does not drag
+ * the whole cage in.
+ */
+export function tangentEdgeRun(topo, seedIds, maxDegrees = 15) {
+  const edges = topo?.edges || [];
+  const endsOf = (e) => {
+    const v = e.verts;
+    return v && v.length >= 2 ? [v[0], v[v.length - 1]] : null;
+  };
+
+  const touching = new Map();
+  edges.forEach((e, i) => {
+    const ends = endsOf(e);
+    if (!ends) return;
+    for (const v of ends) {
+      if (!touching.has(v)) touching.set(v, []);
+      touching.get(v).push(i);
+    }
+  });
+
+  // The unit direction an edge leaves the given end in.
+  const leaving = (e, vertex) => {
+    const ends = endsOf(e);
+    const pts = e.points;
+    if (!ends || !pts || pts.length < 2) return null;
+    const [a, b] = vertex === ends[0] ? [pts[0], pts[1]] : [pts[pts.length - 1], pts[pts.length - 2]];
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const l = Math.hypot(d[0], d[1], d[2]);
+    return l < 1e-12 ? null : [d[0] / l, d[1] / l, d[2] / l];
+  };
+
+  const limit = Math.cos(((180 - maxDegrees) * Math.PI) / 180);
+  const out = new Set(seedIds);
+  const queue = [...seedIds];
+  let guard = 0;
+  while (queue.length && guard++ < 1e6) {
+    const i = queue.pop();
+    const e = edges[i];
+    const ends = endsOf(e);
+    if (!ends) continue;
+    for (const v of ends) {
+      const mine = leaving(e, v);
+      if (!mine) continue;
+      for (const j of touching.get(v) || []) {
+        if (j === i || out.has(j)) continue;
+        const other = leaving(edges[j], v);
+        if (!other) continue;
+        // Both point away from the shared end, so carrying straight on means
+        // pointing in opposite directions: a dot near minus one.
+        const dot = mine[0] * other[0] + mine[1] * other[1] + mine[2] * other[2];
+        if (dot > limit) continue;
+        out.add(j);
+        queue.push(j);
+      }
+    }
+  }
+  return [...out];
+}

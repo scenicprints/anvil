@@ -3187,6 +3187,60 @@ async function run() {
     );
   });
 
+  test('tangent chain: one edge picks up the whole run that carries on from it', () => {
+    // Fusion has this ticked by default in Fillet and Chamfer, and on any part
+    // that is not all flats it is the difference between one click and thirty.
+    // A plain box is the negative case: every edge meets its neighbour at a
+    // right angle, so nothing carries on and a seed is on its own.
+    const plain = rebuild(boxDoc(40, 40, 40));
+    const plainTopo = buildTopology(K.meshData(plain.bodies[0].solid));
+    const alone = SEL.tangentEdgeRun(plainTopo, [plainTopo.edges[0].id]);
+    assert(alone.length === 1, `nothing continues a square corner, got ${alone.length}`);
+    plain.dispose();
+
+    // Round the four uprights and the top rim becomes straight, arc, straight,
+    // arc all the way round, every join smooth. One of them should bring back
+    // all eight.
+    const doc = boxDoc(40, 40, 40);
+    const first = rebuild(doc);
+    const topo0 = buildTopology(K.meshData(first.bodies[0].solid));
+    const uprights = topo0.edges
+      .filter((e) => e.kind === 'line' && Math.abs(e.dir?.[2] ?? 0) > 0.99)
+      .map(edgeReference);
+    first.dispose();
+    assert(uprights.length === 4, `four uprights, got ${uprights.length}`);
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: uprights, radius: '6' }]
+    });
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+
+    const zTop = topo.edges.reduce(
+      (m, e) => Math.max(m, ...(e.points || []).map((p) => p[2])),
+      -Infinity
+    );
+    const onTheRim = topo.edges.filter(
+      (e) => (e.points || []).length && e.points.every((p) => Math.abs(p[2] - zTop) < 1e-6)
+    );
+    assert(onTheRim.length >= 8, `the rim is in pieces, got ${onTheRim.length}`);
+
+    const run = SEL.tangentEdgeRun(topo, [onTheRim[0].id]);
+    const rimIds = new Set(onTheRim.map((e) => e.id));
+    const reached = run.filter((id) => rimIds.has(id));
+    assert(
+      reached.length === onTheRim.length,
+      `one click should take the whole rim, reached ${reached.length} of ${onTheRim.length}`
+    );
+    // And it stayed on the rim rather than turning down the sides.
+    assert(run.length === reached.length, `it wandered off the rim, ${run.length} against ${reached.length}`);
+    res.dispose();
+  });
+
   test('fillet: nothing picked rounds nothing', () => {
     // Pressing Fillet used to round every convex edge on the part before a
     // single edge had been clicked. On a shelled box that is a whole shape

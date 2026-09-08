@@ -222,7 +222,7 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 | Selection sets | several, each with its own radius and settings | has |
 | Radius Type | Constant, Chord Length, Variable, **Asymmetric** | partial — plus a hold-line type Fusion does not have |
 | Continuity | Tangent (G1), Curvature (G2) | **missing** |
-| Tangent Chain | select tangentially connected edges as one | **missing** |
+| Tangent Chain | select tangentially connected edges as one | has, v2.35.0, per set and on by default |
 | Tangency Weight | | **missing** |
 | Radius Points | radius and position along one edge (variable only) | has |
 | Corner Type | Rolling Ball, Setback | **missing** |
@@ -296,20 +296,26 @@ knowing before matching it.
 
 ### Scale — *pending* (Anvil: factor or per-axis, about the middle, the origin, or a point)
 
-### Tangent Chain — a setting, not a command — partial
+### Tangent Chain — a setting, not a command — has, v2.35.0
 
 Checked by default in Fillet and Chamfer, and present in Sweep, Draft, Loft and
 Thin Extrude. When on, picking an edge takes every edge tangentially connected
 to it, and a rolled-back edit that adds edges updates the later feature's
 selection to match.
 
-**Correction to an earlier reading of this file:** Anvil does have the capability,
-as a Select command (`selectTangent`, on `select.js`'s `tangentRun`). What it does
-not have is the per-dialog checkbox. The difference is not cosmetic: as a
-selection command it happens once, before the dialog; as a dialog setting it stays
-live, so adding edges to an earlier feature updates every later feature that was
-picked with it on. The first is a convenience, the second is a rule the model
-keeps.
+Fillet and Chamfer carry it per set now, on by default. Picking one edge takes
+every edge that carries on smoothly from it, and picking one that is already in
+takes its whole run back out, so the gesture still undoes itself.
+
+`select.js` has two runs and they answer different questions. `tangentRun` walks
+across *faces* that meet smoothly, which is what the Select command uses.
+`tangentEdgeRun` walks along *edges* that continue each other, which is what a
+fillet wants: two edges continue if they share an end and leave it in nearly
+opposite directions, so a corner where four edges meet does not drag the whole
+cage in.
+
+Still to do: Sweep, Draft, Loft and thin Extrude have the same setting in Fusion
+and do not have it here.
 
 ### Press Pull — partial, and worth reading closely
 

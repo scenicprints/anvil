@@ -3550,11 +3550,27 @@ function blendFields(kind) {
           type: 'pick',
           pick: `set:${i}`,
           summary: (f) => {
-            const c = f.sets[i]?.edges?.length || 0;
-            return c ? `${c} edge${c === 1 ? '' : 's'}` : 'Every convex edge';
+            const set = f.sets[i];
+            const c = set?.edges?.length || 0;
+            // An empty list used to mean the whole part. It means nothing
+            // picked yet, and `all` is the deliberate ask, so the summary says
+            // which of the two this set is rather than the old answer.
+            if (c) return `${c} edge${c === 1 ? '' : 's'}`;
+            return set?.all ? 'Every convex edge' : 'none yet';
           },
           clear: (f) => {
             f.sets[i].edges = [];
+          }
+        });
+        out.push({
+          // On by default, the same as Fusion. One click takes the whole run of
+          // edges that carry on smoothly from the one picked.
+          key: `sets.${i}.tangentChain`,
+          label: `Set ${n} follows tangent edges`,
+          type: 'bool',
+          get: (f) => f.sets[i]?.tangentChain !== false,
+          set: (f, v) => {
+            f.sets[i].tangentChain = !!v;
           }
         });
         if (kind === 'fillet') {
@@ -12470,9 +12486,29 @@ function pickIntoEdit(hit) {
     if (!edge) return true;
     set[list] = set[list] || [];
     const ref = edgeReference(edge, record.topology);
-    const at = set[list].findIndex((x) => sameEdgeRef(x, ref));
-    if (at >= 0) set[list].splice(at, 1);
-    else set[list].push(ref);
+
+    // Tangent Chain, on by default the same as Fusion. One click takes the
+    // whole run of edges that carry on smoothly from the one picked, which on
+    // any part that is not all flats is the difference between one click and
+    // thirty. A hold line is exempt: it is a single edge by definition.
+    const chained =
+      list === 'edges' && set.tangentChain !== false
+        ? SEL.tangentEdgeRun(record.topology, [edge.id])
+        : [edge.id];
+    const refs = chained
+      .map((id) => record.topology.edges.find((e) => e.id === id))
+      .filter(Boolean)
+      .map((e) => edgeReference(e, record.topology));
+
+    // Clicking an edge that is already in takes its whole run back out, so the
+    // gesture still undoes itself the way one edge always did.
+    if (set[list].some((x) => sameEdgeRef(x, ref))) {
+      set[list] = set[list].filter((x) => !refs.some((r) => sameEdgeRef(x, r)));
+    } else {
+      for (const r of refs) {
+        if (!set[list].some((x) => sameEdgeRef(x, r))) set[list].push(r);
+      }
+    }
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (ed.pickInto === 'embossFaces') {
     // A face reference here carries its body, because an emboss can put the
