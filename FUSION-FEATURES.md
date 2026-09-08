@@ -419,9 +419,120 @@ path to this is short.
 
 ---
 
+## Design > Sketch
+
+Anvil's sketcher is the strongest part of it against Fusion. Tools: line, arc,
+circle (centre and diameter), ellipse, rectangle (corner and centre), polygon,
+slot, spline, control-point spline, conic, point, text, fillet, chamfer, trim,
+extend, offset, break, mirror, and rectangular and circular pattern, plus copy,
+paste, move and scale. Constraints: coincident, collinear, concentric, equal,
+fix, horizontal, vertical, midpoint, parallel, perpendicular, symmetric,
+tangent. Dimensions carry expressions.
+
+**3D sketch tools**, Fusion's list: Line, Arc, Spline, Rectangle, Circle,
+Ellipse, Point, Text, Conic Curve. Anvil has all nine as tools and has 3D
+sketching. **3D sketch constraints**, Fusion's list: horizontal/vertical,
+coincident, tangent, equal, parallel, perpendicular, fix/unfix, midpoint,
+concentric, colinear. Anvil has all ten.
+
+### Sketch Palette — partial
+
+The palette that follows an open sketch. Contextual options change with the
+active tool or selected object: line types when Line is up, slot types when Slot
+is up, and for a selected spline, normal or construction plus a curvature comb,
+with the degree editable on a control-point spline.
+
+| Option | Anvil |
+|---|---|
+| Linetype (convert geometry to another line type) | **missing** |
+| Construction | has |
+| Centerline | has |
+| **Look At** (turn the camera square to the sketch plane) | **missing** |
+| Sketch Grid on/off | has |
+| Snap on/off | has |
+| **Slice** (cut through bodies at the sketch plane while sketching) | **missing** |
+| Show Profile | has |
+| Show Points / Dimensions / Constraints | partial |
+| Show Construction Geometries | **missing** as a toggle |
+| Show Projected Geometries | **missing** as a toggle |
+| 3D Sketch on/off | has |
+
+**Slice is the one worth having.** Sketching inside a part you cannot see into is
+the common case, and a temporary cut at the sketch plane is how Fusion solves it.
+
+### Sketch lifecycle — *pending*
+
+Create a sketch · start on a plane or face · construction and centerline
+geometry · finish · edit · **copy a sketch** · **redefine a sketch plane** ·
+**export as DXF**. Anvil has create, start on a plane or face, construction,
+centreline, finish and edit. Copy, redefine the plane, and DXF export are
+*pending* confirmation.
+
+---
+
+## Design > Surface
+
+### Create — near complete
+
+| Fusion | Anvil |
+|---|---|
+| Patch | has |
+| Extrude | has |
+| Revolve | has |
+| Sweep | has |
+| Loft | has |
+| Ruled | has |
+| Offset | has |
+
+Option-by-option comparison of each is *pending*; the Loft reference has its own
+surface variant page.
+
+### Modify — near complete
+
+| Fusion | Anvil |
+|---|---|
+| **Fillet or chamfer surface edges** | **missing** |
+| Trim | has |
+| Untrim | has |
+| Extend | has |
+| Stitch | has |
+| Unstitch | has |
+| Reverse normal | has |
+
+The only gap in the surface workspace is filleting and chamfering the edges of a
+surface body, as opposed to a solid.
+
+---
+
+## Design > Mesh
+
+| Fusion | Anvil |
+|---|---|
+| Direct Edit | has |
+| Remesh | has |
+| Reduce | has |
+| Plane Cut (trim or split with a plane) | has |
+| Shell | **missing** |
+| Combine | has (merge) |
+| Smooth | has |
+| Reverse normal | has |
+| Erase and Fill | has |
+| Align to a plane | **missing** |
+| **Extrude texture** | **missing** |
+| Separate | has |
+| Scale | **missing** as a mesh command |
+| Convert to solid | has |
+| Mesh Selection Palette | **missing** |
+
+Anvil also has patch, repair, stitch and section, which are its own. The gaps are
+mesh shell, align to a plane, texture extrude, a mesh scale command, and the
+selection palette that governs how clicking picks mesh faces.
+
+---
+
 ## Sections still to crawl
 
-Design: Sketch · Design: Solid (remainder) · Design: Surface · Design: Mesh ·
+Design: Solid (remainder) · Design: Surface · Design: Mesh ·
 Design: Form · Design: Sheet Metal · Design: Assemblies (joints, components,
 contact sets, motion) · Designs (documents, timeline, parameters, appearance) ·
 Configurations · Generative Design · Render · Animation · Simulation ·
