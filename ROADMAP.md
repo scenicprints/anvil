@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.24.1**. 516 tests.
+Current version: **2.25.0**. 516 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
@@ -92,8 +92,28 @@ out of the browser, the timeline and the corner. They stay in the dialog's own
 footer. An existing feature edited into a state that will not build is a real
 problem and still reads as one.
 
-That is the same lesson a third time: **look at the screen, not at the state.**
-Every one of these was invisible to a check that asks the app how it is doing.
+**And still not there**, because the thing he had asked for in the first message
+was the box to type a size into, and it only ever existed during a drag. So the
+only way to give a size was to drag out a wrong one and type over it. The number
+is usually already known and typing it is quicker than dragging to it, and
+nothing on screen said the arrow could be typed at, because there was nothing on
+screen to type in.
+
+The box now stands beside the arrow for as long as the arrow is there.
+`syncPullValueBox` keeps it, and keeps the same element rather than rebuilding
+it, or every rebuild would take the focus and the half-typed number with it.
+Typing into it makes the feature the same way a drag does, so a size can be
+given with no drag at all. Two consequences fell out of that: Escape in the box
+has to let go of the selection too, or the box comes straight back with the
+arrow; and `commitEdit` clears the geometry selection, because what a feature
+was made from has been used, and leaving it selected leaves an arrow standing on
+it offering to do the same thing again over the thing just built.
+
+That is the same lesson three times over: **look at the screen, not at the
+state.** Every one of these was invisible to a check that asks the app how it is
+doing. And the fourth: **he said what was missing in his first message.** The
+bubble to type a measurement into was named there, and three rounds went by
+fixing everything around it.
 
 A fourth rule, then, and it is the one that would have caught all four:
 **walk the path a person walks on the day they open it.** Every demo before

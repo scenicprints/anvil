@@ -1641,12 +1641,17 @@ analyses at all.
 different geometry. Silhouette Split works only where the parting line is flat.
 
 **Pull it, rather than asking for a command.** Click a planar face and an arrow
-stands on it; drag the arrow and the body follows as it happens, with the
-distance in a box beside the cursor. Let go and that box stays, focused, so the
-exact number can be typed over the one you dragged to. Enter accepts, Escape
-throws the whole thing away. A sketch profile does the same and extrudes
-instead: one gesture, two features, because a face and a profile want different
-things done to them but the same thing said.
+stands on it, with a distance box beside the arrow. Type the number, or drag the
+arrow and watch the body follow as it happens with the number keeping up. Either
+one on its own is enough: typing needs no drag first, and dragging fills the box
+in. Enter accepts, Escape throws the whole thing away. A sketch profile does the
+same and extrudes instead: one gesture, two features, because a face and a
+profile want different things done to them but the same thing said.
+
+The box used to exist only during a drag, so the only way to give a size was to
+drag out a wrong one and type over it. The number is usually already known and
+typing it is quicker, and there was nothing on screen that said the arrow could
+be typed at, because there was nothing on screen to type in.
 
 It pulls both ways. A face offset carries its sign and cuts in when it is
 negative; an extrude has no sign at all, being a length one way and a flag that
@@ -1684,14 +1689,16 @@ as a click on what is underneath rather than a drag of nothing, which is what
 lets the same profile be clicked again to let go of it: the arrow the first
 click puts up is standing exactly where the second click has to land.
 
-**The callout steps aside for the arrow.** It follows the pointer, and the
-pointer is exactly where the arrow has just stood up, so it covered the arrow
-completely. It passes clicks through, so the arrow could be grabbed the whole
-time, which is worse rather than better: a panel reading "click the profiles to
-use", sitting on top of the one thing on screen that would have said what to do
-next. It now takes the first of eight positions round the cursor that clears the
-arrow's span, and it is told to move the moment the arrow appears rather than at
-the next mouse move.
+**The callout steps aside for the arrow and its box.** It follows the pointer,
+and the pointer is exactly where the arrow has just stood up, so it covered the
+arrow completely. It passes clicks through, so the arrow could be grabbed the
+whole time, which is worse rather than better: a panel reading "click the
+profiles to use", sitting on top of the one thing on screen that would have said
+what to do next. It now takes the first of eight positions round the cursor that
+clears both of them, and it is told to move the moment the arrow appears rather
+than at the next mouse move. Both, because avoiding only the arrow put it
+exactly where the box had just gone, which swapped one thing covered for
+another.
 
 **An unfinished dialog is not a problem.** Extrude opens with a distance of zero
 and nothing pointed at, deliberately, so pressing the button used to put "Extrude

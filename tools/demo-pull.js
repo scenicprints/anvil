@@ -207,6 +207,37 @@ report.faceSymmetric =
     report.faceOut.volume - report.boxVolume + (report.faceIn.volume - report.boxVolume)
   ) < 1;
 
+/* ---- typing the size without dragging at all ---- */
+// The box used to exist only during a drag, so the only way to give a size was
+// to drag out a wrong one and type over it. The number is usually already
+// known, and typing it is quicker than dragging to it. Nothing on screen said
+// the arrow could be typed at, because there was nothing on screen to type in.
+await dropSelection();
+await clickAt(cx, cy);
+{
+  const input = document.querySelector('.pull-entry input');
+  report.boxIsThereBeforeAnyDrag = !!input;
+  if (input) {
+    input.focus();
+    input.value = '5';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await wait(500);
+    report.typedWithoutDragging = {
+      volume: Number(dev.bodies[0].solid.volume().toFixed(1)),
+      zMax: Number(dev.bodies[0].solid.boundingBox().max[2].toFixed(2))
+    };
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await wait(700);
+  }
+  report.afterTyping = {
+    volume: Number(dev.bodies[0].solid.volume().toFixed(1)),
+    onScreen: leftOnScreen()
+  };
+  // 30 by 30 by 25.
+  report.typingAloneBuiltIt = Math.abs(report.afterTyping.volume - 22500) < 1;
+}
+await undo();
+
 /* ---- escaping out of a pull leaves nothing behind ---- */
 await dropSelection();
 await clickAt(cx, cy);

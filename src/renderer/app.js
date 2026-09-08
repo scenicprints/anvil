@@ -11030,12 +11030,12 @@ function refreshPullHandle() {
     state.vp.setGizmo(target.frame, 'pull');
   }
 
-  // The value box belongs to a pull that is happening or to the feature that
-  // pull opened. Once neither is true it has nothing to say and nobody to say
-  // it to, and left alone it floats beside the pointer for the rest of the
-  // session. Swept up here rather than at each exit, because it was the exits
-  // that were missed: only the dialog's own OK and Cancel ever cleared it.
-  if (!state.pullDrag && !state.editing) hidePullValue();
+  // The value box stands beside the arrow for as long as the arrow is there,
+  // and goes when it goes. Swept up here rather than at each exit, because it
+  // was the exits that were missed: only the dialog's own OK and Cancel ever
+  // cleared it, so every other way out left it floating beside the pointer for
+  // the rest of the session.
+  syncPullValueBox();
 
   // The callout steps aside for the arrow, and the arrow has just changed, so
   // it has to be told now rather than at the next pointer move. Otherwise it
@@ -11082,46 +11082,12 @@ function pullPointerDown(e) {
     return true;
   }
 
-  const feature =
-    target.kind === 'face'
-      ? {
-          id: uid('f'),
-          type: 'offsetFace',
-          bodies: [target.record.id],
-          faces: [faceReference(target.face)],
-          distance: '0'
-        }
-      : {
-          id: uid('f'),
-          type: 'extrude',
-          sketch: target.pick.sketch,
-          seeds: [target.pick.seed],
-          distance: '0',
-          // An extrude goes one way and is turned round by `flip`. It has no
-          // "other side" setting: `two` means both at once, with a length each.
-          direction: 'one',
-          flip: false,
-          op: state.result?.bodies.length ? 'join' : 'new',
-          targets: 'all',
-          taper: '0',
-          extent: 'distance'
-        };
-
   // Recorded before the dialog opens, not after. Opening it rebuilds, and a
   // rebuild takes the handle away again unless it can see that a drag has hold
   // of it, which left the arrow vanishing under the pointer that grabbed it.
+  const feature = pullFeatureFor(target);
   state.pullDrag = { target, frame, start, feature, moved: false, typed: false };
-
-  // The feature goes in straight away and is driven by the drag, so what you
-  // see while pulling is the real rebuild rather than a preview that might
-  // disagree with it.
-  openFeatureEditor(
-    feature,
-    target.kind === 'face' ? 'Press Pull' : 'Extrude',
-    target.kind === 'face' ? pressPullFields() : extrudeFields(),
-    false,
-    { keepView: true, keepFocus: true }
-  );
+  openPullEditor(target, feature);
 
   showPullValue(e);
   try {
@@ -11131,6 +11097,50 @@ function pullPointerDown(e) {
     /* capture is a convenience, not a requirement */
   }
   return true;
+}
+
+/** The feature a pull on this target creates. */
+function pullFeatureFor(target) {
+  if (target.kind === 'face') {
+    return {
+      id: uid('f'),
+      type: 'offsetFace',
+      bodies: [target.record.id],
+      faces: [faceReference(target.face)],
+      distance: '0'
+    };
+  }
+  return {
+    id: uid('f'),
+    type: 'extrude',
+    sketch: target.pick.sketch,
+    seeds: [target.pick.seed],
+    distance: '0',
+    // An extrude goes one way and is turned round by `flip`. It has no
+    // "other side" setting: `two` means both at once, with a length each.
+    direction: 'one',
+    flip: false,
+    op: state.result?.bodies.length ? 'join' : 'new',
+    targets: 'all',
+    taper: '0',
+    extent: 'distance'
+  };
+}
+
+/**
+ * Put the feature in and open its dialog, without moving the camera or taking
+ * the focus. The feature goes in straight away and is driven from there, so
+ * what is on screen is the real rebuild rather than a preview that might
+ * disagree with it.
+ */
+function openPullEditor(target, feature) {
+  openFeatureEditor(
+    feature,
+    target.kind === 'face' ? 'Press Pull' : 'Extrude',
+    target.kind === 'face' ? pressPullFields() : extrudeFields(),
+    false,
+    { keepView: true, keepFocus: true }
+  );
 }
 
 function pullPointerMove(e) {
@@ -11268,13 +11278,23 @@ function showPullValue(e) {
     const text = input.value.trim();
     if (state.pullDrag) state.pullDrag.typed = text !== '';
     wrap.classList.toggle('locked', text !== '');
-    const feature = state.editing?.feature;
-    if (!feature) return;
     // Whatever the parameters understand, so a size can be given as `wall * 2`.
     // The text itself is kept rather than the number it came to, so it still
     // reads back the way it was typed and still follows the parameter.
     const scope = resolveParameters(state.doc.parameters).scope;
     if (!Number.isFinite(safeEval(text, scope, NaN))) return;
+
+    // Typing a size into the box is the same request as dragging to one, so it
+    // makes the feature the same way a drag does. Without this the box was
+    // inert until something had been dragged, which is the wrong way round:
+    // typing the number you already know is the quicker of the two.
+    if (!state.editing && state.pullHandle && state.pullHandle.kind !== 'editing') {
+      const target = state.pullHandle;
+      openPullEditor(target, pullFeatureFor(target));
+      input.focus();
+    }
+    const feature = state.editing?.feature;
+    if (!feature) return;
     feature.distance = text;
     renderFields();
     scheduleRebuild();
@@ -11290,6 +11310,9 @@ function showPullValue(e) {
       ev.stopPropagation();
       hidePullValue();
       cancelEdit();
+      // The box comes back with the arrow, so letting go of the feature is not
+      // enough on its own: let go of what the arrow is standing on too.
+      clearGeometrySelection();
     }
   });
 
@@ -11303,10 +11326,59 @@ function showPullValue(e) {
 
 function movePullValue(e) {
   const box = state.pullValueEl;
-  if (!box || !e) return;
+  if (!box) return;
   const r = document.getElementById('viewwrap').getBoundingClientRect();
-  box.style.left = `${e.clientX - r.left + 18}px`;
-  box.style.top = `${e.clientY - r.top + 18}px`;
+  if (e) {
+    box.style.left = `${e.clientX - r.left + 18}px`;
+    box.style.top = `${e.clientY - r.top + 18}px`;
+    return;
+  }
+  // No pointer to follow, so it stands beside the arrow's tip: near enough to
+  // read as belonging to it, off to the side so it does not cover it.
+  const f = state.pullHandle?.frame;
+  if (!f) return;
+  const len = state.vp.pixelSize() * 95;
+  const tip = state.vp.worldToScreen(
+    f.origin[0] + f.z[0] * len,
+    f.origin[1] + f.z[1] * len,
+    f.origin[2] + f.z[2] * len
+  );
+  if (!tip || tip.behind) return;
+  const w = box.offsetWidth || 150;
+  const h = box.offsetHeight || 34;
+  const pad = 8;
+  const x = Math.max(pad, Math.min(tip.clientX - r.left + 20, r.width - w - pad));
+  const y = Math.max(pad, Math.min(tip.clientY - r.top - h / 2, r.height - h - pad));
+  box.style.left = `${x}px`;
+  box.style.top = `${y}px`;
+}
+
+/**
+ * Keep a box beside the arrow whenever there is an arrow.
+ *
+ * It used to exist only during a drag, so the only way to give a size was to
+ * drag out a wrong one first and then type over it. The number is usually
+ * already known, and typing it is quicker than dragging to it; there was
+ * nothing on screen that said so, or that said the arrow could be typed at all.
+ *
+ * The element is kept rather than rebuilt while the arrow stays up, or every
+ * rebuild would take the focus and the half-typed number with it.
+ */
+function syncPullValueBox() {
+  // While dragging, the box belongs to the drag and follows the cursor.
+  if (state.pullDrag) return;
+  if (!state.pullHandle) {
+    if (!state.editing) hidePullValue();
+    return;
+  }
+  if (!state.pullValueEl) {
+    showPullValue(null);
+    const f = state.editing?.feature;
+    const shown = f && f.distance !== '0' ? f.distance : '';
+    const input = state.pullValueEl?.querySelector('input');
+    if (input) input.value = shown;
+  }
+  movePullValue(null);
 }
 
 function hidePullValue() {
@@ -11435,27 +11507,53 @@ function pickCountText(armed, f) {
  * than clamped near an edge, so it never covers the thing being pointed at.
  */
 /**
- * Where the pull arrow lies on screen, in the viewport wrapper's coordinates,
- * with a margin round it. Null when there is no arrow or it is behind the eye.
+ * What the callout has to keep off: the arrow, and the value box standing
+ * beside it, as one rectangle in the viewport wrapper's coordinates.
+ *
+ * Both, not just the arrow. Avoiding only the arrow moved the callout to
+ * exactly where the box had just been put, which swapped one thing being
+ * covered for another.
  */
 function pullArrowArea(r) {
   const f = state.pullHandle?.frame;
-  if (!f) return null;
-  const len = state.vp.pixelSize() * 95;
-  const a = state.vp.worldToScreen(f.origin[0], f.origin[1], f.origin[2]);
-  const b = state.vp.worldToScreen(
-    f.origin[0] + f.z[0] * len,
-    f.origin[1] + f.z[1] * len,
-    f.origin[2] + f.z[2] * len
-  );
-  if (!a || !b || a.behind || b.behind) return null;
-  const m = 16;
-  return {
-    x0: Math.min(a.clientX, b.clientX) - r.left - m,
-    x1: Math.max(a.clientX, b.clientX) - r.left + m,
-    y0: Math.min(a.clientY, b.clientY) - r.top - m,
-    y1: Math.max(a.clientY, b.clientY) - r.top + m
-  };
+  let area = null;
+  if (f) {
+    const len = state.vp.pixelSize() * 95;
+    const a = state.vp.worldToScreen(f.origin[0], f.origin[1], f.origin[2]);
+    const b = state.vp.worldToScreen(
+      f.origin[0] + f.z[0] * len,
+      f.origin[1] + f.z[1] * len,
+      f.origin[2] + f.z[2] * len
+    );
+    if (a && b && !a.behind && !b.behind) {
+      const m = 16;
+      area = {
+        x0: Math.min(a.clientX, b.clientX) - r.left - m,
+        x1: Math.max(a.clientX, b.clientX) - r.left + m,
+        y0: Math.min(a.clientY, b.clientY) - r.top - m,
+        y1: Math.max(a.clientY, b.clientY) - r.top + m
+      };
+    }
+  }
+  const box = state.pullValueEl?.getBoundingClientRect();
+  if (box && box.width) {
+    const m = 10;
+    const b = {
+      x0: box.left - r.left - m,
+      x1: box.right - r.left + m,
+      y0: box.top - r.top - m,
+      y1: box.bottom - r.top + m
+    };
+    area = area
+      ? {
+          x0: Math.min(area.x0, b.x0),
+          x1: Math.max(area.x1, b.x1),
+          y0: Math.min(area.y0, b.y0),
+          y1: Math.max(area.y1, b.y1)
+        }
+      : b;
+  }
+  return area;
 }
 
 /**
@@ -12454,6 +12552,10 @@ function commitEdit() {
   // left "EXTRUDE, click the profiles to use" floating by the pointer with no
   // dialog behind it for the rest of the session.
   syncPickBar();
+  // What the feature was made from has been used. Leaving it selected leaves
+  // the arrow and its box standing on it, offering to do the same thing again,
+  // over the thing that was just built.
+  clearGeometrySelection();
   state.dirty = true;
   rebuildAll();
   bakeIfDirectModelling();
