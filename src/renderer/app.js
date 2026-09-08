@@ -4449,6 +4449,13 @@ function revolveFields() {
       }
     },
     {
+      // Fusion has this checked by default. Off, an axis that is not in the
+      // profile's plane is refused, which is what this always did.
+      key: 'projectAxis',
+      label: 'Project axis onto the profile plane',
+      type: 'bool'
+    },
+    {
       key: '__namedAxis',
       label: 'Or an axis by name',
       type: 'select',
@@ -4736,6 +4743,10 @@ function newRevolveFeature() {
     ...base,
     type: 'revolve',
     axis: { type: 'y' },
+    // Checked by default, the same as Fusion. An axis picked in the canvas that
+    // happens to sit off the profile's plane is flattened onto it rather than
+    // turned away, which is what a person means when they point at it.
+    projectAxis: true,
     direction: 'one',
     measure: 'whole',
     extent: 'angle',

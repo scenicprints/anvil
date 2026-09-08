@@ -19,6 +19,75 @@ of what was learned building it.
 
 ---
 
+## The library: profiles, projects and two computers
+
+Agreed 2026-09-08. **No server, no accounts service, no shared projects.** The
+whole thing rests on one decision: the library lives in a folder the user picks,
+and if that folder happens to be OneDrive or Drive then syncing is the cloud
+client's job, not Anvil's. Everything below follows from that.
+
+### Profiles
+
+A profile is a name and a library folder. It is not an account: no password, no
+server, nothing to reset. Anvil starts by asking which profile, or goes straight
+in when there is only one.
+
+A profile holds the library location, recents, and preferences. Saves and lock
+files are stamped with the profile name and the machine name, so a message can
+say who has a part open and where.
+
+### Library layout
+
+    <library root>/
+      projects/
+        <project>/
+          project.json          name, id, created
+          <folders>/
+            <part>.anvil
+
+Plain folders, legible in Explorer, and the library survives Anvil being
+uninstalled. `library.json` at the root is an index of projects, folders,
+thumbnails, names and modified times. **The index is a cache and never the
+truth.** The files are. It can be thrown away and rebuilt by scanning, and it
+exists so that search and a recents list do not have to open every document.
+
+### The three things that make two computers work
+
+1. **Atomic saves.** Write to a temp file in the same folder, flush, rename over
+   the target. A cloud client that picks up a half-written `.anvil` mid-write
+   syncs a corrupt part to every other machine, and this is the single most
+   important item on the list.
+2. **Lock files.** A `.lock` beside the document carrying profile, machine and a
+   heartbeat. Opening a locked part offers read-only, or taking it, and says who
+   and when. Stale locks expire on their own, because the other machine will not
+   always have shut down tidily.
+3. **A version counter.** Each document carries an id, a counter and the last
+   writer. On save, if the file on disk has moved on since it was loaded, the
+   save refuses and offers to write a new version instead. Locks reduce the
+   two-at-once case; this is what actually prevents losing work.
+
+### Where you left off
+
+Camera, active tab, timeline rollback position and selection are stored in the
+document, written on save, and **not counted as a change for the dirty flag** so
+that looking at a part does not mark it edited. Open it on the other machine and
+the view is where you left it.
+
+### Known hazards
+
+OneDrive's Files On-Demand leaves files as placeholders until touched, so the
+first open can block on a download. Google Drive's desktop client handles this
+worse than OneDrive does. Anvil has to treat a file that is not there yet as a
+slow read rather than a missing one.
+
+### Deliberately not built
+
+No shared projects, no gallery, no friends list, no accounts service. If a
+public gallery is ever wanted, the Dell already runs a server and is the place
+for it. Not Firebase, and not now.
+
+---
+
 ## Read this before writing another demo
 
 Twelve versions of features went out on top of an extrude that did not work.

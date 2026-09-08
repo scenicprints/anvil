@@ -2601,13 +2601,27 @@ async function run() {
     near(res.bodies[0].solid.volume(), 4 * 3 * 2 * Math.PI * 2, 20, 'about a sketch line');
   });
 
-  test('revolve: a world axis has to lie in the profile plane', () => {
+  test('revolve: an axis square to the profile has nothing to turn about', () => {
     // Z is perpendicular to an XY sketch, so a profile cannot sweep about it.
+    // Project Axis flattens an off-plane axis onto the profile plane, and an
+    // axis pointing straight out of that plane flattens to nothing at all,
+    // which is the honest refusal: there is no direction left to turn about.
     const bad = ringRevolve({ extent: 'full', axis: { type: 'world', worldAxis: 'z' } });
     const res = rebuild(bad.doc);
     assert(
-      res.errors.some((e) => /same plane/.test(e.message)),
-      `expected a message about the plane, got ${JSON.stringify(res.errors)}`
+      res.errors.some((e) => /nothing to turn about/.test(e.message)),
+      `expected a message about there being no axis left, got ${JSON.stringify(res.errors)}`
+    );
+
+    // With Project Axis off it is refused earlier, for being off the plane.
+    const strict = ringRevolve({
+      extent: 'full',
+      axis: { type: 'world', worldAxis: 'z' },
+      projectAxis: false
+    });
+    assert(
+      rebuild(strict.doc).errors.some((e) => /not in the profile plane/.test(e.message)),
+      'and off is the stricter reading'
     );
 
     // Y lies in it, and is the same as the sketch's own Y axis.

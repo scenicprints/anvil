@@ -3101,12 +3101,23 @@ export function rebuild(doc, options = {}) {
       y: line.origin[1] + line.dir[1],
       z: line.origin[2] + line.dir[2]
     });
-    if (Math.abs(a.w) > 1e-4 || Math.abs(b.w - a.w) > 1e-4) {
-      throw new Error('The revolve axis has to lie in the same plane as the profile');
+    // Project Axis, which Fusion has checked by default: an axis that does not
+    // lie in the profile's plane is flattened onto it rather than refused. Turn
+    // it off to keep the axis where it is, which is the stricter reading and
+    // what this always did before.
+    if (feature.projectAxis === false && (Math.abs(a.w) > 1e-4 || Math.abs(b.w - a.w) > 1e-4)) {
+      throw new Error(
+        'The revolve axis is not in the profile plane. Turn on Project axis to flatten it onto the plane.'
+      );
     }
     const dx = b.u - a.u;
     const dy = b.v - a.v;
-    const len = Math.hypot(dx, dy) || 1;
+    const len = Math.hypot(dx, dy);
+    // Straight out of the plane there is nothing left to turn about once it has
+    // been flattened, and a zero direction would revolve about nothing at all.
+    if (len < 1e-9) {
+      throw new Error('That axis points out of the profile plane, so there is nothing to turn about');
+    }
     return { at: { x: a.u, y: a.v }, dir: { x: dx / len, y: dy / len } };
   }
 

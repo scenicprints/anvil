@@ -54,7 +54,7 @@ operation, and **Tangent Chain** on thin extrude.
 |---|---|---|
 | Profile | coplanar profiles or faces | has |
 | Axis | a linear or circular object | has |
-| **Project Axis** | project the axis onto the profile's sketch plane, or leave it where it is | **missing** |
+| Project Axis | project the axis onto the profile's sketch plane, or leave it where it is | has, v2.29.0 |
 | Extent Type | Partial, To Object, Full | has |
 | Angle | or the object to revolve to | has |
 | Direction | One Side, Two Sides, Symmetric | has |
@@ -260,7 +260,7 @@ knowing before matching it.
 |---|---|---|
 | Target Body / Tool Bodies | | has |
 | Operation | Join, Cut, Intersect | has |
-| Objects To Cut | Auto-Select, # Bodies | **missing** |
+| Objects To Cut | Auto-Select, # Bodies | n/a — Anvil names the tool bodies explicitly, so there is nothing to infer from visibility |
 | New Component | | has |
 | Keep Tools | | has |
 
@@ -341,8 +341,8 @@ Fusion does not have here.
 |---|---|---|
 | Object | Bodies, Components | partial — bodies |
 | From / To geometry | **point, line, plane, circle, or coordinate system** | partial — face to face |
-| Flip | invert 180 degrees | needs checking |
-| Angle | rotate 90 degrees per click | **missing** |
+| Flip | invert 180 degrees | has |
+| Angle | rotate 90 degrees per click | has, as a typed angle rather than a click |
 
 Align creates no relationship between the objects, unlike a joint. Anvil's
 version puts a face of one body flat against another, which is the plane-to-plane
