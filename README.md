@@ -1651,7 +1651,24 @@ profile want different things done to them but the same thing said.
 The box used to exist only during a drag, so the only way to give a size was to
 drag out a wrong one and type over it. The number is usually already known and
 typing it is quicker, and there was nothing on screen that said the arrow could
-be typed at, because there was nothing on screen to type in.
+be typed at, because there was nothing on screen to type in. It arrives focused,
+too, or it is a box you have to find and click before it will take anything,
+which from the keyboard is the same as not being there. Focus is only taken from
+the viewport: a field somebody is already typing in keeps it.
+
+**A click on the arrow is a click, not a drag of nothing.** Pressing it and
+letting go without moving used to start the feature at zero, so clicking a face
+a second time, or clicking anywhere near the arrow the first click had put up,
+dropped you into Press Pull. From the outside that is the app deciding on its
+own to extrude, and it is what made a face impossible to simply select and then
+sketch on. A press that never moved now falls through to ordinary selection.
+
+**A new extrude joins only where it stands on something.** The operation
+defaults to Join when the sketch is drawn on a face of a body, which is what
+adding a boss to a part looks like, and to New Body everywhere else. It used to
+join whenever any body existed at all, so two rectangles drawn a hundred
+millimetres apart on the same ground plane came out as one body with two lumps
+in it.
 
 It pulls both ways. A face offset carries its sign and cuts in when it is
 negative; an extrude has no sign at all, being a length one way and a flag that

@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.25.0**. 516 tests.
+Current version: **2.26.0**. 516 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
@@ -108,6 +108,21 @@ has to let go of the selection too, or the box comes straight back with the
 arrow; and `commitEdit` clears the geometry selection, because what a feature
 was made from has been used, and leaving it selected leaves an arrow standing on
 it offering to do the same thing again over the thing just built.
+
+**Then three more, all from the same session and all from him using it.**
+
+- The box appeared but did not take the keyboard, so typing did nothing and it
+  still had to be dragged first. Focused now, unless something else is being
+  typed in.
+- A press on the arrow that never moved started the feature at zero. So
+  clicking a face a second time, or near the arrow the first click put up,
+  dropped you into Press Pull, and a face could not be simply selected and then
+  sketched on. It falls through to ordinary selection now, the same rule that
+  was already in place for a dialog waiting to be pointed at.
+- The extrude operation defaulted to Join whenever any body existed, so two
+  rectangles drawn far apart on the same ground plane came out as one body with
+  two lumps in it. Join is now the default only where the sketch is drawn on a
+  face of a body.
 
 That is the same lesson three times over: **look at the screen, not at the
 state.** Every one of these was invisible to a check that asks the app how it is

@@ -4657,7 +4657,12 @@ function newExtrudeFeature() {
   });
   const hasPick = (seeds && seeds.length) || faces.length;
   const onFace = !!state.doc.sketches[sketchId]?.plane?.face;
-  const defaultOp = state.result?.bodies.length ? 'join' : 'new';
+  // Join only where the sketch is drawn on a body, which is what "add this to
+  // that" looks like. A sketch on an origin plane, or on a plane of its own, is
+  // a new part: joining it made two rectangles drawn a hundred millimetres
+  // apart come out as one body with two lumps in it, which is not something
+  // anybody asked for and is a nuisance to undo.
+  const defaultOp = state.result?.bodies.length && (onFace || faces.length) ? 'join' : 'new';
 
   return {
     id: uid('f'),
@@ -11120,7 +11125,12 @@ function pullFeatureFor(target) {
     // "other side" setting: `two` means both at once, with a length each.
     direction: 'one',
     flip: false,
-    op: state.result?.bodies.length ? 'join' : 'new',
+    // Join only where the sketch is drawn on a body. Anywhere else it is a new
+    // part, not an addition to whatever happens to exist already.
+    op:
+      state.result?.bodies.length && state.doc.sketches[target.pick.sketch]?.plane?.face
+        ? 'join'
+        : 'new',
     targets: 'all',
     taper: '0',
     extent: 'distance'
@@ -11172,18 +11182,30 @@ function pullPointerUp(e) {
   state.pullDrag = null;
   refreshPullHandle();
 
-  // A press on the arrow that never moved is a click, not a drag, and while a
-  // dialog is waiting to be pointed at the thing under the arrow is the profile
-  // the arrow is standing on. Swallowing that click meant a profile could be
-  // chosen and then never let go of, because every attempt to click it again
-  // landed on the arrow it had just put there.
-  if (d.existing && !d.moved && !d.typed && e && state.editing?.pickInto) {
-    hidePullValue();
-    const profile = profilePickArmed() ? pickProfile(e.clientX, e.clientY) : null;
-    if (profile) return pickIntoEdit({ kind: 'profile', ...profile });
-    const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
-    if (hit) return pickIntoEdit(hit);
-    return true;
+  // A press on the arrow that never moved is a click, not a drag, and what it
+  // is a click on is whatever the arrow is standing on. Taken as a drag of
+  // nothing it started a feature: clicking a face a second time, or clicking
+  // anywhere near the arrow the first click put up, opened Press Pull at zero.
+  // From the outside that is the app deciding on its own to extrude, and it is
+  // what makes a face impossible to simply select and then sketch on.
+  if (!d.moved && !d.typed && e) {
+    if (d.existing && state.editing?.pickInto) {
+      hidePullValue();
+      const profile = profilePickArmed() ? pickProfile(e.clientX, e.clientY) : null;
+      if (profile) return pickIntoEdit({ kind: 'profile', ...profile });
+      const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
+      if (hit) return pickIntoEdit(hit);
+      return true;
+    }
+    if (!d.existing) {
+      // The feature was put in at the press, so backing out of it here leaves
+      // no trace, and the click falls through to ordinary selection.
+      cancelEdit();
+      refreshPullHandle();
+      const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
+      if (hit) acceptPick(hit, e);
+      return true;
+    }
   }
 
   const input = state.pullValueEl?.querySelector('input');
@@ -11372,11 +11394,24 @@ function syncPullValueBox() {
     return;
   }
   if (!state.pullValueEl) {
+    // Where the keyboard was before the box appeared. Taking focus off a field
+    // somebody is already typing in would be worse than not having the box.
+    const busy = document.activeElement;
+    const free =
+      !busy || busy === document.body || busy === state.vp.canvas || busy.tagName === 'CANVAS';
     showPullValue(null);
     const f = state.editing?.feature;
     const shown = f && f.distance !== '0' ? f.distance : '';
     const input = state.pullValueEl?.querySelector('input');
-    if (input) input.value = shown;
+    if (input) {
+      input.value = shown;
+      // Focused, or it is a box you have to find and click before it will take
+      // anything, which is the same as not being able to type at all.
+      if (free) {
+        input.focus();
+        input.select();
+      }
+    }
   }
   movePullValue(null);
 }
