@@ -160,6 +160,10 @@ const COLORS = {
   normal: 0x26241e,
   loose: 0x3a5f8a,
   construction: 0x7a7490,
+  // A centreline says what the part is about, so it carries more weight than
+  // the rest of the construction geometry without reaching for the accent,
+  // which belongs to the selection.
+  centerline: 0x6a5a86,
   selected: 0xd84b1e,
   hover: 0x8d8980,
   point: 0x33312b,
@@ -394,7 +398,10 @@ export class SketchEditor {
 
   addEntity(ent) {
     ent.id = this.nextId();
-    ent.construction = !!this.constructionMode;
+    ent.construction = !!this.constructionMode || !!this.centerlineMode;
+    // Only a line can be a centreline, so drawing a circle while the mode is on
+    // gives plain construction geometry rather than an axis nothing can use.
+    ent.centerline = !!this.centerlineMode && ent.type === 'line';
     this.sketch.entities.push(ent);
     return ent;
   }
@@ -3066,11 +3073,61 @@ export class SketchEditor {
       .filter(Boolean);
     if (!ents.length) {
       this.constructionMode = !this.constructionMode;
+      if (this.constructionMode) this.centerlineMode = false;
       this.status(this.constructionMode ? 'Drawing construction geometry.' : 'Drawing normal geometry.');
       return;
     }
-    for (const e of ents) e.construction = !e.construction;
+    for (const e of ents) {
+      e.construction = !e.construction;
+      // Nothing is a centreline without being construction geometry first, so
+      // turning that off has to take the centreline with it or the sketch is
+      // left with an axis that closes a profile.
+      if (!e.construction) e.centerline = false;
+    }
     this.finishStep();
+  }
+
+  /**
+   * Centreline: a construction line that also says which line the part is
+   * about.
+   *
+   * Fusion's is drawn differently, is offered as the axis of a revolve without
+   * being hunted for, and is what a mirror uses by default. It is construction
+   * geometry underneath, so it never closes a profile.
+   *
+   * Only lines. A circle has no one direction to be an axis in, and calling one
+   * a centreline would leave every revolve and mirror asking which way round.
+   */
+  toggleCenterline() {
+    this.announce();
+    const ents = [...this.selection]
+      .filter((k) => k.startsWith('e'))
+      .map((k) => this.entity(Number(k.slice(1))))
+      .filter(Boolean);
+    if (!ents.length) {
+      this.centerlineMode = !this.centerlineMode;
+      if (this.centerlineMode) this.constructionMode = false;
+      this.status(
+        this.centerlineMode ? 'Drawing centrelines.' : 'Drawing normal geometry.'
+      );
+      return;
+    }
+    const lines = ents.filter((e) => e.type === 'line');
+    if (!lines.length) {
+      this.status('A centreline has to be a line.');
+      return;
+    }
+    const turningOn = lines.some((e) => !e.centerline);
+    for (const e of lines) {
+      e.centerline = turningOn;
+      if (turningOn) e.construction = true;
+    }
+    this.finishStep();
+  }
+
+  /** The centrelines of this sketch, in the order they were drawn. */
+  centerlines() {
+    return this.sketch.entities.filter((e) => e.type === 'line' && e.centerline);
   }
 
   /**
@@ -3480,17 +3537,22 @@ export class SketchEditor {
         ? COLORS.selected
         : hovered
           ? COLORS.hover
-          : ent.construction
-            ? COLORS.construction
-            : settled
-              ? COLORS.normal
-              : COLORS.loose;
+          : ent.centerline
+            ? COLORS.centerline
+            : ent.construction
+              ? COLORS.construction
+              : settled
+                ? COLORS.normal
+                : COLORS.loose;
 
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      // A centreline is construction geometry with a longer stride, so it reads
+      // as the axis of the part rather than as one more helper line among the
+      // helper lines.
       const mat = ent.construction
         ? new THREE.LineDashedMaterial({
             color,
-            dashSize: this.pixelScale() * 6,
+            dashSize: this.pixelScale() * (ent.centerline ? 14 : 6),
             gapSize: this.pixelScale() * 4,
             depthTest: false,
             transparent: true

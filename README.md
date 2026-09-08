@@ -52,6 +52,15 @@ pattern, scale, **project (linked or as a copy)**, **intersect**, and **insert
 SVG or DXF**. Every one of them takes
 either two clicks or a press and a drag, whichever your hand reaches for.
 
+**Construction** geometry is drawn dashed and closes nothing, so a helper line
+can run straight through a profile without cutting it. A **centreline** is that
+plus a claim: this is the line the part is about. It draws with a longer stride
+and a colour of its own, the sketch mirror offers it before the numbered lines,
+and a Revolve opened on a sketch that has exactly one starts already turning
+about it rather than about the sketch Y axis. Two centrelines is a question, so
+it asks. Only a line can be one; a circle has no single direction to be an axis
+in.
+
 Where Fusion groups a family of tools under one button, so does this: the
 caret on Rectangle, Circle, Arc, Polygon, Slot and Spline opens the list.
 **Sides** and **Rho** sit beside them, because they belong to the tool in your
@@ -225,11 +234,11 @@ dialog's or the document's, so a profile picked into a dialog looks picked.
 | Fillet | Several edge sets, each constant, **variable**, by **chord length** or held to a line |
 | Chamfer | Equal, two distances, or distance and angle, in sets |
 | Shell | Inside, outside or both, with selected faces left open |
-| Draft | Faces tapered about a neutral plane, one side or two |
+| Draft | Faces tapered about a neutral plane, one side or two; one click takes the whole run of flats that carry on smoothly from it |
 | Split | Cut in two by a plane or a face, or trimmed to one side |
 | Press Pull | Chosen faces offset along their own normals |
 | Patterns | Rectangular, circular, **along a path**, and **of features** |
-| Move | Translate, rotate about a point, or point to point, snapping to corners, edge middles and hole centres |
+| Move | Translate, rotate about a picked pivot, point to point, or along a direction taken off the model, snapping to corners, edge middles and hole centres. Any of them can move a copy instead |
 | Scale | Uniform or per axis, about the part, the origin, or a point |
 | Align | A face of one body put flat against another |
 | Delete Face | A round hole filled back in |
@@ -256,9 +265,12 @@ the sketch in the browser or the timeline to take all of it in one step. Then
 The distance starts at zero, so nothing appears until you say how far.
 
 **Revolve** is built the same way, and asks for the same things in the same
-order. Click the profiles, then click the line to turn about: a sketch line, a
-straight model edge, or one of the named axes from the list, which covers the
-sketch's own two, the world's three, and any construction axis. Then
+order. One profile visible on screen is taken without being asked for, the same
+as Extrude. Then click the line to turn about: a sketch line, a straight model
+edge, or one of the named axes from the list, which covers the sketch's own two,
+the world's three, and any construction axis. A sketch carrying exactly one
+**centreline** needs none of that: the revolve opens already turning about it.
+Then
 
 | | |
 |---|---|
@@ -375,8 +387,13 @@ the parting line of a moulded part. The silhouette has to be flat to split a
 solid at, which is Fusion's own rule, and it is fitted and checked rather than
 assumed.
 
-**Move** translates, turns about a stated axis through a stated point, or
-takes a place on the model to another place. **Scale** grows about the part's
+**Move** translates, turns about a stated axis through a stated point, takes a
+place on the model to another place, or goes one distance along a direction
+picked off the model: an edge lies along its own line, a flat face gives the way
+it faces. The pivot a rotate turns about is clicked rather than typed, snapping
+to corners and hole centres the same way point to point does, and typing three
+numbers is still there underneath. **Create a copy** on any of them leaves the
+original standing and moves a second body instead. **Scale** grows about the part's
 own middle rather than the world origin, so a part that is not centred does not
 fly off as it grows; the origin and a stated point are the other two choices.
 **Split** cuts with a plane or with the plane a face lies in, and can keep only

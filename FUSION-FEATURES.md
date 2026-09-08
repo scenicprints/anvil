@@ -63,12 +63,12 @@ Adds depth to profiles or planar faces.
 | Flip | all extent only | has |
 | Taper Angle | per side | has |
 | Wall Thickness / Wall Location | Side 1, Side 2, Center | has |
-| Operation | Join, Cut, Intersect, New Body, New Component | partial — no New Component |
+| Operation | Join, Cut, Intersect, New Body, New Component | has. The cross-check found this row wrong: Extrude, Revolve, Sweep and Loft all offer New Component and register the component with the document |
 | Objects To Cut | Auto-Select, # Bodies | has |
 
 Fusion auto-selects the profile when only one is visible in the design. Anvil
-does this as of v2.28.0. What is actually left here is **New Component** as an
-operation, and **Tangent Chain** on thin extrude.
+does this as of v2.28.0. What is actually left here is **Tangent Chain** on
+thin extrude.
 
 ### Revolve — near complete
 
@@ -241,10 +241,10 @@ type in the dropdown.
 |---|---|---|
 | Move Object | Components, Bodies, **Faces**, **Sketch Objects** | partial — bodies |
 | Move Type | **Free Move**, Translate, Rotate, Point to Point, **Point to Position** | partial — three of five |
-| Direction | Component XYZ, Design XYZ, **Pick Direction** (along an edge or axis) | **missing** |
-| Set Pivot | centre of rotation within the selection | **missing** |
+| Direction | Component XYZ, Design XYZ, Pick Direction (along an edge or axis) | has, v2.36.0. An edge, a flat face or an origin plane, plus one distance, and a row to flip it |
+| Set Pivot | centre of rotation within the selection | has, v2.36.0. Clicked in the canvas, snapping to corners and hole centres the same way point to point does; typing three numbers is still there |
 | X/Y/Z Distance, X/Y/Z Angle | | has |
-| Create Copy | move a copy instead of the original | **missing** |
+| Create Copy | move a copy instead of the original | has, v2.36.0 |
 
 Free Move is explicitly not captured parametrically in Fusion, which is worth
 knowing before matching it.
@@ -257,7 +257,7 @@ knowing before matching it.
 | Type | Equal Distance, Two Distance, Distance And Angle | has |
 | Edges/Faces/Features | | partial — edges only |
 | Distance, Angle | | has |
-| Tangent Chain | | **missing** |
+| Tangent Chain | | has, v2.35.0 |
 | Corner Type | Chamfer, Miter, Blend | **missing** |
 
 ### Draft — partial
@@ -268,8 +268,8 @@ knowing before matching it.
 | Flip Pull Direction | | has, v2.29.0 |
 | Pull Direction | a plane or face | has (neutral plane) |
 | Parting Tool | plane, face, edge or sketch curve | **missing** |
-| Faces | | has |
-| Tangent Chain | | **missing** |
+| Faces | | has. A curved face is refused now rather than taken and then silently skipped |
+| Tangent Chain | | has, v2.36.0. The run is cut back to the flats, because a curved face has no line to lean about and taking one would put a face in the list that could never move |
 | Angle | one, or Angle 1 and Angle 2 for two-sided | has |
 | Draft Sides | One Side, Two Side, Symmetric | has, v2.29.0. Two Side takes an angle each now; what used to be called two sides was the symmetric case and old documents read back as that |
 | Parting Line Type | Fix Parting Line, Move Parting Line | **missing** |
@@ -306,6 +306,17 @@ selection to match.
 Fillet and Chamfer carry it per set now, on by default. Picking one edge takes
 every edge that carries on smoothly from it, and picking one that is already in
 takes its whole run back out, so the gesture still undoes itself.
+
+Draft has it too, as of v2.36.0, and that one is the face walk rather than the
+edge walk: a moulded wall is one wall by eye and several faces in the topology
+once its corners have been rounded. The run is cut back to the flats, because a
+draft leans a face about the line where it meets the neutral plane and a curved
+face has no such line. Taking one would have put a face in the list that could
+never move. For the same reason a curved face is now refused outright rather
+than taken and then silently skipped.
+
+Still to do: Sweep, Loft and thin Extrude have the same setting in Fusion and
+do not have it here.
 
 `select.js` has two runs and they answer different questions. `tangentRun` walks
 across *faces* that meet smoothly, which is what the Select command uses.
@@ -452,6 +463,12 @@ set against Fusion's is *pending* an option-by-option read.
 
 Anvil also has a modelled thread, which is a harder version of the same sweep.
 
+Coil's New Component was half built and was found while checking the row above:
+the operation was offered, the rebuild put the body in a component named after
+the feature, and nothing ever added a matching entry to the document. The coil
+came out of the browser tree and could not be jointed to anything. Fixed in
+v2.36.0.
+
 ---
 
 ## Design > Sketch
@@ -508,6 +525,17 @@ geometry · finish · edit · **copy a sketch** · **redefine a sketch plane** �
 **export as DXF**. Anvil has create, start on a plane or face, construction,
 centreline, finish and edit. Copy, redefine the plane, and DXF export are
 *pending* confirmation.
+
+Centreline was the one row the cross-check found listed as present and absent in
+the source, and it shipped in v2.36.0. It is a construction line that also says
+what the part is about: longer dashes and a colour of its own, construction
+geometry underneath so it never closes a profile, offered first by the sketch
+mirror, and taken as the axis by a Revolve opened on a sketch that has exactly
+one. Two centrelines is a question and it asks rather than guessing.
+
+Revolve gained the other half of that in the same version: one profile visible
+on screen is now taken without being asked for, which is the rule Extrude
+already followed and which Fusion states for both.
 
 ---
 

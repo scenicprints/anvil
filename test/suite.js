@@ -2714,6 +2714,50 @@ async function run() {
     near(res.bodies[0].solid.volume(), 4 * 3 * 2 * Math.PI * 2, 20, 'about a sketch line');
   });
 
+  test('centreline: it is an axis to revolve about and never a wall of the profile', () => {
+    // A section standing off the Y axis, with a centreline drawn down that axis
+    // beside it. The centreline is construction geometry, so it must not close
+    // anything, and it must be usable as the thing the section turns about.
+    const doc = newDocument();
+    const sk = newSketch('XY', 'Section');
+    sk.points = [
+      { x: 10, y: 0 },
+      { x: 14, y: 0 },
+      { x: 14, y: 3 },
+      { x: 10, y: 3 },
+      { x: 0, y: -5 },
+      { x: 0, y: 8 }
+    ];
+    sk.entities = [
+      { id: 1, type: 'line', p: [0, 1] },
+      { id: 2, type: 'line', p: [1, 2] },
+      { id: 3, type: 'line', p: [2, 3] },
+      { id: 4, type: 'line', p: [3, 0] },
+      { id: 5, type: 'line', p: [4, 5], construction: true, centerline: true }
+    ];
+    sk.nextEntityId = 6;
+    doc.sketches[sk.id] = sk;
+    doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+    doc.features.push({
+      id: uid('f'),
+      type: 'revolve',
+      sketch: sk.id,
+      axis: { type: 'entity', entity: 5 },
+      extent: 'full',
+      op: 'new'
+    });
+
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, `no errors, got ${JSON.stringify(res.errors)}`);
+    assert(res.bodies.length === 1, `one body, got ${res.bodies.length}`);
+    // The centreline lies on the Y axis, so this is the plain ring again:
+    // area 12, centroid 12 out. If the centreline had been treated as ordinary
+    // geometry it would have cut the sketch into more regions than one and the
+    // volume would not land here.
+    near(res.bodies[0].solid.volume(), 4 * 3 * 2 * Math.PI * 12, 30, 'the ring Pappus gives');
+    assert(res.bodies[0].solid.genus() === 1, 'and it is a ring, so it has a hole through it');
+  });
+
   test('revolve: an axis square to the profile has nothing to turn about', () => {
     // Z is perpendicular to an XY sketch, so a profile cannot sweep about it.
     // Project Axis flattens an off-plane axis onto the profile plane, and an
@@ -3654,6 +3698,86 @@ async function run() {
     near((bb.min[0] + bb.max[0]) / 2, 12, 1e-3, 'along x');
     near((bb.min[1] + bb.max[1]) / 2, -4, 1e-3, 'along y');
     near((bb.min[2] + bb.max[2]) / 2, 7, 1e-3, 'along z');
+  });
+
+  test('move: a copy leaves the original standing where it was', () => {
+    const mk = (extra) => {
+      const doc = newDocument();
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '10', depth: '10', height: '10', centered: true },
+        op: 'new'
+      });
+      doc.features.push({
+        id: uid('f'),
+        type: 'move',
+        bodies: 'all',
+        moveType: 'translate',
+        dx: '50',
+        dy: '0',
+        dz: '0',
+        ...extra
+      });
+      return rebuild(doc).bodies;
+    };
+
+    const moved = mk({});
+    assert(moved.length === 1, `a plain move is still one body, got ${moved.length}`);
+    near((moved[0].solid.boundingBox().min[0] + moved[0].solid.boundingBox().max[0]) / 2, 50, 1e-3,
+      'and it went');
+
+    const copied = mk({ copy: true });
+    assert(copied.length === 2, `a copy makes a second body, got ${copied.length}`);
+    const middles = copied
+      .map((b) => {
+        const bb = b.solid.boundingBox();
+        return (bb.min[0] + bb.max[0]) / 2;
+      })
+      .sort((a, b) => a - b);
+    near(middles[0], 0, 1e-3, 'the original stayed put');
+    near(middles[1], 50, 1e-3, 'the copy went');
+    // Two bodies sharing an id is two bodies the browser cannot tell apart, and
+    // a later feature aimed at one would take both.
+    assert(copied[0].id !== copied[1].id, 'the copy needs an id of its own');
+  });
+
+  test('move: along a direction goes that way, and nowhere without one', () => {
+    const mk = (extra) => {
+      const doc = newDocument();
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '10', depth: '10', height: '10', centered: true },
+        op: 'new'
+      });
+      doc.features.push({
+        id: uid('f'),
+        type: 'move',
+        bodies: 'all',
+        moveType: 'direction',
+        alongDistance: '20',
+        ...extra
+      });
+      const bb = rebuild(doc).bodies[0].solid.boundingBox();
+      return [0, 1, 2].map((i) => (bb.min[i] + bb.max[i]) / 2);
+    };
+
+    // The direction comes off an edge or a face normal, so it arrives as
+    // whatever length that thing happened to be. The distance typed is the
+    // distance meant.
+    const slanted = mk({ direction: [3, 4, 0] });
+    near(slanted[0], 12, 1e-3, 'three fifths of twenty along x');
+    near(slanted[1], 16, 1e-3, 'four fifths along y');
+
+    // Nothing picked yet must not read as the origin direction: the dialog
+    // opens in this state and the part would jump the moment it did.
+    const unset = mk({ direction: null });
+    near(unset[0], 0, 1e-6, 'no direction, no move');
+    near(unset[1], 0, 1e-6, 'still put');
+    near(unset[2], 0, 1e-6, 'still put');
   });
 
   test('scale: growing about the middle keeps a part where it was', () => {

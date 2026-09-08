@@ -127,5 +127,81 @@ report.wanted = [0, 1, 2].map((i) => +(mid[i] - corner[i]).toFixed(3));
 report.movedByWhatWasAsked = report.movedBy.every(
   (v, i) => Math.abs(v - report.wanted[i]) < 0.01
 );
+
+/* ---- along a direction taken off the model, and a copy of it ---- */
+// The two Fusion rows that were missing: pick something in the model to go
+// along, and leave the original behind. Both are driven through the dialog,
+// because a field set on the feature by hand proves nothing about whether
+// there is a row on screen to set it with.
+const rows = () => [...document.querySelectorAll('#inspectorBody .field')];
+const rowFor = (text) => rows().find((r) => r.textContent.includes(text));
+const setSelect = async (text, value) => {
+  const sel = rowFor(text)?.querySelector('select');
+  if (!sel) return false;
+  sel.value = value;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(400);
+  return true;
+};
+
+const before = dev.bodies[0].solid.boundingBox();
+dev.runCommand('move');
+await wait(700);
+report.directionRowIsThere = { asType: false, hidden: false };
+{
+  // Hidden until the move type asks for it, the same as every other row that
+  // belongs to one type.
+  report.directionRowIsThere.hidden = !rowFor('Direction');
+  report.directionRowIsThere.asType = await setSelect('Move type', 'direction');
+  report.directionRowAppears = !!rowFor('Direction');
+  report.copyRowIsThere = !!rowFor('Create a copy');
+}
+
+if (report.directionRowAppears) {
+  // Point at the top face of the box, which faces straight up, and go along
+  // the way it faces.
+  rowFor('Direction')?.querySelector('button')?.click();
+  await wait(300);
+  report.armedForDirection = dev.state.editing?.pickInto;
+  // The middle of the top face as it is now, not as it was: the point to point
+  // move above has already carried the box off its old place, and aiming at
+  // where it used to be lands on an edge.
+  const top = dev.state.vp.worldToScreen(
+    (before.min[0] + before.max[0]) / 2,
+    (before.min[1] + before.max[1]) / 2,
+    before.max[2]
+  );
+  await clickAt(top.clientX, top.clientY);
+  report.tookDirection = dev.state.editing?.feature?.direction?.map((n) => +n.toFixed(3)) ?? null;
+  report.directionLabel = dev.state.editing?.feature?.directionLabel ?? null;
+  report.tookTheFaceNormal =
+    !!report.tookDirection && Math.abs(report.tookDirection[2] - 1) < 0.01;
+
+  const dist = rowFor('Distance')?.querySelector('input');
+  if (dist) {
+    dist.value = '25';
+    dist.dispatchEvent(new Event('input', { bubbles: true }));
+    await wait(500);
+  }
+  const copyBox = rowFor('Create a copy')?.querySelector('input[type="checkbox"]');
+  if (copyBox) {
+    copyBox.checked = true;
+    copyBox.dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(500);
+  }
+  document.getElementById('inspectorOk').click();
+  await wait(1000);
+
+  report.bodiesAfterCopy = dev.bodies.length;
+  const tops = dev.bodies.map((b) => +b.solid.boundingBox().max[2].toFixed(2)).sort((a, b) => a - b);
+  report.topsAfterCopy = tops;
+  // One left where it was, one twenty five higher, and two bodies to show for
+  // it rather than one moved one.
+  report.copyLeftTheOriginal =
+    report.bodiesAfterCopy === 2 &&
+    Math.abs(tops[0] - before.max[2]) < 0.01 &&
+    Math.abs(tops[1] - (before.max[2] + 25)) < 0.01;
+}
+
 report.finalErrors = (dev.state.result?.errors || []).map((e) => e.message);
 return report;

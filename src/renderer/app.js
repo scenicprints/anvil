@@ -572,7 +572,8 @@ function handleViewportDown(e) {
         'plasticFace',
         'jointAxis2',
         'surfaceCurves',
-        'sheetEdges'
+        'sheetEdges',
+        'moveDirection'
       ].includes(armed) || !!blendPickRow(armed);
     // A plane click has to be offered before the body raycast, or a plane
     // drawn behind the model can never be reached.
@@ -582,6 +583,15 @@ function handleViewportDown(e) {
     }
     const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: wantsEdges });
     if (hit) return pickIntoEdit(hit);
+    // The other way round for a direction: the origin planes are sixty across
+    // and hang through the middle of everything, so offering them first meant
+    // aiming at the top of a box and being handed the XZ plane it happens to
+    // sit on. An edge or a face is what is being aimed at; a plane is what is
+    // left when the click hit nothing.
+    if (armed === 'moveDirection') {
+      const plane = state.vp.pickPlane(e.clientX, e.clientY);
+      if (plane) return pickIntoEdit({ kind: 'plane', planeName: plane.planeName });
+    }
     return true;
   }
 
@@ -781,10 +791,14 @@ function snapModelPoint(clientX, clientY) {
   return best;
 }
 
-/** True while a click would fill in one end of a point to point move. */
+/**
+ * True while a click would fill in a place in the model: either end of a point
+ * to point move, or the pivot a rotate turns about. All three want the same
+ * corners and hole centres, so all three snap the same way.
+ */
 function movePointArmed() {
   const armed = state.editing?.pickInto;
-  return armed === 'movePointFrom' || armed === 'movePointTo';
+  return armed === 'movePointFrom' || armed === 'movePointTo' || armed === 'movePivot';
 }
 
 /** Say what a click would take, beside the cursor, before it is made. */
@@ -1636,6 +1650,9 @@ async function runCommand(cmd) {
       break;
     case 'construction':
       if (state.sketcher.active) state.sketcher.toggleConstruction();
+      break;
+    case 'centerline':
+      if (state.sketcher.active) state.sketcher.toggleCenterline();
       break;
 
 
@@ -3732,8 +3749,16 @@ function moveFields() {
       options: [
         ['translate', 'Translate'],
         ['rotate', 'Rotate'],
-        ['points', 'Point to point']
+        ['points', 'Point to point'],
+        ['direction', 'Along a direction']
       ]
+    },
+    {
+      // Fusion has this on every move type, and it is the difference between
+      // laying a part out twice and building it twice.
+      key: 'copy',
+      label: 'Create a copy',
+      type: 'bool'
     },
     { key: 'dx', label: 'Move X', type: 'expr', showIf: isType('translate') },
     { key: 'dy', label: 'Move Y', type: 'expr', showIf: isType('translate') },
@@ -3760,7 +3785,51 @@ function moveFields() {
       }
     },
     { key: 'rotAngle', label: 'Angle', type: 'expr', showIf: isType('rotate') },
-    pointField('pivot', 'Turn about (x, y, z)', isType('rotate')),
+    {
+      // Set Pivot. Typing three numbers is still there below, but the axis of a
+      // part is almost never a number anybody knows: it is a corner, a hole
+      // centre, or the middle of a face, and those can be clicked.
+      key: '__pivotPick',
+      label: 'Set the pivot',
+      type: 'pick',
+      pick: 'movePivot',
+      showIf: isType('rotate'),
+      summary: (f) =>
+        f.pivot ? f.pivot.map((n) => round(n, 2)).join(', ') : 'The middle of the bodies',
+      clear: (f) => {
+        f.pivot = null;
+      }
+    },
+    pointField('pivot', 'Or turn about (x, y, z)', isType('rotate')),
+    {
+      // Pick Direction. An edge gives its own line, a flat face gives the way
+      // it faces, so "out from this face by 5" is two clicks and a number.
+      key: '__alongPick',
+      label: 'Direction',
+      type: 'pick',
+      pick: 'moveDirection',
+      showIf: isType('direction'),
+      summary: (f) => f.directionLabel || 'Nothing yet',
+      clear: (f) => {
+        f.direction = null;
+        f.directionLabel = null;
+      }
+    },
+    {
+      key: 'alongDistance',
+      label: `Distance (${unitLabel()})`,
+      type: 'expr',
+      showIf: isType('direction')
+    },
+    {
+      key: '__flipAlong',
+      label: 'Flip the direction',
+      type: 'action',
+      showIf: (f) => isType('direction')(f) && !!f.direction,
+      run: (f) => {
+        f.direction = f.direction.map((n) => -n);
+      }
+    },
     {
       key: '__fromPick',
       label: 'From',
@@ -3917,7 +3986,21 @@ function coilFields(feature) {
       ]
     },
     { key: 'sectionSize', label: `Section size (${unitLabel()})`, type: 'expr' },
-    { key: 'op', label: 'Operation', type: 'select', options: EXTRUDE_OP_OPTIONS }
+    {
+      key: 'op',
+      label: 'Operation',
+      type: 'select',
+      options: EXTRUDE_OP_OPTIONS,
+      get: (f) => f.op || 'new',
+      // Coil offered New component and then did not make one. The rebuild puts
+      // the body in a component named after the feature, so without a matching
+      // entry in the document the coil vanished out of the browser tree and
+      // could not be jointed to anything.
+      set: (f, v) => {
+        f.op = v;
+        if (v === 'component') ensureFeatureComponent(f);
+      }
+    }
   ];
 }
 
@@ -4468,6 +4551,18 @@ function draftFields() {
       }
     },
     {
+      // On by default, the same as Fusion. One click takes the whole run of
+      // faces that carry on smoothly from the one picked, so a rounded wall is
+      // drafted as the one wall it looks like.
+      key: 'tangentChain',
+      label: 'Follow tangent faces',
+      type: 'bool',
+      get: (f) => f.tangentChain !== false,
+      set: (f, v) => {
+        f.tangentChain = !!v;
+      }
+    },
+    {
       key: '__neutral',
       label: 'Neutral plane',
       type: 'pick',
@@ -4517,7 +4612,11 @@ function draftFields() {
 function revolveAxisText(f) {
   const a = f.axis;
   if (!a) return 'Nothing yet';
-  if (a.type === 'entity') return 'A sketch line';
+  if (a.type === 'entity') {
+    const sk = f.sketch ? state.doc.sketches[f.sketch] : null;
+    const ent = (sk?.entities || []).find((e) => e.id === a.entity);
+    return ent?.centerline ? 'The sketch centreline' : 'A sketch line';
+  }
   if (a.type === 'edge') return 'A model edge';
   if (a.type === 'construction') return 'A construction axis';
   if (a.type === 'world') return `World ${String(a.worldAxis).toUpperCase()} axis`;
@@ -4997,6 +5096,22 @@ function startFeatureDialog(type) {
       return;
     }
     feature = newRevolveFeature();
+    // One profile on screen is the one meant, the same rule Extrude follows and
+    // the same one Fusion states for both.
+    const onlyR = onlyVisibleProfile();
+    if (onlyR && !feature.seeds?.length && !feature.faces.length) {
+      feature.sketch = onlyR.sketch;
+      feature.seeds = [onlyR.seed];
+    }
+    // A centreline is the sketch saying what the part turns about, so a revolve
+    // takes it rather than defaulting to the sketch Y axis and being corrected.
+    // Only when there is exactly one: two centrelines is a question, and
+    // guessing at it is worse than asking.
+    {
+      const sk = feature.sketch ? state.doc.sketches[feature.sketch] : null;
+      const lines = (sk?.entities || []).filter((e) => e.type === 'line' && e.centerline);
+      if (lines.length === 1) feature.axis = { type: 'entity', entity: lines[0].id };
+    }
     openFeatureEditor(feature, 'Revolve', revolveFields());
     if (!feature.seeds.length && !feature.faces.length) {
       setEditPick('profiles');
@@ -5105,7 +5220,11 @@ function startFeatureDialog(type) {
       dz: '0',
       rx: '0',
       ry: '0',
-      rz: '0'
+      rz: '0',
+      copy: false,
+      direction: null,
+      directionLabel: null,
+      alongDistance: '10'
     };
     openFeatureEditor(feature, 'Move', moveFields());
     return;
@@ -5460,6 +5579,10 @@ function showMarkingMenu(e) {
       items.push({
         label: 'Toggle Construction',
         run: () => state.sketcher.toggleConstruction()
+      });
+      items.push({
+        label: 'Toggle Centreline',
+        run: () => state.sketcher.toggleCenterline()
       });
     }
     items.push({ label: 'Dimension', run: () => state.sketcher.setTool('dimension') });
@@ -6655,6 +6778,11 @@ function planeSpecFromOption(value) {
     return { construction: value.slice(2) };
   }
   return value;
+}
+
+/** The way one of the three origin planes faces. */
+function planeNormal(name) {
+  return { XY: [0, 0, 1], XZ: [0, 1, 0], YZ: [1, 0, 0] }[String(name).toUpperCase()] || null;
 }
 
 function axisOptions() {
@@ -10969,9 +11097,17 @@ function startSketchMirror() {
     return;
   }
 
+  // A centreline is drawn to be mirrored about, so it goes to the top of the
+  // list and does not have to be picked out of the line numbers.
+  const label = (l) =>
+    l.centerline
+      ? `Line ${l.id} (centreline)`
+      : `Line ${l.id}${l.construction ? ' (construction)' : ''}`;
+  const ordered = [...lines].sort((a, b) => (b.centerline ? 1 : 0) - (a.centerline ? 1 : 0));
+
   promptChoice(
     'Mirror about which line?',
-    lines.map((l) => [String(l.id), `Line ${l.id}${l.construction ? ' (construction)' : ''}`]),
+    ordered.map((l) => [String(l.id), label(l)]),
     (value) => {
       state.sketcher.mirrorSelection(Number(value));
     }
@@ -11831,6 +11967,8 @@ const PICK_PROMPTS = {
   moveBodies: 'Click the bodies to move.',
   movePointFrom: 'Click where to measure from.',
   movePointTo: 'Click where to measure to.',
+  movePivot: 'Click the point to turn about.',
+  moveDirection: 'Click an edge, a flat face, or an origin plane.',
   embossFaces: 'Click the faces to emboss onto.',
   constructPath: 'Click the curve or edge to measure along.',
   groupFaces: 'Click the faces to group.',
@@ -12433,7 +12571,8 @@ function setEditPick(which) {
       'mirrorPlane',
       'alignFrom',
       'alignTo',
-      'silhouetteDir'
+      'silhouetteDir',
+      'moveDirection'
     ].includes(which)
   );
   renderFields();
@@ -12608,11 +12747,41 @@ function pickIntoEdit(hit) {
     const face = record?.topology?.faces[hit.faceId];
     if (!face) return true;
     const key = ed.pickInto === 'openFaces' ? 'openFaces' : 'faces';
+    // A draft leans a flat face about the line where it meets the neutral
+    // plane, and a curved one has no such line. It used to be taken anyway and
+    // then skipped without a word, so the face sat in the list looking chosen
+    // and nothing about the part changed. A shell can open any face at all, so
+    // this is the draft's rule alone.
+    if (key === 'faces' && !face.planar) {
+      setStatus('That face is curved. A draft needs a flat one.');
+      return true;
+    }
     f[key] = f[key] || [];
+
+    // Tangent Chain, which Draft has in Fusion and Shell does not. A moulded
+    // wall is one wall by eye and several faces in the topology once its
+    // corners have been rounded, and picking them one at a time is the work
+    // this saves. The run is cut back to the flats for the same reason a
+    // curved face is refused above: what is in the list is what will lean.
+    const chained =
+      key === 'faces' && f.tangentChain !== false
+        ? SEL.tangentRun(record.topology, [hit.faceId]).filter(
+            (i) => record.topology.faces[i]?.planar
+          )
+        : [hit.faceId];
+    const refs = chained
+      .map((i) => record.topology.faces[i])
+      .filter(Boolean)
+      .map((x) => faceReference(x));
+
     const ref = faceReference(face);
-    const at = f[key].findIndex((x) => sameFaceRef(x, ref));
-    if (at >= 0) f[key].splice(at, 1);
-    else f[key].push(ref);
+    if (f[key].some((x) => sameFaceRef(x, ref))) {
+      f[key] = f[key].filter((x) => !refs.some((r) => sameFaceRef(x, r)));
+    } else {
+      for (const r of refs) {
+        if (!f[key].some((x) => sameFaceRef(x, r))) f[key].push(r);
+      }
+    }
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (ed.pickInto === 'groupFaces') {
     // Any face at all, curved included: a face group is whatever was pointed
@@ -12728,12 +12897,52 @@ function pickIntoEdit(hit) {
     if (at >= 0) f.bodies.splice(at, 1);
     else f.bodies.push(hit.bodyId);
     if (!f.bodies.length) f.bodies = 'all';
-  } else if (ed.pickInto === 'movePointFrom' || ed.pickInto === 'movePointTo') {
+  } else if (ed.pickInto === 'moveDirection') {
+    // An edge lies along its own direction; a flat face gives the way it
+    // faces. Anything else has no one direction to mean.
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    if (hit.kind === 'edge') {
+      const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
+      if (!edge?.dir) {
+        setStatus('That edge is curved, so it does not point one way.');
+        return true;
+      }
+      f.direction = [...edge.dir];
+      f.directionLabel = 'Along a model edge';
+    } else if (hit.kind === 'face' && hit.faceId !== null) {
+      const face = record?.topology?.faces[hit.faceId];
+      if (!face?.planar) {
+        setStatus('That face is curved, so it does not face one way.');
+        return true;
+      }
+      f.direction = [...face.normal];
+      f.directionLabel = 'Out from a flat face';
+    } else if (hit.kind === 'plane') {
+      const n = planeNormal(hit.planeName);
+      if (!n) return true;
+      f.direction = n;
+      f.directionLabel = `Along the ${hit.planeName} normal`;
+    } else {
+      return true;
+    }
+    ed.pickInto = null;
+    restorePlanes();
+    setStatus(`${f.directionLabel}: ${f.direction.map((n) => round(n, 3)).join(', ')}.`);
+  } else if (
+    ed.pickInto === 'movePointFrom' ||
+    ed.pickInto === 'movePointTo' ||
+    ed.pickInto === 'movePivot'
+  ) {
     // A corner, the middle of an edge, or the centre of a hole, in that order
     // of preference, because those are the places somebody means. The middle of
     // a face and the bare spot the ray landed on are what is left when none of
     // them is near, and they used to be the only two answers there were.
-    const key = ed.pickInto === 'movePointFrom' ? 'fromPoint' : 'toPoint';
+    const key =
+      ed.pickInto === 'movePointFrom'
+        ? 'fromPoint'
+        : ed.pickInto === 'movePointTo'
+          ? 'toPoint'
+          : 'pivot';
     const p = state.lastPointer;
     const snap = p ? snapModelPoint(p.x, p.y) : null;
     let at = snap ? [...snap.at] : null;

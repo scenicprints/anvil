@@ -370,6 +370,10 @@ export function normalizePattern(f) {
 /** Bring a move up to the shape the dialog now works in. */
 export function normalizeMove(f) {
   if (!f.moveType) f.moveType = 'translate';
+  // Create Copy. A move made in this session always writes the flag, so an
+  // absent one is an old document, and an old document always moved the body
+  // itself.
+  if (f.copy === undefined) f.copy = false;
   return f;
 }
 
@@ -3767,6 +3771,21 @@ export function rebuild(doc, options = {}) {
     const m = moveMatrix(feature, scope, targets);
 
     const out = bodies.slice();
+    // Create Copy leaves the original where it is and puts the moved one
+    // beside it. Fusion has it on every move type, and it is how a part gets
+    // laid out twice without repeating the feature that made it.
+    if (feature.copy) {
+      targets.forEach((b, i) => {
+        out.push({
+          ...b,
+          id: `${feature.id}:copy${i}`,
+          name: `${b.name || 'Body'} copy`,
+          createdBy: feature.id,
+          solid: K.transform(b.solid, m.elements, ks)
+        });
+      });
+      return out;
+    }
     for (const b of targets) {
       out[out.indexOf(b)] = { ...b, solid: K.transform(b.solid, m.elements, ks) };
     }
@@ -3779,10 +3798,23 @@ export function rebuild(doc, options = {}) {
    * Translate takes three distances; rotate turns about a stated axis through a
    * stated point rather than about the world origin; point to point measures
    * the shift from one place to another, which is how a part is dropped onto a
-   * face without working out the numbers.
+   * face without working out the numbers; a direction is one distance along
+   * something already in the model, which is what a part sliding down its own
+   * slot wants.
    */
   function moveMatrix(feature, scope, targets) {
     const m = new THREE.Matrix4();
+
+    if (feature.moveType === 'direction') {
+      // No direction picked yet is not the origin direction, it is no move.
+      // Reading it as one would send the part off along X the moment the
+      // dialog opened.
+      const d = feature.direction;
+      if (!d) return m.identity();
+      const u = normalizeVec(d);
+      const by = safeEval(feature.alongDistance, scope, 0);
+      return m.makeTranslation(u[0] * by, u[1] * by, u[2] * by);
+    }
 
     if (feature.moveType === 'rotate') {
       const axis = normalizeVec(feature.rotAxis || [0, 0, 1]);
