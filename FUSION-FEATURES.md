@@ -274,13 +274,20 @@ knowing before matching it.
 
 ### Scale — *pending* (Anvil: factor or per-axis, about the middle, the origin, or a point)
 
-### Tangent Chain — a setting, not a command — **missing throughout**
+### Tangent Chain — a setting, not a command — partial
 
 Checked by default in Fillet and Chamfer, and present in Sweep, Draft, Loft and
 Thin Extrude. When on, picking an edge takes every edge tangentially connected
 to it, and a rolled-back edit that adds edges updates the later feature's
-selection to match. Anvil has no equivalent anywhere, and on any rounded part it
-is the difference between one click and thirty.
+selection to match.
+
+**Correction to an earlier reading of this file:** Anvil does have the capability,
+as a Select command (`selectTangent`, on `select.js`'s `tangentRun`). What it does
+not have is the per-dialog checkbox. The difference is not cosmetic: as a
+selection command it happens once, before the dialog; as a dialog setting it stays
+live, so adding edges to an earlier feature updates every later feature that was
+picked with it on. The first is a convenience, the second is a rule the model
+keeps.
 
 ### Press Pull — partial, and worth reading closely
 
@@ -544,21 +551,85 @@ selection palette that governs how clicking picks mesh faces.
 | Corner seams and relief cuts | has (mitre corners, relief cuts) |
 | **Sheet metal rules**: create, edit, **override per feature**, configure | partial — Anvil has a rule library, override is *pending* |
 
-Anvil's sheet metal is closer to parity than any other workspace bar the
-sketcher. The reference pages for each flange type are *pending* against its
-option sets.
+### Flange (base, edge, contour) — partial
 
-## Design > Form (T-Splines)
+The three flange types are one command in Fusion, with a selection box where
+every row carries its own settings.
 
-Create from sketches: extrude, revolve, sweep, loft, plus T-Spline primitives.
-Anvil has a Form tab built on a Catmull-Clark control cage with creases, corner
-weights and freezing, and an Edit Form manipulator.
+| Option | Values | Anvil |
+|---|---|---|
+| Type | Base, Edge, Contour | has, as three commands |
+| Selection box, per-row settings | several flanges in one feature | **missing** — one at a time |
+| Edges / Profiles | | has |
+| **Flange Width Type** (edge) | Full Edge, Symmetric, Two Sides, **Two Offsets** against reference faces | **missing** — full edge only |
+| Extent Type (edge) | Distance, **To Object** with an offset | partial — distance |
+| Angle (edge) | | has |
+| **Height Datum** (edge) | Inner Faces, Outer Faces, Tangent To Bend | **missing** |
+| Bend Position (edge) | Inside, Outside, Adjacent, Tangent | has |
+| Flip (edge) | | *pending* |
+| Miter Corners (edge) | | has, as its own command |
+| Orientation (base, contour) | Side 1, Side 2, Center | **missing** |
+| Operation (base, contour) | New Body, New Component | **missing** |
+| Direction (contour) | One Side, Two Sides, Symmetric | **missing** |
+| Sheet Metal Rule | pick the rule when the first body is made | partial |
+| **Override Rules** | per-flange overrides of bend radius, bend relief, and 2- and 3-bend corner relief | **missing** |
 
-The full Form toolbar is large — edit form, insert edge, subdivide, merge,
-bridge, fill hole, erase and fill, weld and unweld vertices, crease and uncrease,
-bevel edge, slide edge, pull, flatten, match, interpolate, thicken, freeze,
-unfreeze, and the symmetry tools. *Pending* against Anvil's set, which is a
-subset of it.
+The overrides are the substantial gap, and they are the reason the rules system
+exists: a rule sets the defaults for a component and any one feature can depart
+from it without changing the rule. Anvil has the rules and not the departures.
+
+Anvil's sheet metal is closer to parity than any other workspace bar the sketcher
+and Form. The lofted flange and hem references are *pending*.
+
+## Design > Form (T-Splines) — near complete
+
+The closest match in the whole inventory after the sketcher, which is a surprise
+given how large Fusion's Form toolbar is.
+
+**Create**: Box, Plane, Cylinder, Sphere, Torus, Quadball, Face, plus extrude,
+revolve, sweep and loft into a T-Spline. Anvil has every one.
+
+**Modify**, Fusion's list against Anvil's `form.js`:
+
+| Fusion | Anvil |
+|---|---|
+| Edit Form | has |
+| Insert Edge | has |
+| Subdivide | has |
+| Insert Point | has |
+| Merge Edge | has |
+| Bridge | has |
+| Fill Hole | has |
+| Erase and Fill | has |
+| Weld / Unweld Vertices | has |
+| Crease / Uncrease | has |
+| Bevel Edge | has |
+| Slide Edge | has |
+| Smooth | has |
+| Cylindrify | has |
+| Pull to a target body | has |
+| Flatten | has |
+| Straighten | has |
+| Match to solid, surface or sketch geometry | has |
+| Interpolate | has |
+| Thicken / shell | has |
+| Freeze / Thaw | has |
+| Modify neighbouring vertices (soft falloff) | has |
+| Delete T-Spline geometry | has |
+| Convert to a solid | has |
+| Mirror-Internal / Circular-Internal symmetry | has |
+| **Edit By Curve** (drive edges with a curve) | **missing** |
+| **Tangent handles** | **missing** |
+| **Snap vertices to objects** | **missing** |
+| **Display Mode** (box, control frame, smooth) | **missing** |
+| **Control points and surface points** as separate things to grab | **missing** |
+
+Anvil also has `makeUniform`, which Fusion does not list.
+
+Four gaps, and three of them are about *how you grab a point* rather than about
+what the cage can do: tangent handles, snapping a vertex onto other geometry, and
+switching between the box, control-frame and smooth displays. Display Mode is the
+cheapest and the one people reach for constantly.
 
 ---
 
@@ -821,6 +892,88 @@ gives you by default.
 
 ---
 
+## Fusion-wide: Inspect and Analysis — near complete
+
+| Fusion | Anvil |
+|---|---|
+| Measure | has |
+| Interference and coincident faces | has |
+| Curvature comb on edges | has |
+| Curvature map on surfaces | has |
+| Zebra | has |
+| Draft analysis | has |
+| Accessibility | has |
+| Minimum tool radius | has |
+| Section analysis (a 3D section view) | has |
+| Centre of mass and mass properties | has |
+| Find similar components | has |
+| **Surface continuity** | **missing** |
+| **Isocurve analysis** | **missing** |
+| **Environment map reflections** | **missing** |
+| **Validate** | **missing** |
+| **Colour code components and features** | **missing** |
+| Fastener stack analysis | **missing** (Design Extension) |
+
+Anvil also has a wall-thickness reading and a design-advice pass, which Fusion
+does not carry here.
+
+## Fusion-wide: Parameters — partial
+
+| Fusion | Anvil |
+|---|---|
+| User parameters with name, expression, value and comment | has |
+| Model parameters listed per component and feature | partial |
+| Unit type per parameter | has |
+| **Text parameters**, joined with `+` | **missing** |
+| **Name a parameter inline** by typing `Width=50` into any field, which creates it and adds it to favourites | **missing** |
+| Favourites | **missing** |
+| **Automatic Compute off** while editing several parameters | **missing** |
+| **Import and export parameters** | **missing** |
+
+**Typing `Width=50` into a field to create the parameter there and then is the
+one to steal.** It removes the trip to a dialog entirely, and Anvil's fields
+already evaluate expressions, so the machinery is present.
+
+Automatic Compute is the other: Anvil rebuilds on every keystroke in the
+parameters table, which on a heavy part is the difference between editing five
+numbers and waiting five times.
+
+## Fusion-wide: Construction geometry — complete
+
+Every plane, axis and point Fusion offers, Anvil has: offset, at an angle,
+tangent, midplane, through two edges, through three points, perpendicular,
+tangent at a point and along a path for planes; through a cylinder, through two
+planes, through two points, along an edge and normal to a face for axes; at a
+vertex, where two edges meet, at three planes, at a circle centre, at an edge and
+plane, and along a path for points. Plus a user coordinate system and joint
+origins.
+
+The only thing listed and not found: **showing or hiding plane names in the
+canvas**.
+
+## Fusion-wide: Selection — partial
+
+| Fusion | Anvil |
+|---|---|
+| Select objects, and selection modes for several | has |
+| Select by boundary | has (seed and boundary) |
+| Select by size | has |
+| Invert the selection | has |
+| Seed and boundary | has |
+| Selection priority filters | partial |
+| Selection filters | has |
+| **Select by name** | **missing** |
+| **Selection sets** (name a selection and come back to it) | **missing** |
+
+Anvil adds select similar and select tangent run, which Fusion carries as the
+Tangent Chain setting instead.
+
+**Selection sets are the one worth having**, because they are what makes a
+thirty-edge fillet survive being edited: name the set once, and every later
+feature that wants those edges refers to the name.
+
+---
+
 ## Crawl status
 
 **Read page by page:** Solid Create (extrude, revolve, sweep, loft, rib, web,
@@ -831,11 +984,16 @@ snap fit), Sketch palette and 3D sketch, Surface create and modify lists, Mesh
 modify list, Sheet metal rules and flanges, Assemblies relationships and designs,
 Generative Design toolbar, Simulation study types, Drawing workspace.
 
-**Listed but not yet read option by option:** each surface and form tool's own
-dialog, the sheet metal flange references, rest and lip, scale, delete face,
-configurations, the render light dialogs, animation, and the Fusion-wide pieces
-(timeline, parameters, appearance, materials, measure, inspect, view settings,
-selection filters, keyboard shortcuts, preferences).
+**Also read:** the Form create and modify toolbars in full, the base/edge/contour
+flange reference, parameters, the analysis and inspect list, construction
+geometry, and selection.
+
+**Listed but not read option by option:** each surface tool's own dialog, the
+lofted flange and hem references, rest and lip, scale, delete face,
+configurations, the three render light dialogs, the animation commands, and the
+remaining Fusion-wide pieces (timeline behaviour, appearance and physical
+materials, view settings, keyboard shortcuts, preferences). These are all cases
+where Anvil already has the command and only the option list is unconfirmed.
 
 **Deliberately not expanded:** Manufacture, Electronics, and the cloud data
 layer, which are separate applications rather than commands.
