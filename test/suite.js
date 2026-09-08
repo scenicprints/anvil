@@ -6487,6 +6487,57 @@ async function run() {
     for (const s of solids) near(s.solid.volume(), 4000, 40, 'cut through the middle');
   });
 
+  test('mesh scale: resized about its middle, or about the origin', () => {
+    // A scanned mesh arrives in whatever units the scanner felt like, and a
+    // printed one often wants a percent or two of shrink allowance. Scaling
+    // about the world origin sends an off-centre scan somewhere else, so the
+    // middle of the body is the default.
+    const scaled = (extra) => {
+      const scope = new K.Scope();
+      const box = K.meshData(K.box([20, 20, 20], true, scope));
+      scope.dispose();
+
+      const doc = newDocument();
+      doc.meshData.m1 = {
+        verts: Array.from(box.vertProperties),
+        tris: Array.from(box.triVerts)
+      };
+      doc.features = [
+        { id: uid('f'), type: 'insertMesh', data: 'm1', label: 'Box', scale: '1', at: [30, 0, 0] },
+        {
+          id: uid('f'),
+          type: 'meshScale',
+          bodies: 'all',
+          factor: '2',
+          nonUniform: false,
+          ...extra
+        }
+      ];
+      const out = rebuild(doc);
+      assert(out.bodies.length === 1, JSON.stringify(out.errors));
+      // `mesh` on a body is a flag saying it is one; `sheet` is the geometry.
+      const pts = MT.meshPoints(out.bodies[0].sheet);
+      const lo = [Infinity, Infinity, Infinity];
+      const hi = [-Infinity, -Infinity, -Infinity];
+      for (const p of pts) {
+        for (let i = 0; i < 3; i++) {
+          lo[i] = Math.min(lo[i], p[i]);
+          hi[i] = Math.max(hi[i], p[i]);
+        }
+      }
+      out.dispose();
+      return { lo, hi, size: hi[0] - lo[0], midX: (lo[0] + hi[0]) / 2 };
+    };
+
+    const middle = scaled({ pivotMode: 'centre' });
+    near(middle.size, 40, 0.01, 'twice the size');
+    near(middle.midX, 30, 0.01, 'and it stayed where it was');
+
+    const origin = scaled({ pivotMode: 'origin' });
+    near(origin.size, 40, 0.01, 'twice the size either way');
+    near(origin.midX, 60, 0.01, 'but about the origin it moved out with it');
+  });
+
   test('boundary fill: an operation says what the kept cells do', () => {
     // Dividing a block and keeping both cells gives two bodies, which is what
     // this always did and is New Body. Join hands the same cells over as one

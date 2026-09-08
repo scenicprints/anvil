@@ -1298,6 +1298,10 @@ export function rebuild(doc, options = {}) {
           doMeshReverse(feature, scope, scopeObj, errors);
           break;
 
+        case 'meshScale':
+          doMeshScale(feature, scope, scopeObj, errors);
+          break;
+
         case 'convertMesh':
           doConvertMesh(feature, scope, scopeObj, errors);
           break;
@@ -7490,6 +7494,53 @@ export function rebuild(doc, options = {}) {
     const targets = pickMeshes(feature);
     if (!targets.length) throw new Error('Reverse Normal works on a mesh body');
     for (const b of targets) replaceBody(bodies, b, { sheet: SH.reverseSheet(b.sheet) });
+  }
+
+  /**
+   * Resize a mesh body.
+   *
+   * A scanned mesh arrives in whatever units the scanner felt like, and a
+   * printed one often wants a percent or two of shrink allowance, so this is
+   * the first thing done to an imported mesh and the last thing done before it
+   * goes out. About the middle of the body by default, because scaling a
+   * scanned part about the world origin sends it somewhere else entirely.
+   */
+  function doMeshScale(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Scale works on a mesh body');
+
+    const uniform = safeEval(feature.factor, scope, 1);
+    const sx = feature.nonUniform ? safeEval(feature.sx, scope, 1) : uniform;
+    const sy = feature.nonUniform ? safeEval(feature.sy, scope, 1) : uniform;
+    const sz = feature.nonUniform ? safeEval(feature.sz, scope, 1) : uniform;
+    if (![sx, sy, sz].every((v) => Number.isFinite(v) && v > 0)) {
+      throw new Error('A scale factor has to be a positive number');
+    }
+    if (sx === 1 && sy === 1 && sz === 1) return;
+
+    for (const b of targets) {
+      const points = MT.meshPoints(b.sheet).map((p) => p.slice());
+      if (!points.length) continue;
+
+      let pivot = [0, 0, 0];
+      if ((feature.pivotMode || 'centre') === 'centre') {
+        const lo = [Infinity, Infinity, Infinity];
+        const hi = [-Infinity, -Infinity, -Infinity];
+        for (const p of points) {
+          for (let i = 0; i < 3; i++) {
+            lo[i] = Math.min(lo[i], p[i]);
+            hi[i] = Math.max(hi[i], p[i]);
+          }
+        }
+        pivot = [0, 1, 2].map((i) => (lo[i] + hi[i]) / 2);
+      }
+
+      const f = [sx, sy, sz];
+      for (const p of points) {
+        for (let i = 0; i < 3; i++) p[i] = pivot[i] + (p[i] - pivot[i]) * f[i];
+      }
+      replaceBody(bodies, b, { sheet: SH.makeSheet(points, MT.meshTris(b.sheet)) });
+    }
   }
 
   /**

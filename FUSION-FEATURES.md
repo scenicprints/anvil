@@ -524,10 +524,10 @@ surface body, as opposed to a solid.
 | Smooth | has |
 | Reverse normal | has |
 | Erase and Fill | has |
-| Align to a plane | **missing** |
+| Align to a plane | **missing**. Needs picking a planar region on the mesh, fitting a plane to it and turning the body onto a chosen one, so it is category 2 rather than a quick win |
 | **Extrude texture** | **missing** |
 | Separate | has |
-| Scale | **missing** as a mesh command |
+| Scale | has, v2.32.0. Uniform or per axis, about the body's middle or the origin |
 | Convert to solid | has |
 | Mesh Selection Palette | **missing** |
 

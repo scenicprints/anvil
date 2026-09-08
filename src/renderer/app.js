@@ -1890,6 +1890,9 @@ async function runCommand(cmd) {
     case 'meshPlaneCut':
       cmdMeshPlaneCut();
       break;
+    case 'meshScale':
+      cmdMeshScale();
+      break;
     case 'meshSeparate':
       cmdMeshSeparate();
       break;
@@ -14921,6 +14924,37 @@ function cmdMeshPlaneCut() {
   });
   setEditPick('splitFace');
   setStatus('Click the plane or a flat face to cut against.');
+}
+
+function cmdMeshScale() {
+  startMeshFeature('meshScale', 'Scale Mesh', meshScaleFields(), {
+    factor: '1',
+    nonUniform: false,
+    sx: '1',
+    sy: '1',
+    sz: '1',
+    pivotMode: 'centre'
+  });
+}
+
+function meshScaleFields() {
+  return [
+    meshBodyField(),
+    { key: 'factor', label: 'Factor', type: 'expr', showIf: (f) => !f.nonUniform },
+    { key: 'nonUniform', label: 'Per axis', type: 'bool' },
+    { key: 'sx', label: 'X factor', type: 'expr', showIf: (f) => f.nonUniform },
+    { key: 'sy', label: 'Y factor', type: 'expr', showIf: (f) => f.nonUniform },
+    { key: 'sz', label: 'Z factor', type: 'expr', showIf: (f) => f.nonUniform },
+    {
+      key: 'pivotMode',
+      label: 'Scale about',
+      type: 'select',
+      options: [
+        ['centre', 'The middle of the body'],
+        ['origin', 'The world origin']
+      ]
+    }
+  ];
 }
 
 function cmdMeshSeparate() {
