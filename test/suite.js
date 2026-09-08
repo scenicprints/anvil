@@ -1532,7 +1532,7 @@ async function run() {
     // Same wall, same volume, put somewhere else. A rib drawn against a line
     // you have already dimensioned to wants its face on that line rather than
     // its middle, and half each side was the only thing on offer before.
-    const rib = (direction) => {
+    const rib = (direction, start) => {
       const doc = newDocument();
       const sk = openSketch('XY', [[-20, 0], [20, 0]], 'Rib');
       doc.sketches[sk.id] = sk;
@@ -1545,6 +1545,7 @@ async function run() {
           thickness: '4',
           depth: '10',
           direction,
+          start,
           op: 'new',
           targets: 'all'
         }
@@ -1565,13 +1566,21 @@ async function run() {
     near(both.lo, -2, 0.01, 'half of four to one side');
     near(both.hi, 2, 0.01, 'and half to the other');
 
-    const one = rib('one');
+    const one = rib('one', 'bottom');
     near(one.hi - one.lo, both.hi - both.lo, 0.01, 'the same wall thickness');
     near(one.volume, both.volume, both.volume * 0.001, 'and the same amount of material');
     assert(
       Math.abs(one.lo) < 0.01 || Math.abs(one.hi) < 0.01,
       `one face of it lands on the curve, got ${one.lo} to ${one.hi}`
     );
+
+    // Start says which side it falls on, and the two are mirror images about
+    // the curve. Without this the setting could be doing nothing and the check
+    // above would still pass.
+    const other = rib('one', 'top');
+    near(other.hi - other.lo, one.hi - one.lo, 0.01, 'the same wall again');
+    near(other.lo, -one.hi, 0.01, 'and it landed on the other side of the curve');
+    near(other.hi, -one.lo, 0.01, 'mirrored about it');
   });
 
   test('draft: two sides may lean by different amounts', () => {

@@ -191,6 +191,13 @@ async function boot() {
   // Its own listener rather than a line in handleViewportMove, because that
   // returns early while a sketch is open and the callout has to keep up
   // regardless of who is handling the click.
+  // Slice cuts through the bodies at the plane being drawn on, so a sketch
+  // inside a closed part is not drawn against a wall you cannot see past.
+  $('#chkSlice')?.addEventListener('change', (e) => {
+    state.sliceSketch = e.target.checked;
+    refreshSlice();
+  });
+
   // Construction lines and projected geometry are scaffolding: wanted while you
   // are placing things against them, in the way once you are not.
   for (const [id, key] of [
@@ -2702,6 +2709,7 @@ function enterSketch(feature, opts = {}) {
   // The sketcher solves on its own between rebuilds, so it needs the parameters
   // to work out a dimension written as an expression.
   state.sketcher.paramScope = scope;
+  // Worked out after the sketch is up, below, once its plane is known.
   const plane =
     state.result?.sketchPlanes?.[sk.id] || resolvePlane(sk.plane, scope);
   state.activeSketchFeature = feature;
@@ -2743,6 +2751,9 @@ function enterSketch(feature, opts = {}) {
   }
   state.pendingTool = null;
 
+  // The plane is known by now, so the slice can be put where the sketch is.
+  refreshSlice();
+
   setStatus(`Editing ${sk.name}. Draw, then press Finish.`);
   updateHints();
 }
@@ -2751,6 +2762,10 @@ function exitSketch() {
   if (!state.sketcher.active) return;
   state.sketcher.end();
   state.activeSketchFeature = null;
+  // The slice belongs to the sketch that asked for it. Left alone it cuts the
+  // model open for the rest of the session, which is the same shape of bug as
+  // the value box that used to outlive its feature.
+  state.vp.setSlice(null);
   state.vp.setBodyOpacity($('#chkTransparent').checked ? 0.45 : 1);
   syncToolButtons();
   updateHints();
@@ -3948,6 +3963,16 @@ function webFields(feature) {
       options: [
         ['symmetric', 'Half each side of the curve'],
         ['one', 'All to one side']
+      ]
+    },
+    {
+      key: 'start',
+      label: 'Which side',
+      type: 'select',
+      showIf: (f) => f.direction === 'one',
+      options: [
+        ['bottom', 'One way'],
+        ['top', 'The other']
       ]
     },
     {
@@ -6110,6 +6135,7 @@ function startRib() {
     sketch: paths[paths.length - 1].id,
     thickness: '2',
     direction: 'symmetric',
+    start: 'bottom',
     depth: '10',
     flip: false,
     op: state.result?.bodies.length ? 'join' : 'new',
@@ -6130,6 +6156,16 @@ function startRib() {
       options: [
         ['symmetric', 'Half each side of the curve'],
         ['one', 'All to one side']
+      ]
+    },
+    {
+      key: 'start',
+      label: 'Which side',
+      type: 'select',
+      showIf: (f) => f.direction === 'one',
+      options: [
+        ['bottom', 'One way'],
+        ['top', 'The other']
       ]
     },
     { key: 'depth', label: 'Depth', type: 'expr' },
@@ -6250,6 +6286,7 @@ function startWeb() {
     sketch: sketchId,
     thickness: '2',
     direction: 'symmetric',
+    start: 'bottom',
     extentType: 'toNext',
     depth: '10',
     flip: false,
@@ -18045,6 +18082,13 @@ function describeFeature(feature) {
  * The plane's own up axis is handed over as the roll, so the sketch's up is up
  * on screen rather than whatever the camera happened to be rolled to.
  */
+/** Put the slice where the open sketch is, or take it away. */
+function refreshSlice() {
+  const sk = state.sliceSketch && state.sketcher.active ? state.sketcher.sketch : null;
+  const plane = sk ? state.result?.sketchPlanes?.[sk.id] : null;
+  state.vp.setSlice(plane ? { origin: plane.origin, n: plane.n } : null);
+}
+
 function cmdLookAt() {
   const sk = state.sketcher.active ? state.sketcher.sketch : null;
   const plane = sk ? state.result?.sketchPlanes?.[sk.id] : null;

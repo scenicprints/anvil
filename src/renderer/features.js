@@ -2344,7 +2344,15 @@ export function rebuild(doc, options = {}) {
    * already dimensioned to.
    */
   function ribWidth(feature, thickness) {
-    return feature.direction === 'one' ? [thickness, 0] : thickness / 2;
+    if (feature.direction !== 'one') return thickness / 2;
+    // Which side the one-sided thickness goes. Fusion calls this Start, with
+    // From Top and From Bottom, and describes it as where the thickness is
+    // measured from. Its reference page and its how-to page disagree about
+    // which axis a rib's thickness even runs along, so the reading taken here
+    // is the one that leaves both settings doing something: Thickness
+    // Direction says whether the wall straddles the curve, and Start says
+    // which side it falls on when it does not.
+    return feature.start === 'top' ? [0, thickness] : [thickness, 0];
   }
 
   function doRib(feature, doc, scope, ks, apply, errs) {

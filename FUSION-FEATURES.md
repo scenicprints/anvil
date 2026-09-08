@@ -120,8 +120,8 @@ dialog machinery rather than to Rib.
 
 Same option set as Rib, but perpendicular to the sketch plane rather than
 parallel. Anvil has profile, thickness, direction, extent type (To Next or
-Depth), depth, flip, draft angle and extend curves. Missing: **Presets**,
-**Start** (Bottom or Top), **Fillet Radius**.
+Depth), depth, flip, draft angle and extend curves. Missing: **Presets** and
+**Fillet Radius**.
 
 Note the pairing: Rib is parallel to the sketch plane, Web is perpendicular.
 Anvil's Web has To Next and its Rib does not, which is the wrong way round from
@@ -457,15 +457,21 @@ with the degree editable on a control-point spline.
 | Look At (turn the camera square to the sketch plane) | has, v2.31.0. Also works on a selected flat face |
 | Sketch Grid on/off | has |
 | Snap on/off | has |
-| **Slice** (cut through bodies at the sketch plane while sketching) | **missing** |
+| Slice (cut through bodies at the sketch plane while sketching) | has, v2.34.0. The cut is not capped: you see into the shell rather than at a solid cross-section, which wants stencil work |
 | Show Profile | has |
 | Show Points / Dimensions / Constraints | partial |
 | Show Construction Geometries | has, v2.33.0 |
 | Show Projected Geometries | has, v2.33.0 |
 | 3D Sketch on/off | has |
 
-**Slice is the one worth having.** Sketching inside a part you cannot see into is
-the common case, and a temporary cut at the sketch plane is how Fusion solves it.
+**Slice was the one worth having** and shipped in v2.34.0. Which half is thrown
+away follows the camera, so it is always the half in front of you, and it clears
+itself when the sketch closes.
+
+One honest limit: a clipped solid is an open shell, because the cut leaves a
+hole rather than a capped face. Both sides are drawn while the slice is on, so
+you see the inside of the far shell where the cap would be, which reads as a cut
+part rather than a vanished one. A real cap wants stencil work.
 
 ### Sketch lifecycle — *pending*
 

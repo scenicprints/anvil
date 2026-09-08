@@ -747,6 +747,60 @@ export class Viewport {
     this.setView(ISO_VIEW);
   }
 
+  /**
+   * Cut through everything at a plane, so you can see into a part.
+   *
+   * Sketching inside a closed body means drawing against a wall you cannot see
+   * past. Fusion calls this Slice and puts it on the sketch palette. It is a
+   * view setting and nothing else: no geometry changes, and the cut follows the
+   * camera so the half being thrown away is always the half in front of you.
+   */
+  setSlice(spec) {
+    this.slice = spec || null;
+    if (!spec) this.renderer.clippingPlanes = [];
+    this.invalidate();
+  }
+
+  _applySlice() {
+    // A clipped solid is an open shell: the cut leaves a hole rather than a
+    // capped face, and with back faces culled you see straight through it and
+    // the part looks like it vanished. Showing both sides while the slice is on
+    // puts the inside of the far shell where the cap would be, which reads as a
+    // cut part. A real cap wants stencil work and is not this.
+    this._sliceSides = this._sliceSides || new WeakMap();
+    const want = this.slice ? THREE.DoubleSide : null;
+    for (const entry of this.bodies.values()) {
+      const m = entry.mesh?.material;
+      if (!m) continue;
+      if (want !== null) {
+        if (!this._sliceSides.has(m)) this._sliceSides.set(m, m.side);
+        if (m.side !== want) {
+          m.side = want;
+          m.needsUpdate = true;
+        }
+      } else if (this._sliceSides.has(m)) {
+        // Back to whatever it was, which is not FrontSide for every body: a
+        // surface is double sided because it has no inside.
+        const was = this._sliceSides.get(m);
+        this._sliceSides.delete(m);
+        if (m.side !== was) {
+          m.side = was;
+          m.needsUpdate = true;
+        }
+      }
+    }
+
+    if (!this.slice) return;
+    const o = new THREE.Vector3(...this.slice.origin);
+    const n = new THREE.Vector3(...this.slice.n).normalize();
+    // Keep the far side. The near side is the material between your eye and
+    // what you are drawing, which is the only reason to be slicing at all.
+    if (n.dot(this.camera.position.clone().sub(o)) > 0) n.negate();
+    this.renderer.clippingPlanes = [
+      new THREE.Plane().setFromNormalAndCoplanarPoint(n, o)
+    ];
+  }
+
   _animateTo(targetSpherical) {
     const start = this.spherical.clone();
     const t0 = performance.now();
@@ -1811,6 +1865,9 @@ export class Viewport {
     // The manipulator is held at one size on screen, so it has to be resized
     // whenever the view moves rather than only when the selection changes.
     this._sizeGizmo();
+    // Which side of the slice to throw away depends on where the camera is, so
+    // it is worked out per frame rather than once when the slice was asked for.
+    this._applySlice();
     this.renderer.render(this.scene, this.camera);
 
     // View cube, drawn over the top right corner.
