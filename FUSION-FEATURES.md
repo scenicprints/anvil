@@ -10,18 +10,24 @@ fixes the option set and the ordering.
 
 **A warning about the Anvil column.** The Fusion half of this file was read page
 by page. The Anvil half was written partly from memory, and that is where it is
-wrong. Working through category 1 turned up six bad entries in about a dozen
-items. Listed as gaps and were not: Align's flip and angle, Combine's Objects To
-Cut, Form's Display Mode, Split Body's Extend, and the environment map analysis.
-Listed as present and is not: Centerline.
+wrong. A full scripted cross-check has now been run over all 353 status rows in this
+file, and ten bad entries were found and fixed. What follows is the record of
+them, because the same mistake will be easy to make again. Listed as gaps and were not: Align's flip and angle, Combine's Objects To Cut,
+Form's Display Mode, Split Body's Extend, the environment map analysis, **Coil**,
+**mesh texture extrude**, **Form's Edit By Curve**, and three of Sweep's five
+listed gaps (**profile scaling, partial distance and orientation**, all of which
+are in `sweepFields` under those exact names). Listed as present and is not:
+Centerline.
 
-A scripted cross-check of every gap claim against Anvil's own command list is
-what caught the environment map one. It flagged seventeen candidates, fifteen of
-which were substring noise. That check is worth re-running after any large edit
-to this file:
-
-    grep -o 'data-cmd="[A-Za-z]*"' src/renderer/index.html
-    grep -o "case '[A-Za-z]*':" src/renderer/app.js **Grep the source before building anything from
+**How the check works, so it can be re-run.** Build a bag of every term Anvil
+exposes: `data-cmd` names and ribbon labels from `index.html`, and `case '...'`,
+`key: '...'`, `label: '...'`, select option labels and exported function names
+from every file in `src/renderer`. That is about 2,800 terms. Then for each row
+claiming a gap, check whether any single term contains all the distinctive words
+of the row's name; and for each row claiming Anvil has something, check whether
+any word of it appears at all. The first direction found nine errors, the second
+found one. Expect roughly two thirds of the flags to be substring noise, and
+read each one rather than trusting it. **Grep the source before building anything from
 this file.** Every row corrected so far says so.
 
 Status means:
@@ -85,11 +91,11 @@ operation, and **Tangent Chain** on thin extrude.
 | Path | | has |
 | Guide Rail | scales and orients the profile along the path | has |
 | Chain Selection | pick tangentially connected geometry as one | **missing** |
-| Distance | fraction of the path, 0 to 1 | **missing** |
+| Distance | fraction of the path, 0 to 1 | has |
 | Taper Angle, Twist Angle | | has |
 | Extent | Perpendicular To Path, Full Extents | **missing** |
-| Profile Scaling | Scale, Stretch, None | **missing** |
-| Orientation | Perpendicular, Parallel, Aligned | **missing** |
+| Profile Scaling | Scale, Stretch, None | has |
+| Orientation | Perpendicular, Parallel, Aligned | partial — the first two. Aligned belongs to Solid Sweep, which Anvil does not have |
 | Operation / Objects To Cut | as Extrude | partial |
 | Analysis tab | None, Zebra, Curvature Map, Isocurve | **missing** here (Anvil has zebra elsewhere) |
 
@@ -419,11 +425,12 @@ are the cells; you choose which cells to keep.
 | Sphere | has |
 | Torus | has |
 | Pipe | has |
-| **Coil** | **missing** |
+| Coil | has |
 
-### Coil — missing
+### Coil — partial
 
-The one primitive Anvil does not have, and the one that carries real settings.
+Listed here as missing and is not: `startCoil` is on the Solid tab. Its option
+set against Fusion's is *pending* an option-by-option read.
 
 | Option | Values |
 |---|---|
@@ -437,8 +444,7 @@ The one primitive Anvil does not have, and the one that carries real settings.
 | Section Size | diameter of a circumscribed circle |
 | Operation / Objects To Cut | as elsewhere |
 
-Anvil has a modelled thread, which is a harder version of the same sweep, so the
-path to this is short.
+Anvil also has a modelled thread, which is a harder version of the same sweep.
 
 ---
 
@@ -547,15 +553,15 @@ surface body, as opposed to a solid.
 | Reverse normal | has |
 | Erase and Fill | has |
 | Align to a plane | **missing**. Needs picking a planar region on the mesh, fitting a plane to it and turning the body onto a chosen one, so it is category 2 rather than a quick win |
-| **Extrude texture** | **missing** |
+| Extrude texture | has |
 | Separate | has |
 | Scale | has, v2.32.0. Uniform or per axis, about the body's middle or the origin |
 | Convert to solid | has |
 | Mesh Selection Palette | **missing** |
 
-Anvil also has patch, repair, stitch and section, which are its own. The gaps are
-mesh shell, align to a plane, texture extrude, a mesh scale command, and the
-selection palette that governs how clicking picks mesh faces.
+Anvil also has patch, repair, stitch and section, which are its own. The gaps
+are mesh shell, align to a plane, and the selection palette that governs how
+clicking picks mesh faces.
 
 ---
 
@@ -639,7 +645,7 @@ revolve, sweep and loft into a T-Spline. Anvil has every one.
 | Delete T-Spline geometry | has |
 | Convert to a solid | has |
 | Mirror-Internal / Circular-Internal symmetry | has |
-| **Edit By Curve** (drive edges with a curve) | **missing** |
+| Edit By Curve (drive edges with a curve) | has, as `formByCurve` |
 | **Tangent handles** | **missing** |
 | **Snap vertices to objects** | **missing** |
 | Display Mode (box, control frame, smooth) | has. All three, per form, on the undo stack |
@@ -647,9 +653,8 @@ revolve, sweep and loft into a T-Spline. Anvil has every one.
 
 Anvil also has `makeUniform`, which Fusion does not list.
 
-Three gaps, and all of them are about *how you grab a point* rather than about
-what the cage can do: tangent handles, snapping a vertex onto other geometry, and
-Edit By Curve.
+Two gaps, and both are about *how you grab a point* rather than what the cage
+can do: tangent handles, and snapping a vertex onto other geometry.
 
 Display Mode was listed here as missing and is not: `cmdFormDisplay` carries box,
 control frame and smooth, per form and on the undo stack. Checked against the
