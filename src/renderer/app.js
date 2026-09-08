@@ -4427,8 +4427,21 @@ function draftFields() {
       type: 'select',
       options: [
         ['one', 'One side'],
-        ['two', 'Two sides']
+        ['two', 'Two sides, an angle each'],
+        ['symmetric', 'Symmetric']
       ]
+    },
+    {
+      key: 'angle2',
+      label: 'Angle on the other side',
+      type: 'expr',
+      showIf: (f) => f.sides === 'two'
+    },
+    {
+      // Which way the mould opens. The same faces drafted the other way round.
+      key: 'flipPull',
+      label: 'Flip pull direction',
+      type: 'bool'
     }
   ];
 }
@@ -6104,8 +6117,13 @@ function startDraft() {
     bodies: [bodyId],
     faces,
     angle: '3',
+    // Written even when it is not shown, so that a draft made here always
+    // carries a second angle. An absent one is how an old two-sided draft is
+    // told apart from a new one and read back as symmetric.
+    angle2: '3',
     neutral: 'XY',
-    sides: 'one'
+    sides: 'one',
+    flipPull: false
   };
   openFeatureEditor(feature, 'Draft', draftFields());
   if (!faces.length) {
@@ -17958,6 +17976,18 @@ function showParameters() {
   renderParameters();
 }
 
+/**
+ * Note that the model is behind the parameters.
+ *
+ * It shows the note it has rather than drawing the panel again. Re-rendering
+ * would rebuild the very input being typed into and take the caret with it,
+ * which is a worse bug than the one automatic compute is here to fix.
+ */
+function markParametersWaiting() {
+  state.parametersWaiting = true;
+  if (state.parametersWaitingEl) state.parametersWaitingEl.hidden = false;
+}
+
 function renderParameters() {
   const body = el.inspectorBody;
   body.innerHTML = '';
@@ -17967,6 +17997,38 @@ function renderParameters() {
   hint.textContent =
     'Name a value here and any dimension can use it. Expressions may reference other parameters, for example wall * 2.';
   body.appendChild(hint);
+
+  // Every keystroke rebuilds the part, which on a heavy one is the difference
+  // between editing five numbers and waiting five times. Fusion calls it
+  // Automatic Compute and it is the same idea.
+  const autoRow = document.createElement('div');
+  autoRow.className = 'field inline';
+  const autoBox = document.createElement('input');
+  autoBox.type = 'checkbox';
+  autoBox.checked = state.autoCompute !== false;
+  const autoLabel = document.createElement('label');
+  autoLabel.textContent = 'Compute as I type';
+  autoBox.addEventListener('change', () => {
+    state.autoCompute = autoBox.checked;
+    // Turning it back on is what asks for the work that was put off.
+    if (autoBox.checked && state.parametersWaiting) {
+      state.parametersWaiting = false;
+      rebuildAll();
+    }
+    renderParameters();
+  });
+  autoRow.appendChild(autoBox);
+  autoRow.appendChild(autoLabel);
+  body.appendChild(autoRow);
+
+  // Built either way and hidden until it is wanted, so that saying "there is
+  // work waiting" never has to redraw the table somebody is typing into.
+  const waiting = document.createElement('div');
+  waiting.className = 'hint';
+  waiting.textContent = 'Changes are waiting. Tick the box to build them.';
+  waiting.hidden = !(state.autoCompute === false && state.parametersWaiting);
+  body.appendChild(waiting);
+  state.parametersWaitingEl = waiting;
 
   const { scope, errors } = resolveParameters(state.doc.parameters);
 
@@ -18002,7 +18064,12 @@ function renderParameters() {
     exprInput.addEventListener('input', () => {
       p.expr = exprInput.value;
       state.dirty = true;
-      scheduleRebuild();
+      // With automatic compute off the model is left alone until the box is
+      // ticked again. The value beside the row still updates, because that
+      // costs nothing and it is how you check an expression before paying for
+      // the rebuild it will cause.
+      if (state.autoCompute === false) markParametersWaiting();
+      else scheduleRebuild();
       const v = resolveParameters(state.doc.parameters);
       tdVal.textContent = v.errors[p.name] ? 'error' : round(v.scope[p.name], 4);
       tdVal.style.color = v.errors[p.name] ? '#e06c5f' : '';

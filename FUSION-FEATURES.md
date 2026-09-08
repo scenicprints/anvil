@@ -243,13 +243,13 @@ knowing before matching it.
 | Option | Values | Anvil |
 |---|---|---|
 | Type | Fixed Plane, **Parting Line** | partial — fixed plane |
+| Flip Pull Direction | | has, v2.29.0 |
 | Pull Direction | a plane or face | has (neutral plane) |
 | Parting Tool | plane, face, edge or sketch curve | **missing** |
 | Faces | | has |
 | Tangent Chain | | **missing** |
-| Flip Pull Direction | | **missing** |
 | Angle | one, or Angle 1 and Angle 2 for two-sided | has |
-| Draft Sides | One Side, Two Side, **Symmetric** | partial — one and two |
+| Draft Sides | One Side, Two Side, Symmetric | has, v2.29.0. Two Side takes an angle each now; what used to be called two sides was the symmetric case and old documents read back as that |
 | Parting Line Type | Fix Parting Line, Move Parting Line | **missing** |
 | Direction (move parting line) | Angle Above, Both, Angle Below | **missing** |
 | Fixed Edges (move parting line) | edges held against deformation | **missing** |
@@ -270,7 +270,7 @@ knowing before matching it.
 |---|---|---|
 | View Direction | the direction the silhouette is taken from | has |
 | Target Body | | has |
-| Operation | Split Faces Only, Split Shelled Body, Split Solid Body | **missing** — Anvil always splits the solid |
+| Operation | Split Faces Only, Split Shelled Body, Split Solid Body | partial — Anvil's single behaviour covers both body cases. **Split Faces Only** is the real gap, and it needs a face split along the computed silhouette curve, so it is not a quick win |
 
 ### Scale — *pending* (Anvil: factor or per-axis, about the middle, the origin, or a point)
 
@@ -328,8 +328,8 @@ it is what the arrow on a selected face drives.
 | Option | Values | Anvil |
 |---|---|---|
 | Body to Split | | has |
-| Splitting Tool(s) | **several tools at once** | partial — one face or plane |
-| Extend Splitting Tool(s) | on by default; uncheck when the tool already crosses the body | **missing** |
+| Splitting Tool(s) | **several tools at once** | partial — one face or plane. Needs a list picker, so it is category 2 work rather than a quick win |
+| Extend Splitting Tool(s) | on by default; uncheck when the tool already crosses the body | n/a — Anvil splits with an unbounded half-space, so the tool always crosses the body |
 
 Anvil also offers a Result of two bodies or keeping only the near side, which
 Fusion does not have here.
@@ -926,7 +926,7 @@ does not carry here.
 | **Text parameters**, joined with `+` | **missing** |
 | **Name a parameter inline** by typing `Width=50` into any field, which creates it and adds it to favourites | **missing** |
 | Favourites | **missing** |
-| **Automatic Compute off** while editing several parameters | **missing** |
+| Automatic Compute off while editing several parameters | has, v2.29.0 |
 | **Import and export parameters** | **missing** |
 
 **Typing `Width=50` into a field to create the parameter there and then is the

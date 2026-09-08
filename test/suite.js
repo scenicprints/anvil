@@ -1528,6 +1528,64 @@ async function run() {
 
   /* -------- draft, split, thread -------- */
 
+  test('draft: two sides may lean by different amounts', () => {
+    // A box drafted about a plane through its middle. Symmetric leans the same
+    // amount each way; two sides takes an angle each, which is what a part with
+    // a different draft above the parting line than below it needs.
+    const sideFaces = (doc) => {
+      const res = rebuild(doc);
+      const topo = buildTopology(K.meshData(res.bodies[0].solid));
+      const faces = topo.faces
+        .filter((f) => f.planar && Math.abs(f.normal[2]) < 0.01)
+        .map(faceReference);
+      res.dispose();
+      return faces;
+    };
+    const base = () => {
+      const doc = newDocument();
+      doc.features = [prim('box', { width: '40', depth: '40', height: '20' })];
+      return doc;
+    };
+
+    const drafted = (extra) => {
+      const doc = base();
+      doc.features.push({
+        id: uid('f'),
+        type: 'draft',
+        bodies: 'all',
+        faces: sideFaces(base()),
+        neutral: 'XY',
+        ...extra
+      });
+      const res = rebuild(doc);
+      assert(res.errors.length === 0, JSON.stringify(res.errors));
+      const v = res.bodies[0].solid.volume();
+      res.dispose();
+      return v;
+    };
+
+    const symmetric = drafted({ angle: '5', sides: 'symmetric' });
+
+    // The two halves lean in opposite senses about the neutral plane, so the
+    // pair reads as one continuous taper rather than a double frustum. Giving
+    // the second side its own angle is therefore not a symmetric operation, and
+    // which way the volume moves depends on the sign. What matters is that the
+    // second angle is being used at all, and that matching it to the first
+    // reproduces the symmetric case exactly.
+    const matched = drafted({ angle: '5', angle2: '5', sides: 'two' });
+    near(matched, symmetric, symmetric * 0.001, 'the same angle each way is the symmetric case');
+
+    const lopsided = drafted({ angle: '5', angle2: '1', sides: 'two' });
+    assert(
+      Math.abs(lopsided - symmetric) > symmetric * 0.005,
+      `a different second angle changes the part, ${lopsided} against ${symmetric}`
+    );
+
+    // An old document said two sides and meant one angle both ways.
+    const old = drafted({ angle: '5', sides: 'two' });
+    near(old, symmetric, symmetric * 0.001, 'an old two-sided draft is the symmetric one');
+  });
+
   test('draft: tapering a box gives the frustum the angle implies', () => {
     const doc = newDocument();
     doc.features = [

@@ -393,6 +393,11 @@ export function normalizeShell(f) {
 
 export function normalizeDraft(f) {
   if (!f.sides) f.sides = 'one';
+  // Two sides used to mean one angle leaned in opposite senses, which is what
+  // Fusion calls Symmetric. Two Side there takes an angle each. A draft made in
+  // this session always writes a second angle when it is two-sided, so an
+  // absent one means a document from before the distinction existed.
+  if (f.sides === 'two' && f.angle2 === undefined) f.sides = 'symmetric';
   return f;
 }
 
@@ -2398,7 +2403,12 @@ export function rebuild(doc, options = {}) {
     if (Math.abs(angle) < 1e-9) return bodies;
 
     const neutral = resolvePlane(feature.neutral || 'XY', scope, builtConstruction);
-    const pull = neutral.n;
+    // Which way the mould opens. Flipping it turns every lean the other way,
+    // because the axis each face turns about is the cross of its normal with
+    // this, and reversing it reverses that.
+    const pull = feature.flipPull
+      ? [-neutral.n[0], -neutral.n[1], -neutral.n[2]]
+      : neutral.n;
 
     const out = bodies.slice();
     for (const b of targets) {
@@ -2480,7 +2490,7 @@ export function rebuild(doc, options = {}) {
           if (!K.isEmpty(addOn)) solid = K.union(solid, addOn, ks);
         };
 
-        if (feature.sides === 'two') {
+        if (feature.sides === 'two' || feature.sides === 'symmetric') {
           const above = halfSpace(neutral.origin, neutral.n, span, ks);
           const below = halfSpace(
             neutral.origin,
@@ -2488,8 +2498,13 @@ export function rebuild(doc, options = {}) {
             span,
             ks
           );
+          // Symmetric leans the same amount each way. Two Side takes an angle
+          // each, which is what a part with a different draft above the parting
+          // line than below it needs.
+          const other =
+            feature.sides === 'two' ? safeEval(feature.angle2, scope, angle) : angle;
           lean(angle, above);
-          lean(-angle, below);
+          lean(-other, below);
         } else {
           lean(angle, null);
         }
