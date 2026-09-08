@@ -1510,7 +1510,7 @@ model file can never execute anything.
 npm test
 ```
 
-522 tests in a hidden window, checking measured quantities: volumes against
+523 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths

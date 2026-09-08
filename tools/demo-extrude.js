@@ -114,6 +114,23 @@ await clickAt(...plane(-20, -12));
 await clickAt(...plane(20, 12));
 sk.setTool('select');
 await wait(300);
+
+/* ---- Look At turns the camera square to the plane being drawn on ---- */
+// Knock the view off square first, or the check proves nothing: finishing a
+// sketch already leaves you looking straight at it.
+dev.state.vp.setView([1, 1, 1], false);
+await wait(200);
+const camDir = () => {
+  const v = dev.state.vp.camera.position.clone().sub(dev.state.vp.target).normalize();
+  return [v.x, v.y, v.z].map((n) => Number(n.toFixed(3)));
+};
+report.viewBeforeLookAt = camDir();
+document.querySelector('[data-cmd="lookAt"]').click();
+await wait(700);
+report.viewAfterLookAt = camDir();
+// The sketch is on XY, so square to it means looking straight down Z.
+report.lookAtWentSquareOn = Math.abs(report.viewAfterLookAt[2]) > 0.99;
+
 document.querySelector('[data-cmd="finishSketch"]').click();
 await wait(900);
 

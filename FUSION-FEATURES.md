@@ -387,7 +387,7 @@ are the cells; you choose which cells to keep.
 |---|---|---|
 | Select Tools | planes, surfaces, bodies | has |
 | Select Cells | | has |
-| Operation | Join, Cut, Intersect, New Body, New Component | **missing** — Anvil only keeps cells |
+| Operation | Join, Cut, Intersect, New Body, New Component | has, v2.31.0, less New Component |
 | Objects To Cut | Auto-Select, # Bodies | **missing** |
 
 ### Delete Face — *pending* (Anvil has it)
@@ -454,7 +454,7 @@ with the degree editable on a control-point spline.
 | Linetype (convert geometry to another line type) | **missing** |
 | Construction | has |
 | Centerline | has |
-| **Look At** (turn the camera square to the sketch plane) | **missing** |
+| Look At (turn the camera square to the sketch plane) | has, v2.31.0. Also works on a selected flat face |
 | Sketch Grid on/off | has |
 | Snap on/off | has |
 | **Slice** (cut through bodies at the sketch plane while sketching) | **missing** |

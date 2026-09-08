@@ -1163,7 +1163,7 @@ export function rebuild(doc, options = {}) {
           break;
 
         case 'boundaryFill':
-          doBoundaryFill(feature, doc, scope, scopeObj, errors);
+          doBoundaryFill(feature, doc, scope, scopeObj, applyBoolean, errors);
           break;
 
         case 'replaceFace':
@@ -5873,7 +5873,7 @@ export function rebuild(doc, options = {}) {
    * into becomes a cell, and the cells that are wanted are kept. Here a cell is
    * simply what falls out of cutting each body by each tool in turn.
    */
-  function doBoundaryFill(feature, doc, scope, ks, errs) {
+  function doBoundaryFill(feature, doc, scope, ks, apply, errs) {
     const targets = pickBodies(feature, bodies);
     if (!targets.length) throw new Error('Boundary Fill needs solid bodies to divide');
 
@@ -5928,10 +5928,19 @@ export function rebuild(doc, options = {}) {
         .map((t) => Number(t))
         .filter((v) => Number.isInteger(v) && v >= 0);
       bodies.splice(bodies.indexOf(target), 1);
-      cells.forEach((cell, i) => {
-        if (wanted.length && !wanted.includes(i)) return;
-        addSolidBody(feature, cell);
-      });
+      const kept = cells.filter((cell, i) => !wanted.length || wanted.includes(i));
+      if (!kept.length) continue;
+
+      // What the cells you kept do to the rest of the design. New body is what
+      // this always did: the divided part replaces the one it came from. The
+      // others hand the kept cells over as one tool, so a cell can cut a
+      // neighbouring body rather than only becoming one.
+      const op = feature.op || 'new';
+      if (op === 'new') {
+        kept.forEach((cell) => addSolidBody(feature, cell));
+      } else {
+        apply(feature, kept.reduce((acc, cell) => K.union(acc, cell, ks)), op);
+      }
     }
   }
 

@@ -1609,6 +1609,9 @@ async function runCommand(cmd) {
     case 'newSketch':
       cmdNewSketch();
       break;
+    case 'lookAt':
+      cmdLookAt();
+      break;
     case 'finishSketch':
       finishSketch();
       break;
@@ -13496,7 +13499,8 @@ function boundaryFillFields() {
       type: 'note',
       text: 'Every cell is kept unless some are named below. Cells are numbered from zero in the order they were cut.'
     },
-    { key: 'cells', label: 'Keep only', type: 'text' }
+    { key: 'cells', label: 'Keep only', type: 'text' },
+    { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS }
   ];
 }
 
@@ -17987,6 +17991,29 @@ function describeFeature(feature) {
 /* ------------------------------------------------------------------ */
 /* Parameters panel                                                    */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Turn the camera square to whatever is being worked on.
+ *
+ * The open sketch's plane if there is one, otherwise a selected planar face.
+ * The plane's own up axis is handed over as the roll, so the sketch's up is up
+ * on screen rather than whatever the camera happened to be rolled to.
+ */
+function cmdLookAt() {
+  const sk = state.sketcher.active ? state.sketcher.sketch : null;
+  const plane = sk ? state.result?.sketchPlanes?.[sk.id] : null;
+  if (plane) {
+    state.vp.setView(plane.n, true, plane.y);
+    return;
+  }
+  const found = singleSelectedFace();
+  if (found) {
+    const b = basisFor(found.face.normal);
+    state.vp.setView(found.face.normal, true, b.y);
+    return;
+  }
+  setStatus('Open a sketch, or pick a flat face, to look straight at it.');
+}
 
 function showParameters() {
   if (state.editing) cancelEdit();

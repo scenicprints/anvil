@@ -6487,6 +6487,53 @@ async function run() {
     for (const s of solids) near(s.solid.volume(), 4000, 40, 'cut through the middle');
   });
 
+  test('boundary fill: an operation says what the kept cells do', () => {
+    // Dividing a block and keeping both cells gives two bodies, which is what
+    // this always did and is New Body. Join hands the same cells over as one
+    // tool instead, so they come back as the block they were cut from.
+    const build = (op) => {
+      const doc = newDocument();
+      const sk = newSketch('XZ', 'Cut');
+      sk.points = [{ x: -40, y: 0 }, { x: 40, y: 0 }];
+      sk.entities = [{ id: 1, type: 'line', p: [0, 1] }];
+      sk.nextEntityId = 2;
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        prim('box', { width: '20', depth: '20', height: '20', centered: true }),
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        {
+          id: uid('f'),
+          type: 'surfaceExtrude',
+          sketch: sk.id,
+          distance: '80',
+          direction: 'symmetric'
+        },
+        { id: uid('f'), type: 'boundaryFill', bodies: [], tools: [], cells: '', op }
+      ];
+      const first = rebuild(doc);
+      doc.features[3].bodies = [first.bodies.find((b) => b.solid).id];
+      doc.features[3].tools = [first.bodies.find((b) => !b.solid).id];
+      first.dispose();
+
+      const out = rebuild(doc);
+      const solids = out.bodies.filter((b) => b.solid);
+      const result = {
+        count: solids.length,
+        volume: solids.reduce((a, b) => a + b.solid.volume(), 0),
+        errors: out.errors.map((e) => e.message)
+      };
+      out.dispose();
+      return result;
+    };
+
+    const asNew = build('new');
+    assert(asNew.count === 2, `new body keeps them apart, got ${asNew.count}`);
+
+    const joined = build('join');
+    assert(joined.count === 1, `join brings them back together, got ${joined.count} (${joined.errors})`);
+    near(joined.volume, asNew.volume, 20, 'and it is the same material either way');
+  });
+
   test('delete face: a face that is not a bore is healed by closing the hole', () => {
     const doc = newDocument();
     const box = prim('box', { width: '20', depth: '20', height: '20', centered: true });
