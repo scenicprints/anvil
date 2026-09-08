@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.26.0**. 516 tests.
+Current version: **2.27.0**. 518 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
@@ -123,6 +123,27 @@ it offering to do the same thing again over the thing just built.
   rectangles drawn far apart on the same ground plane came out as one body with
   two lumps in it. Join is now the default only where the sketch is drawn on a
   face of a body.
+
+**Three more of the same shape, all "it did something I did not ask for".**
+
+- **Fillet rounded every convex edge the moment it opened.** An empty edge list
+  meant "everything", because that was the only thing it could have meant before
+  there were sets. It means nothing picked yet now, `all: true` is the
+  deliberate ask, and `migrate` plus `normalizeBlend` write that flag onto the
+  documents that meant it.
+- **Point to point took the middle of whatever face was clicked**, or the bare
+  spot the ray landed on. Neither is a place anybody means. It snaps to corners,
+  edge middles and hole centres now, prefers a corner when two are equally near,
+  says which beside the cursor before the click and in the status line after it,
+  and is asked before the raycast so a corner, which is always on the silhouette
+  and usually a few pixels outside the body, can be clicked at all.
+- **Half a point to point move moved the part to the origin.** A missing point
+  read as 0, 0, 0, so picking only the "from" flung the body across the screen
+  and whatever you were about to aim at had moved. Both ends or nothing.
+
+The pattern behind all three: **an empty field is not a value.** Zero distance,
+no edges, no point. Each of them had something standing in for "not yet", and
+each of them did something drastic with it.
 
 That is the same lesson three times over: **look at the screen, not at the
 state.** Every one of these was invisible to a check that asks the app how it is

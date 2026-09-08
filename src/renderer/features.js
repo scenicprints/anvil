@@ -276,6 +276,10 @@ export function normalizeBlend(f) {
     f.sets = [
       {
         edges: f.edges || [],
+        // In the old shape an empty list was the only way to say "the whole
+        // part", because there was nothing else it could have meant. It means
+        // nothing picked yet now, so what these documents meant is written out.
+        all: !f.edges?.length,
         radius: f.radius ?? '2',
         endRadius: f.endRadius ?? null,
         chamferType: 'equal',
@@ -3738,8 +3742,13 @@ export function rebuild(doc, options = {}) {
     }
 
     if (feature.moveType === 'points') {
-      const a = feature.fromPoint || [0, 0, 0];
-      const b = feature.toPoint || [0, 0, 0];
+      // Both ends or nothing. A missing point used to read as the origin, so
+      // picking only the "from" flung the part across to 0, 0, 0 before the
+      // "to" had been asked for, and what you were trying to aim at next had
+      // moved. Half a point to point move is not a move at all.
+      const a = feature.fromPoint;
+      const b = feature.toPoint;
+      if (!a || !b) return m.identity();
       return m.makeTranslation(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
     }
 
@@ -3812,9 +3821,14 @@ export function rebuild(doc, options = {}) {
       // so several radii on one part are one feature rather than three.
       for (const set of feature.sets) {
         const topo = buildTopology(K.meshData(solid));
-        const edges = set.edges?.length
-          ? resolveEdgeRefs(topo, set.edges)
-          : topo.edges.filter((e) => e.convex);
+        // An empty edge list means nothing has been picked yet, not everything.
+        // Pressing Fillet used to round every convex edge on the part before a
+        // single edge had been clicked, which on a shelled box is a shape
+        // nobody asked for and a rebuild to undo. `all` is the deliberate ask
+        // for every convex edge, and old documents are given it on load.
+        const edges = set.all
+          ? topo.edges.filter((e) => e.convex)
+          : resolveEdgeRefs(topo, set.edges || []);
         if (!edges.length) continue;
 
         const type = kind === 'fillet' ? set.filletType || 'constant' : 'constant';
@@ -3865,9 +3879,15 @@ export function rebuild(doc, options = {}) {
       }
 
       if (!anything) {
+        // Which of the two it is matters. Nothing picked is an unfinished
+        // dialog; edges picked that the radius will not fit on is a real
+        // problem with a real answer, which is a smaller radius.
+        const nonePicked = feature.sets.every((set) => !set.all && !set.edges?.length);
         errs.push({
           feature: feature.id,
-          message: `No edge could take that ${kind}`
+          message: nonePicked
+            ? `Click the edges to ${kind}`
+            : `No edge could take that ${kind}`
         });
         continue;
       }

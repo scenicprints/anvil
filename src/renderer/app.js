@@ -530,6 +530,14 @@ function handleViewportDown(e) {
         return pickIntoEdit({ kind: 'sketchLine', ...line });
       }
     }
+    // A corner is on the silhouette, so aiming at one means aiming at the very
+    // edge of the body and usually a few pixels outside it. Asking the snap
+    // before the raycast is what lets a corner be clicked at all: without it
+    // the ray misses the solid and the click does nothing.
+    if (movePointArmed() && snapModelPoint(e.clientX, e.clientY)) {
+      return pickIntoEdit({ kind: 'point' });
+    }
+
     // Both the profile row and a loft's section list are filled from profiles.
     const wantsProfile = armed === 'profiles' || armed === 'sections';
     const profile = wantsProfile ? pickProfile(e.clientX, e.clientY) : null;
@@ -693,12 +701,101 @@ function refreshHighlight() {
   });
 }
 
+/**
+ * Everywhere in the model worth snapping a picked point to.
+ *
+ * Point to point used to take the middle of whatever face was clicked, or the
+ * bare spot the ray happened to land on. Neither is a place anybody means. What
+ * is meant is a corner, the middle of an edge, or the centre of a hole, and
+ * with nothing on screen saying which of those had been taken the pick could
+ * not be checked either.
+ *
+ * Worked out once per rebuild, because it walks every edge of every body.
+ */
+function modelSnapPoints() {
+  if (state.snapPointsFor === state.result && state.snapPoints) return state.snapPoints;
+  const out = [];
+  for (const rec of state.records || []) {
+    const topo = rec.topology;
+    if (!topo) continue;
+    for (const e of topo.edges) {
+      if (e.kind === 'line' && e.start && e.end) {
+        out.push({ at: e.start, label: 'Corner' });
+        out.push({ at: e.end, label: 'Corner' });
+        out.push({
+          at: [(e.start[0] + e.end[0]) / 2, (e.start[1] + e.end[1]) / 2, (e.start[2] + e.end[2]) / 2],
+          label: 'Middle of the edge'
+        });
+      } else if (e.centre) {
+        out.push({ at: e.centre, label: 'Centre' });
+      }
+    }
+    for (const f of topo.faces) {
+      if (f.centre) out.push({ at: f.centre, label: 'Middle of the face' });
+    }
+  }
+  state.snapPoints = out;
+  state.snapPointsFor = state.result;
+  return out;
+}
+
+// Nearer wins, but a corner is worth a few pixels over a face middle sitting
+// the same distance away: it is the more definite thing to have meant.
+const SNAP_RANK = {
+  Corner: 0,
+  'Middle of the edge': 5,
+  Centre: 5,
+  'Middle of the face': 12
+};
+
+/** The place in the model nearest the pointer, or nothing within reach. */
+function snapModelPoint(clientX, clientY) {
+  let best = null;
+  for (const c of modelSnapPoints()) {
+    const s = state.vp.worldToScreen(c.at[0], c.at[1], c.at[2]);
+    if (!s || s.behind) continue;
+    const d = Math.hypot(s.clientX - clientX, s.clientY - clientY);
+    if (d > 16) continue;
+    const score = d + (SNAP_RANK[c.label] ?? 20);
+    if (!best || score < best.score) best = { at: c.at, label: c.label, score };
+  }
+  return best;
+}
+
+/** True while a click would fill in one end of a point to point move. */
+function movePointArmed() {
+  const armed = state.editing?.pickInto;
+  return armed === 'movePointFrom' || armed === 'movePointTo';
+}
+
+/** Say what a click would take, beside the cursor, before it is made. */
+function updateMoveSnapHint(e) {
+  const hint = $('#snaphint');
+  if (!hint) return;
+  if (!movePointArmed()) {
+    if (hint.dataset.owner === 'move') {
+      hint.style.display = 'none';
+      hint.dataset.owner = '';
+    }
+    return;
+  }
+  const snap = snapModelPoint(e.clientX, e.clientY);
+  const rect = state.vp.canvas.getBoundingClientRect();
+  hint.dataset.owner = 'move';
+  hint.style.display = 'block';
+  hint.textContent = snap ? snap.label : 'On the face';
+  hint.style.left = `${e.clientX - rect.left + 14}px`;
+  hint.style.top = `${e.clientY - rect.top + 14}px`;
+}
+
 function handleViewportMove(e) {
   if (state.sketcher.active) {
     state.sketcher.onPointerMove(e);
     updateSnapHint(e);
     return;
   }
+
+  updateMoveSnapHint(e);
 
   // While a dialog is waiting on a profile, the region under the cursor lights
   // up so it is obvious what a click is about to take. Without it there is no
@@ -2415,6 +2512,16 @@ function migrate(data) {
   doc.forms = doc.forms || {};
   if (doc.captureHistory === undefined) doc.captureHistory = true;
   if (doc.rollback === undefined) doc.rollback = null;
+  // A fillet or chamfer saved with no edges used to mean every convex edge,
+  // because that was the only thing an empty list could mean. It means nothing
+  // picked yet now, so the old files are given the flag that says what they
+  // meant. Only on load: a set made in this session and left empty is empty.
+  for (const f of doc.features) {
+    if (f.type !== 'fillet' && f.type !== 'chamfer') continue;
+    for (const set of f.sets || []) {
+      if (set.all === undefined && !set.edges?.length) set.all = true;
+    }
+  }
   return doc;
 }
 
@@ -10799,8 +10906,10 @@ function startEdgeBlend(kind) {
     return;
   }
 
-  // Opens ready to be pointed at, the way Extrude does. With nothing chosen it
-  // takes every convex edge, which is the quick way to round a whole part.
+  // Opens ready to be pointed at, the way Extrude does, and does nothing until
+  // it has been. It used to take every convex edge on the part the moment the
+  // button was pressed, which is a whole shape changed before anything was
+  // asked for.
   const [bodyId, edges] = byBody.size ? [...byBody][0] : [state.result.bodies[0].id, []];
   const feature = {
     id: uid('f'),
@@ -10824,7 +10933,7 @@ function startEdgeBlend(kind) {
   );
   if (!edges.length) {
     setEditPick('set:0');
-    setStatus(`Every convex edge, at the moment. Click edges to ${kind} only those.`);
+    setStatus(`Click the edges to ${kind}.`);
   }
 }
 
@@ -12373,19 +12482,24 @@ function pickIntoEdit(hit) {
     else f.bodies.push(hit.bodyId);
     if (!f.bodies.length) f.bodies = 'all';
   } else if (ed.pickInto === 'movePointFrom' || ed.pickInto === 'movePointTo') {
-    // A place in the model: the middle of a face, or the middle of a body.
+    // A corner, the middle of an edge, or the centre of a hole, in that order
+    // of preference, because those are the places somebody means. The middle of
+    // a face and the bare spot the ray landed on are what is left when none of
+    // them is near, and they used to be the only two answers there were.
     const key = ed.pickInto === 'movePointFrom' ? 'fromPoint' : 'toPoint';
-    let at = null;
-    if (hit.kind === 'face' && hit.faceId !== null) {
+    const p = state.lastPointer;
+    const snap = p ? snapModelPoint(p.x, p.y) : null;
+    let at = snap ? [...snap.at] : null;
+    if (!at && hit.kind === 'face' && hit.faceId !== null) {
       const record = (state.records || []).find((r) => r.id === hit.bodyId);
       const face = record?.topology?.faces[hit.faceId];
       if (face) at = [...face.centre];
-    } else if (hit.point) {
-      at = [hit.point.x, hit.point.y, hit.point.z];
     }
+    if (!at && hit.point) at = [hit.point.x, hit.point.y, hit.point.z];
     if (!at) return true;
     f[key] = at;
     ed.pickInto = null;
+    setStatus(`Took the ${(snap?.label || 'point on the face').toLowerCase()} at ${at.map((n) => round(n, 2)).join(', ')}.`);
   } else if (ed.pickInto === 'splitFace' || ed.pickInto === 'mirrorPlane') {
     const key = ed.pickInto === 'splitFace' ? 'faceRef' : 'planeRef';
     if (hit.kind === 'plane') {

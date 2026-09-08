@@ -229,7 +229,7 @@ dialog's or the document's, so a profile picked into a dialog looks picked.
 | Split | Cut in two by a plane or a face, or trimmed to one side |
 | Press Pull | Chosen faces offset along their own normals |
 | Patterns | Rectangular, circular, **along a path**, and **of features** |
-| Move | Translate, rotate about a point, or point to point |
+| Move | Translate, rotate about a point, or point to point, snapping to corners, edge middles and hole centres |
 | Scale | Uniform or per axis, about the part, the origin, or a point |
 | Align | A face of one body put flat against another |
 | Delete Face | A round hole filled back in |
@@ -308,7 +308,14 @@ which agrees where the rails are smooth and is an approximation where they are
 not.
 
 The rest of the Modify group asks the way Fusion asks. **Fillet** and
-**Chamfer** hold several edge sets, each with its own size, so a part can be
+**Chamfer** open waiting to be pointed at and do nothing until they have been.
+An empty edge list means nothing has been picked yet, not everything: pressing
+Fillet used to round every convex edge on the part before a single edge had been
+clicked, which on a shelled box is a whole shape changed, and a rebuild to undo,
+in answer to opening a dialog. Documents written before this said "the whole
+part" with an empty list, because it was the only way to say it, and they are
+given the flag that means it on load so they still come back rounded. Fillet and
+Chamfer hold several edge sets, each with its own size, so a part can be
 blended at three radii in one feature; a chamfer set is equal, two distances, or
 a distance and the angle it leans at. A fillet set is asked for in one of four
 ways. **Constant** and **variable radius** are the plain ones. **Chord length**
@@ -1503,7 +1510,7 @@ model file can never execute anything.
 npm test
 ```
 
-516 tests in a hidden window, checking measured quantities: volumes against
+518 tests in a hidden window, checking measured quantities: volumes against
 independently derived references (the frustum formula, Pappus's theorem, a
 morphological opening), bounding boxes, genus, triangle counts, solved
 coordinates, joint kinematics, and STL watertightness. A regression in the maths
@@ -1589,7 +1596,11 @@ feature reached the other way, from the ribbon on an empty document: press the
 button, point at the profile, drag the arrow that appears, click the profile
 again to let go of it and once more to take it back, type the exact size over
 what was dragged to, and check the solid measures 40 by 24 by 12 with no callout
-left hanging by the pointer afterwards. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
+left hanging by the pointer afterwards. `demo-move.js` points a point to point
+move at a corner from five pixels outside the body, reads the label beside the
+cursor to check it says Corner rather than something vaguer, aims the other end
+at the middle of an edge, and checks the part moved by exactly the difference
+between the two. `demo-menus.js` drives the ribbon dropdowns with a real press, down then up then
 click, rather than the bare `click()` every other demo uses, because that is a
 path no mouse can take and it hid a menu that shut itself before the press could
 land. And `demo-picking.js` checks the things a volume cannot see:

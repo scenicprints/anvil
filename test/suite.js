@@ -2832,7 +2832,7 @@ async function run() {
 
     const equal = rebuild(mk({})).bodies[0].solid.volume();
     const twice = rebuild(
-      mk({ sets: [{ edges: [], radius: '4', chamferType: 'two', distance2: '8' }] })
+      mk({ sets: [{ edges: [], all: true, radius: '4', chamferType: 'two', distance2: '8' }] })
     ).bodies[0].solid.volume();
 
     const cutEqual = solidVol - equal;
@@ -2847,9 +2847,9 @@ async function run() {
       doc.features.push({ id: uid('f'), type: 'chamfer', bodies: 'all', edges: [], radius: '4', sets });
       return doc;
     };
-    const equal = rebuild(mk([{ edges: [], radius: '4', chamferType: 'equal' }])).bodies[0].solid.volume();
+    const equal = rebuild(mk([{ edges: [], all: true, radius: '4', chamferType: 'equal' }])).bodies[0].solid.volume();
     const at45 = rebuild(
-      mk([{ edges: [], radius: '4', chamferType: 'angle', angle: '45' }])
+      mk([{ edges: [], all: true, radius: '4', chamferType: 'angle', angle: '45' }])
     ).bodies[0].solid.volume();
     near(at45, equal, equal * 0.001, 'forty five degrees is the symmetric case');
   });
@@ -3060,13 +3060,47 @@ async function run() {
     );
   });
 
+  test('fillet: nothing picked rounds nothing', () => {
+    // Pressing Fillet used to round every convex edge on the part before a
+    // single edge had been clicked. On a shelled box that is a whole shape
+    // changed, and a rebuild to undo, in answer to opening a dialog.
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      sets: [{ edges: [], radius: '4' }]
+    });
+    const res = rebuild(doc);
+    near(res.bodies[0].solid.volume(), 40 * 40 * 40, 1, 'the box is untouched');
+    assert(
+      res.errors.some((e) => /click the edges/i.test(e.message)),
+      `and it says what it is waiting for, got ${JSON.stringify(res.errors)}`
+    );
+    res.dispose();
+  });
+
+  test('fillet: an old document that meant every edge still means it', () => {
+    // Before there were sets, one empty list was the only way to say "the whole
+    // part". Those documents have to come back rounded, not untouched, so the
+    // flag that says what they meant is written on load.
+    const doc = boxDoc(40, 40, 40);
+    doc.features.push({ id: uid('f'), type: 'fillet', bodies: 'all', radius: '4' });
+    const res = rebuild(doc);
+    assert(
+      res.bodies[0].solid.volume() < 40 * 40 * 40 - 100,
+      'it rounded the part'
+    );
+    res.dispose();
+  });
+
   test('fillet: a hold line with nothing picked says so', () => {
     const doc = boxDoc(40, 40, 40);
     doc.features.push({
       id: uid('f'),
       type: 'fillet',
       bodies: 'all',
-      sets: [{ edges: [], filletType: 'hold', holdEdges: [] }]
+      sets: [{ edges: [], all: true, filletType: 'hold', holdEdges: [] }]
     });
     const res = rebuild(doc);
     assert(
@@ -3080,7 +3114,7 @@ async function run() {
     // The type used to be implied by whether an end radius was filled in.
     // A document written then has to read back the same way.
     const doc = boxDoc(40, 40, 40);
-    const set = { edges: [], radius: '6', endRadius: '2' };
+    const set = { edges: [], all: true, radius: '6', endRadius: '2' };
     doc.features.push({ id: uid('f'), type: 'fillet', bodies: 'all', sets: [set] });
     const res = rebuild(doc);
     assert(set.filletType === 'variable', `read back as ${set.filletType}`);
@@ -10029,7 +10063,7 @@ async function run() {
     // twelve would mean inventing boundaries the geometry does not have.
     const doc = boxDoc(40, 40, 40);
     doc.features.push({
-      id: uid('f'), type: 'fillet', bodies: 'all', sets: [{ edges: [], radius: '4' }]
+      id: uid('f'), type: 'fillet', bodies: 'all', sets: [{ edges: [], all: true, radius: '4' }]
     });
     const res = rebuild(doc);
     const mesh = K.meshData(res.bodies[0].solid);
