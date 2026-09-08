@@ -103,7 +103,7 @@ that is the thing that makes a loft between two rectangles not twist.
 |---|---|---|
 | **Presets** | last used, defaults, save, rename, delete, set as default | **missing** (and missing app-wide) |
 | Profile | an open sketch profile | has |
-| Direction | Symmetric, One Direction | **missing** |
+| Direction | Symmetric, One Direction | has, v2.30.0 |
 | Start | Bottom, Top | **missing** |
 | Thickness | | has |
 | Extent Type | **To Next**, Depth | partial — depth only |
@@ -119,9 +119,9 @@ dialog machinery rather than to Rib.
 ### Web — near complete
 
 Same option set as Rib, but perpendicular to the sketch plane rather than
-parallel. Anvil has profile, thickness, extent type (To Next or Depth), depth,
-flip, draft angle and extend curves. Missing: **Presets**, **Direction**
-(Symmetric or One Direction), **Start** (Bottom or Top), **Fillet Radius**.
+parallel. Anvil has profile, thickness, direction, extent type (To Next or
+Depth), depth, flip, draft angle and extend curves. Missing: **Presets**,
+**Start** (Bottom or Top), **Fillet Radius**.
 
 Note the pairing: Rib is parallel to the sketch plane, Web is perpendicular.
 Anvil's Web has To Next and its Rib does not, which is the wrong way round from

@@ -777,8 +777,15 @@ export function chainPath(sketch, opts = {}) {
  *
  * Corners are mitred, with the mitre clamped so a sharp turn produces a
  * blunted corner rather than a spike shooting off to infinity.
+ *
+ * `width` is either one number, meaning that much to each side, or a pair
+ * meaning left and right separately. A pair with a zero in it is a wall that
+ * grows entirely to one side of the curve, with the curve itself as its face,
+ * which is what a rib asked for in one direction rather than symmetrically is.
  */
-export function thickenPolyline(points, halfWidth, closed) {
+export function thickenPolyline(points, width, closed) {
+  const leftWidth = Array.isArray(width) ? width[0] : width;
+  const rightWidth = Array.isArray(width) ? width[1] : width;
   const pts = [];
   for (const p of points) {
     const last = pts[pts.length - 1];
@@ -794,7 +801,7 @@ export function thickenPolyline(points, halfWidth, closed) {
   const n = pts.length;
   const MITRE_LIMIT = 4;
 
-  const offsetSide = (sign) => {
+  const offsetSide = (sign, halfWidth) => {
     const out = [];
     for (let i = 0; i < n; i++) {
       const prev = pts[(i - 1 + n) % n];
@@ -824,8 +831,8 @@ export function thickenPolyline(points, halfWidth, closed) {
     return out;
   };
 
-  const left = offsetSide(1);
-  const right = offsetSide(-1);
+  const left = offsetSide(1, leftWidth);
+  const right = offsetSide(-1, rightWidth);
   if (left.length < 2 || right.length < 2) return null;
 
   if (closed) {

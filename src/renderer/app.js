@@ -3924,6 +3924,15 @@ function webFields(feature) {
       type: 'expr'
     },
     {
+      key: 'direction',
+      label: 'Thickness sits',
+      type: 'select',
+      options: [
+        ['symmetric', 'Half each side of the curve'],
+        ['one', 'All to one side']
+      ]
+    },
+    {
       key: 'extentType',
       label: 'Extent',
       type: 'select',
@@ -6082,6 +6091,7 @@ function startRib() {
     type: 'rib',
     sketch: paths[paths.length - 1].id,
     thickness: '2',
+    direction: 'symmetric',
     depth: '10',
     flip: false,
     op: state.result?.bodies.length ? 'join' : 'new',
@@ -6095,6 +6105,15 @@ function startRib() {
       options: paths.map((sk) => [sk.id, sk.name])
     },
     { key: 'thickness', label: 'Thickness', type: 'expr' },
+    {
+      key: 'direction',
+      label: 'Thickness sits',
+      type: 'select',
+      options: [
+        ['symmetric', 'Half each side of the curve'],
+        ['one', 'All to one side']
+      ]
+    },
     { key: 'depth', label: 'Depth', type: 'expr' },
     { key: 'flip', label: 'Flip direction', type: 'bool' },
     { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS }
@@ -6212,6 +6231,7 @@ function startWeb() {
     type: 'web',
     sketch: sketchId,
     thickness: '2',
+    direction: 'symmetric',
     extentType: 'toNext',
     depth: '10',
     flip: false,

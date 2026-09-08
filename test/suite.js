@@ -1528,6 +1528,52 @@ async function run() {
 
   /* -------- draft, split, thread -------- */
 
+  test('rib: the thickness sits either side of the curve or all to one side', () => {
+    // Same wall, same volume, put somewhere else. A rib drawn against a line
+    // you have already dimensioned to wants its face on that line rather than
+    // its middle, and half each side was the only thing on offer before.
+    const rib = (direction) => {
+      const doc = newDocument();
+      const sk = openSketch('XY', [[-20, 0], [20, 0]], 'Rib');
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        {
+          id: uid('f'),
+          type: 'rib',
+          sketch: sk.id,
+          thickness: '4',
+          depth: '10',
+          direction,
+          op: 'new',
+          targets: 'all'
+        }
+      ];
+      const res = rebuild(doc);
+      assert(res.bodies.length === 1, `${direction}: ${JSON.stringify(res.errors)}`);
+      const bb = K.boundingBox(res.bodies[0].solid);
+      const out = {
+        volume: K.properties(res.bodies[0].solid).volume,
+        lo: bb.min[1],
+        hi: bb.max[1]
+      };
+      res.dispose();
+      return out;
+    };
+
+    const both = rib('symmetric');
+    near(both.lo, -2, 0.01, 'half of four to one side');
+    near(both.hi, 2, 0.01, 'and half to the other');
+
+    const one = rib('one');
+    near(one.hi - one.lo, both.hi - both.lo, 0.01, 'the same wall thickness');
+    near(one.volume, both.volume, both.volume * 0.001, 'and the same amount of material');
+    assert(
+      Math.abs(one.lo) < 0.01 || Math.abs(one.hi) < 0.01,
+      `one face of it lands on the curve, got ${one.lo} to ${one.hi}`
+    );
+  });
+
   test('draft: two sides may lean by different amounts', () => {
     // A box drafted about a plane through its middle. Symmetric leans the same
     // amount each way; two sides takes an angle each, which is what a part with

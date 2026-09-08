@@ -2331,6 +2331,18 @@ export function rebuild(doc, options = {}) {
    * Rib: an open sketch curve thickened into a wall and grown down onto the
    * body below it. Web is the same with several curves at once.
    */
+  /**
+   * How a rib or web sits against the curve it was drawn from.
+   *
+   * Symmetric puts half the thickness each side, which is what this always did.
+   * One direction puts all of it on one side, leaving the drawn curve as the
+   * wall's own face, which is how a rib is placed against a line you have
+   * already dimensioned to.
+   */
+  function ribWidth(feature, thickness) {
+    return feature.direction === 'one' ? [thickness, 0] : thickness / 2;
+  }
+
   function doRib(feature, doc, scope, ks, apply, errs) {
     const sk = doc.sketches[feature.sketch];
     if (!sk) throw new Error('Rib has no sketch');
@@ -2369,7 +2381,7 @@ export function rebuild(doc, options = {}) {
 
     let solid = null;
     for (const chain of chains) {
-      const contours = thickenPolyline(chain.points, thickness / 2, chain.closed);
+      const contours = thickenPolyline(chain.points, ribWidth(feature, thickness), chain.closed);
       if (!contours) continue;
       let wall = K.extrudeContours(contours, { height: depth, center: false }, ks);
       // The wall grows away from the sketch plane; flipped, it grows the other
@@ -4479,7 +4491,7 @@ export function rebuild(doc, options = {}) {
     let walls = null;
     for (const chain of chains) {
       const points = feature.extendCurves ? extendChain(chain, span) : chain.points;
-      const contours = thickenPolyline(points, thickness / 2, chain.closed);
+      const contours = thickenPolyline(points, ribWidth(feature, thickness), chain.closed);
       if (!contours) continue;
       let wall = K.extrudeContours(
         contours,
