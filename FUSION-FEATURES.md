@@ -8,6 +8,22 @@ documentation, and it is not a substitute for reading the reference page for a
 command before building it — read that page when the work starts, because it
 fixes the option set and the ordering.
 
+**A warning about the Anvil column.** The Fusion half of this file was read page
+by page. The Anvil half was written partly from memory, and that is where it is
+wrong. Working through category 1 turned up six bad entries in about a dozen
+items. Listed as gaps and were not: Align's flip and angle, Combine's Objects To
+Cut, Form's Display Mode, Split Body's Extend, and the environment map analysis.
+Listed as present and is not: Centerline.
+
+A scripted cross-check of every gap claim against Anvil's own command list is
+what caught the environment map one. It flagged seventeen candidates, fifteen of
+which were substring noise. That check is worth re-running after any large edit
+to this file:
+
+    grep -o 'data-cmd="[A-Za-z]*"' src/renderer/index.html
+    grep -o "case '[A-Za-z]*':" src/renderer/app.js **Grep the source before building anything from
+this file.** Every row corrected so far says so.
+
 Status means:
 
 - **has** — Anvil does this, with the same options.
@@ -361,8 +377,8 @@ same idea with a narrower set of targets.
 |---|---|---|
 | Face to split | several at once | has |
 | Splitting Tool | a sketch, face or workplane | has |
-| Split Type | Split with Surface, **Along Vector**, **Closest Point** | **missing** — surface projection only |
-| Extend Splitting Tool | | **missing** |
+| Split Type | Split with Surface, **Along Vector**, **Closest Point** | **missing**, and category 2 rather than a quick win. Anvil does not project the tool at all: it extends the sheet into a half-space and cuts with that. Along Vector and Closest Point are two ways of choosing a projection direction, so they need a projection step that does not exist yet, not a flag |
+| Extend Splitting Tool | | n/a — the half-space is unbounded, so the tool always crosses the face |
 
 Fusion notes the point of it: a split face isolates an area so Draft or Press
 Pull can act on part of a face. Worth remembering, since it makes Draft's
@@ -451,9 +467,9 @@ with the degree editable on a control-point spline.
 
 | Option | Anvil |
 |---|---|
-| Linetype (convert geometry to another line type) | **missing** |
+| Linetype (convert geometry to another line type) | partial — `toggleConstruction` already converts what is selected between normal and construction, and switches the mode for new geometry when nothing is selected. The gap is that there are only two types to convert between |
 | Construction | has |
-| Centerline | has |
+| Centerline | **missing**. Nothing in the source mentions one. Marked "has" here originally, wrongly |
 | Look At (turn the camera square to the sketch plane) | has, v2.31.0. Also works on a selected flat face |
 | Sketch Grid on/off | has |
 | Snap on/off | has |
@@ -917,7 +933,7 @@ gives you by default.
 | Find similar components | has |
 | **Surface continuity** | **missing** |
 | **Isocurve analysis** | **missing** |
-| **Environment map reflections** | **missing** |
+| Environment map reflections | has. `environmentMap` runs a chrome face analysis |
 | **Validate** | **missing** |
 | **Colour code components and features** | **missing** |
 | Fastener stack analysis | **missing** (Design Extension) |
