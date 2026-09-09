@@ -977,22 +977,38 @@ source rather than against my own earlier note.
 Anvil's known limit stands: joints are open chains only, and a closed loop is
 reported rather than solved.
 
-### Components and external references — mostly missing
+### Components and external references — near complete
 
 | Fusion | Anvil |
 |---|---|
 | New Component | has |
 | Ground to parent | **missing**, and it needs nesting rather than effort: components here are a flat list with joints between them, so there is no parent to ground to. Grounding itself is there |
-| **Edit In Place** (edit an external component inside the assembly) | **missing** |
-| **Update components in an assembly** | **missing** |
-| **Derived design features** (reference geometry from another design) | **missing** |
-| **Break the link** to an external component, and on assembly contexts | **missing** |
-| Switch the design's workflow / enable modeling | **missing** |
+| Edit In Place (edit an external component inside the assembly) | has, v2.70.0, with one difference stated below |
+| Update components in an assembly | has, as Update what is derived. Told to rather than watched for: a part that changes shape without being asked is worse than one that is a day old |
+| Derived design features (reference geometry from another design) | has, v2.70.0. Bodies, sketches and parameters, each picked by name |
+| Break the link to an external component | has, v2.70.0. The geometry stays and stops being anyone else's |
+| Switch the design's workflow / enable modeling | n/a — Anvil has no separate assembly workflow to switch out of |
 
-This whole group depends on a design being able to reference *another design on
-disk*, which Anvil has no notion of: a `.anvil` file is self-contained. It is the
-largest single architectural gap in the inventory, and everything in this row
-follows from it rather than being separate work.
+**What made this possible was a name rather than a path.** A design referring to
+another design on disk needs to say which one, and an absolute path says it on
+exactly one machine: the same two files under different roots on a laptop and a
+desktop have different paths and the same relationship. So there is a library
+folder, chosen once per machine, and a link is recorded as the path within it.
+The absolute path is kept as a fallback, tried second, for links to files outside
+the library or made before there was one.
+
+**Derive picks by name, not by id.** A body is called `<feature>:<n>` where n
+counts every body in the document at the moment it was made, so inserting
+anything ahead of it renumbers the lot. The name is what the other document calls
+the thing, it survives the timeline being edited, and it is the word the person
+choosing is looking at.
+
+**Edit In Place differs from Fusion in one way and it is worth stating.** Fusion
+shows the other design inside the assembly and you edit it in context. Anvil has
+one window, so it takes you there and brings you back: this document is saved,
+the other opens, and a Return button puts you back with the derive updated. The
+difference is that the surrounding part is not on screen while you work, which
+matters for fitting something around it and not at all for the rest.
 
 ---
 
@@ -1006,7 +1022,7 @@ disk. Recording it all anyway, because most of it has a local meaning.
 | Create and save designs | has |
 | Open designs | has |
 | Edit a design | has |
-| Rename designs | **missing** (rename the file outside the app) |
+| Rename designs | has, v2.70.0, in the Library menu. The lock moves with the file |
 | Move designs | n/a — folders on disk |
 | Copy designs | **missing** as a command |
 | Move to Trash / delete | n/a |
@@ -1198,6 +1214,11 @@ Two things in here have a local meaning and are worth stealing:
 - **Search across everything**, rather than opening files to find out what is in
   them. Anvil has a command search; it has no search over saved documents.
 - **Track project activity**, which locally is "what did I change and when".
+
+The three Data Panel actions that do have a local meaning arrived in v2.70.0 with
+the library: open by name from the library, rename a design, and save a copy
+elsewhere while carrying on in this one. The rest of the panel is the cloud
+layer, which is the part Anvil deliberately is not.
   Anvil keeps versions inside a document already, so a per-file history view is
   a short step.
 

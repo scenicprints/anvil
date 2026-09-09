@@ -8,39 +8,29 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.66.0**. 574 tests.
+Current version: **2.70.0**. 583 tests in the window, plus the library naming
+checked in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
-Animation, Simulation and Generative Design. Category 1 and Category 2 of the
-Fusion inventory are closed out bar the four batches named below.
+Animation, Simulation and Generative Design. **Batches 22 to 25 have now shipped
+too**, which closes out Category 1 and Category 2 of the Fusion inventory:
 
-The sections after those are kept as the record of what was built and, more
+- **22, surface edges.** Fillet and chamfer on a surface body, built as surface
+  geometry because a sheet has no inside for a boolean to work on.
+- **23, direct manipulation in Form.** Grabbing the surface rather than the
+  cage, tangent handles, and snapping to the model.
+- **24, external components.** Derive by name, Update, Break Link, Edit In
+  Place, and the library folder that makes a link mean the same thing on two
+  machines.
+- **25, the two algorithms.** Split Face by closest point, and a blend at the
+  foot of a rib.
+
+What is left is in `FUSION-FEATURES.md`, item by item, each with the reason it
+is not built. The largest remaining piece of *planned* work is the rest of the
+library below: profiles, the index, and recents.
+
+The sections after that are kept as the record of what was built and, more
 usefully, of what was learned building it.
-
----
-
-## What is left, and why it is grouped this way
-
-Four batches. Each one is a batch rather than a loose end because everything in
-it needs the same missing thing, and doing any one item alone would mean
-building that thing badly and then building it again.
-
-`FUSION-FEATURES.md` is the inventory these come from. Anything not listed here
-is either built or recorded there with the reason it is not.
-
-### Batch 24: external components
-
-**Edit In Place, Break Link, Update Components, Derived Design Features, and
-the Data Panel's rename, copy and update.**
-
-Every one of these is a document referring to another document. Anvil has no
-such reference: Insert Component reads the other file's geometry in and keeps
-nothing pointing back at it.
-
-This is the batch that overlaps the library work below, and it should be done
-with it rather than before it. A reference has to name something, and until
-there is a library there is nothing stable to name: a path on one machine is
-not a name on another.
 
 ---
 
@@ -76,6 +66,11 @@ thumbnails, names and modified times. **The index is a cache and never the
 truth.** The files are. It can be thrown away and rebuilt by scanning, and it
 exists so that search and a recents list do not have to open every document.
 
+The library folder, the naming, and the four commands that use it landed in
+v2.70.0 with external references. Profiles, the index and the recents list have
+not: the part that had to exist for a design to name another design is the root
+and the relative name, and that is what was built.
+
 ### The three things that make two computers work
 
 1. **Atomic saves.** Write to a temp file in the same folder, flush, rename over
@@ -90,6 +85,11 @@ exists so that search and a recents list do not have to open every document.
    writer. On save, if the file on disk has moved on since it was loaded, the
    save refuses and offers to write a new version instead. Locks reduce the
    two-at-once case; this is what actually prevents losing work.
+
+Atomic saves and lock files are built. The third is built as far as the file's
+modified time: a save onto a file that has changed since it was opened stops and
+offers a copy. It is not yet a counter carried in the document, which would also
+catch the case where two machines' clocks disagree.
 
 ### Where you left off
 

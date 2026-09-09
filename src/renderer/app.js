@@ -1882,6 +1882,24 @@ async function runCommand(cmd) {
     case 'insertDerive':
       cmdInsertFromFile(true);
       break;
+    case 'editInPlace':
+      cmdEditInPlace();
+      break;
+    case 'breakLink':
+      cmdBreakLink();
+      break;
+    case 'chooseLibrary':
+      cmdChooseLibrary();
+      break;
+    case 'openFromLibrary':
+      cmdOpenFromLibrary();
+      break;
+    case 'renameDesign':
+      cmdRenameDesign();
+      break;
+    case 'saveCopy':
+      cmdSaveCopy();
+      break;
     case 'refreshDerived':
       cmdRefreshDerived();
       break;
@@ -2491,6 +2509,85 @@ async function cmdOpen() {
   rebuildAll();
   state.vp.fit();
   setStatus(`Opened ${el.docname.textContent}`);
+}
+
+/**
+ * Choose the folder the library lives in.
+ *
+ * One folder, picked once. Not an account and not a server: if it happens to be
+ * a synced folder then keeping two machines in step is that client's job, which
+ * is the whole design here rather than a shortcut.
+ */
+async function cmdChooseLibrary() {
+  const res = await window.anvil.chooseLibrary?.();
+  if (!res?.ok) {
+    if (res?.error) setStatus(`Could not set the library: ${res.error}`);
+    return;
+  }
+  setStatus(`Library is ${res.root}. Links to documents inside it work on any machine.`);
+}
+
+/** Open something from the library, by name rather than by hunting for a path. */
+async function cmdOpenFromLibrary() {
+  const res = await window.anvil.listLibrary?.();
+  if (!res?.ok) {
+    setStatus(res?.error || 'No library folder has been chosen yet.');
+    return;
+  }
+  if (!res.documents.length) {
+    setStatus(`Nothing in ${res.root} yet.`);
+    return;
+  }
+  promptChoice(
+    'Open from the library',
+    res.documents.map((d) => [d.path, d.name]),
+    async (file) => {
+      if (!file) return;
+      const opened = await window.anvil.openPath?.(file);
+      if (!opened?.ok) {
+        setStatus(opened?.error || 'That document could not be opened.');
+        return;
+      }
+      adoptOpenedDocument(opened);
+      state.docPath = opened.path;
+      setStatus(`Opened ${el.docname.textContent}`);
+    }
+  );
+}
+
+/** Rename this document, file and all. Fusion's Data Panel rename. */
+function cmdRenameDesign() {
+  if (!state.docPath) {
+    setStatus('Save this document before renaming it.');
+    return;
+  }
+  const now = String(state.docPath).split(/[\\/]/).pop().replace(/\.anvil$/i, '');
+  promptText('Rename this design', now, async (name) => {
+    if (!name || name === now) return;
+    const res = await window.anvil.rename?.(name);
+    if (!res?.ok) {
+      setStatus(res?.error || 'That could not be renamed.');
+      return;
+    }
+    state.docPath = res.path;
+    el.docname.textContent = String(res.path).split(/[\\/]/).pop();
+    setStatus(`Renamed to ${el.docname.textContent}.`);
+  });
+}
+
+/**
+ * Write a copy and carry on here.
+ *
+ * The opposite ending to Save As, which leaves you working in the new file.
+ * This is for when what you want is the copy.
+ */
+async function cmdSaveCopy() {
+  const res = await window.anvil.saveCopy?.(state.doc);
+  if (!res?.ok) {
+    if (res?.error) setStatus(`Could not write the copy: ${res.error}`);
+    return;
+  }
+  setStatus(`Copy written to ${String(res.path).split(/[\\/]/).pop()}. Still editing this one.`);
 }
 
 async function cmdSave(saveAs) {
@@ -6376,6 +6473,19 @@ function armMenuClose(menu) {
  * already grouped in the reference.
  */
 const RIBBON_MENUS = {
+  /*
+   * The library, and what Fusion's Data Panel does that has a local meaning.
+   *
+   * Renaming and copying a design are here rather than beside Save because they
+   * are about the document as a thing in a folder rather than about writing it
+   * out, and because they only make sense once there is a folder to be in.
+   */
+  library: [
+    ['openFromLibrary', 'Open from the library'],
+    ['chooseLibrary', 'Choose the library folder'],
+    ['renameDesign', 'Rename this design'],
+    ['saveCopy', 'Save a copy elsewhere']
+  ],
   rectangle: [
     ['tool:rectangle', 'Two Point Rectangle'],
     ['tool:centerRectangle', 'Centre Rectangle'],
@@ -6459,7 +6569,9 @@ const RIBBON_MENUS = {
   insertParts: [
     ['insertComponent', 'Insert Component from a file'],
     ['insertDerive', 'Insert Derive, kept linked'],
-    ['refreshDerived', 'Refresh what is derived'],
+    ['refreshDerived', 'Update what is derived'],
+    ['editInPlace', 'Edit the document a derive came from'],
+    ['breakLink', 'Break the link, keep the geometry'],
     ['insertCanvas', 'Canvas, an image to trace'],
     ['insertDecal', 'Decal, an image on a face']
   ],
@@ -10006,43 +10118,185 @@ async function cmdInsertFromFile(derive) {
     return;
   }
 
-  const taken = await bodiesFromDocument(res.text);
-  if (!taken) return;
-  if (!taken.meshes.length) {
-    setStatus(`${taken.name} has no solid bodies in it.`);
+  const got = await contentsOfDocument(res.text);
+  if (!got) return;
+
+  /*
+   * Fusion's Derive, which is not the same act as inserting a copy.
+   *
+   * An insert takes the solids and forgets where they came from. A derive takes
+   * what you choose and keeps pointing at the file, so a change over there
+   * arrives here when you ask for it. That is why the picking happens only on
+   * the derive path: for a copy there is nothing to pick, and offering the
+   * choice would suggest the link exists when it does not.
+   */
+  let take = null;
+  if (derive) {
+    take = await askWhatToDerive(got);
+    if (!take) return;
+  } else if (!got.bodies.length) {
+    setStatus(`${got.name} has no solid bodies in it.`);
     return;
   }
 
   pushUndo(derive ? 'insert derive' : 'insert component');
-  const keys = taken.meshes.map((m) => {
-    const key = uid('mesh');
-    state.doc.meshData[key] = m;
-    return key;
-  });
-
-  const comp = newComponent(taken.name);
-  state.doc.components = state.doc.components || [];
-  state.doc.components.push(comp);
-
-  state.doc.features.push({
+  const feature = {
     id: uid('f'),
     type: 'insertComponent',
-    component: comp.id,
-    data: keys,
-    label: taken.name,
+    component: null,
+    data: [],
+    label: got.name,
     scale: '1',
     at: [0, 0, 0],
     // Only a derived part remembers where it came from. An inserted one is a
     // copy and saying it was linked would be a lie.
-    source: derive ? { path: res.path, modified: res.modified, bodies: keys.length } : null
-  });
+    //
+    // The name is what it is linked by, and the path is only a fallback: the
+    // same two files under different roots on two machines have the same name
+    // and different paths.
+    source: derive
+      ? { name: res.name || null, path: res.path, modified: res.modified, take }
+      : null
+  };
+
+  const comp = newComponent(got.name);
+  state.doc.components = state.doc.components || [];
+  state.doc.components.push(comp);
+  feature.component = comp.id;
+
+  const wanted = take || { bodies: got.bodies.map((b) => b.name) };
+  applyDerived(feature, got, wanted);
+  state.doc.features.push(feature);
+
   state.dirty = true;
   rebuildAll();
-  setStatus(
-    `${taken.name}: ${keys.length} bod${keys.length === 1 ? 'y' : 'ies'}${
-      derive ? ', kept linked to the file it came from' : ''
-    }.`
+  setStatus(`${got.name}: ${describeTaken(feature)}${derive ? ', kept linked' : ''}.`);
+}
+
+/** What a derived feature has brought in, in words. */
+function describeTaken(feature) {
+  const bits = [];
+  const n = feature.data.length;
+  if (n) bits.push(`${n} bod${n === 1 ? 'y' : 'ies'}`);
+  const sk = (feature.derivedSketches || []).length;
+  if (sk) bits.push(`${sk} sketch${sk === 1 ? '' : 'es'}`);
+  const pr = (feature.derivedParameters || []).length;
+  if (pr) bits.push(`${pr} parameter${pr === 1 ? '' : 's'}`);
+  return bits.length ? bits.join(', ') : 'nothing';
+}
+
+/**
+ * Ask which of the other document's parts to take.
+ *
+ * By name rather than by id, and that is not a shortcut. A body is called
+ * `<feature>:<n>` where n counts every body in the document at the moment it
+ * was made, so inserting anything ahead of it renumbers the lot and every
+ * reference to it goes stale. A name is what the other document calls the
+ * thing, it survives the timeline being edited, and it is the same word the
+ * person choosing is looking at.
+ */
+function askWhatToDerive(got) {
+  const items = [
+    ...got.bodies.map((b) => ({ group: 'bodies', key: b.name, label: b.name })),
+    ...got.sketches.map((sk) => ({ group: 'sketches', key: sk.name, label: sk.name })),
+    ...got.parameters.map((pm) => ({
+      group: 'parameters',
+      key: pm.name,
+      label: `${pm.name} = ${pm.expr}`
+    }))
+  ];
+  if (!items.length) {
+    setStatus(`${got.name} has nothing in it to derive.`);
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    promptChecklist(`Derive from ${got.name}`, items, (chosen) => {
+      if (!chosen) return resolve(null);
+      const take = { bodies: [], sketches: [], parameters: [] };
+      for (const it of chosen) take[it.group].push(it.key);
+      if (!take.bodies.length && !take.sketches.length && !take.parameters.length) {
+        setStatus('Nothing was chosen, so nothing was derived.');
+        return resolve(null);
+      }
+      resolve(take);
+    });
+  });
+}
+
+/**
+ * Put the chosen parts of another document into this one.
+ *
+ * Everything it made last time goes first. A derive that added to what was
+ * already there would double the sketches every time it was refreshed, and a
+ * parameter that was dropped over there would linger here for ever.
+ */
+function applyDerived(feature, got, take) {
+  clearDerived(feature);
+
+  const wantBodies = new Set(take.bodies || []);
+  feature.data = got.bodies
+    .filter((b) => wantBodies.has(b.name))
+    .map((b) => {
+      const key = uid('mesh');
+      state.doc.meshData[key] = b.mesh;
+      return key;
+    });
+
+  const wantSketches = new Set(take.sketches || []);
+  feature.derivedSketches = [];
+  for (const sk of got.sketches) {
+    if (!wantSketches.has(sk.name)) continue;
+    const id = uid('sk');
+    // Marked, because a derived sketch is not this document's to edit: the next
+    // refresh would throw the edit away without saying so.
+    state.doc.sketches[id] = { ...sk, id, derivedFrom: feature.id, derivedName: sk.name };
+    state.doc.features.push({ id: uid('f'), type: 'sketch', sketch: id, derivedFrom: feature.id });
+    feature.derivedSketches.push(id);
+  }
+
+  const wantParams = new Set(take.parameters || []);
+  feature.derivedParameters = [];
+  state.doc.parameters = state.doc.parameters || [];
+  for (const pm of got.parameters) {
+    if (!wantParams.has(pm.name)) continue;
+    // Its own name where that is free, and the source's name in front of it
+    // where it is not. Two documents that both call something `wall` are not
+    // talking about the same wall.
+    const taken = new Set(state.doc.parameters.map((q) => q.name));
+    const name = taken.has(pm.name) ? `${safeParamName(got.name)}_${pm.name}` : pm.name;
+    if (taken.has(name)) continue;
+    state.doc.parameters.push({
+      ...pm,
+      name,
+      derivedFrom: feature.id,
+      derivedName: pm.name,
+      comment: pm.comment || `Derived from ${got.name}`
+    });
+    feature.derivedParameters.push(name);
+  }
+}
+
+/** A document's name, as something that can be part of a parameter name. */
+function safeParamName(name) {
+  const clean = String(name || 'derived').replace(/[^A-Za-z0-9_]/g, '_');
+  return /^[A-Za-z_]/.test(clean) ? clean : `d_${clean}`;
+}
+
+/** Take out everything a derived feature put in, leaving the feature itself. */
+function clearDerived(feature) {
+  for (const key of feature.data || []) delete state.doc.meshData[key];
+  feature.data = [];
+  for (const id of feature.derivedSketches || []) delete state.doc.sketches[id];
+  state.doc.features = (state.doc.features || []).filter(
+    (f) => !(f.type === 'sketch' && f.derivedFrom === feature.id)
   );
+  feature.derivedSketches = [];
+  const dropped = new Set(feature.derivedParameters || []);
+  if (dropped.size) {
+    state.doc.parameters = (state.doc.parameters || []).filter((p) => !dropped.has(p.name));
+  }
+  feature.derivedParameters = [];
 }
 
 /**
@@ -10053,35 +10307,31 @@ async function cmdInsertFromFile(derive) {
  * that changes shape without being asked is worse than one that is a day old.
  */
 async function cmdRefreshDerived() {
-  const derived = (state.doc.features || []).filter((f) => f.type === 'insertComponent' && f.source?.path);
+  const derived = derivedFeatures();
   if (!derived.length) {
     setStatus('Nothing in this document is derived from another file.');
     return;
   }
 
   let changed = 0;
-  let missing = 0;
+  const lost = [];
   for (const f of derived) {
-    const res = await window.anvil.readAnother?.(f.source.path);
+    const res = await window.anvil.readLinked?.(f.source.name, f.source.path);
     if (!res?.ok) {
-      missing++;
+      lost.push(f.label || f.source.name || f.source.path);
       continue;
     }
-    const taken = await bodiesFromDocument(res.text);
-    if (!taken?.meshes.length) {
-      missing++;
+    const got = await contentsOfDocument(res.text);
+    if (!got) {
+      lost.push(f.label || f.source.name);
       continue;
     }
-    const before = f.data.map((k) => state.doc.meshData[k]?.tris?.length || 0).join(',');
-    for (const k of f.data) delete state.doc.meshData[k];
-    f.data = taken.meshes.map((m) => {
-      const key = uid('mesh');
-      state.doc.meshData[key] = m;
-      return key;
-    });
-    f.source = { path: res.path, modified: res.modified, bodies: f.data.length };
-    const after = f.data.map((k) => state.doc.meshData[k]?.tris?.length || 0).join(',');
-    if (before !== after) changed++;
+    const before = derivedFingerprint(f);
+    applyDerived(f, got, f.source.take || { bodies: got.bodies.map((b) => b.name) });
+    // Found by name means the path may have moved; both are written back so the
+    // fallback stays useful and the name stays the way in.
+    f.source = { ...f.source, name: res.name, path: res.path, modified: res.modified };
+    if (derivedFingerprint(f) !== before) changed++;
   }
 
   if (changed) {
@@ -10091,17 +10341,198 @@ async function cmdRefreshDerived() {
   }
   setStatus(
     `${derived.length} derived part${derived.length === 1 ? '' : 's'} checked. ` +
-      `${changed || 'none'} changed${missing ? `, ${missing} could not be read` : ''}.`
+      `${changed || 'none'} changed` +
+      (lost.length ? `, and ${lost.join(', ')} could not be found` : '') +
+      '.'
+  );
+}
+
+/** Enough of what a derive brought in to tell whether it has changed. */
+function derivedFingerprint(feature) {
+  return [
+    (feature.data || []).map((k) => state.doc.meshData[k]?.tris?.length || 0).join(','),
+    (feature.derivedSketches || [])
+      .map((id) => (state.doc.sketches[id]?.entities || []).length)
+      .join(','),
+    (feature.derivedParameters || [])
+      .map((n) => (state.doc.parameters || []).find((p) => p.name === n)?.expr || '')
+      .join(',')
+  ].join('|');
+}
+
+/** Every feature in this document that is still pointing at another one. */
+function derivedFeatures() {
+  return (state.doc.features || []).filter(
+    (f) => f.type === 'insertComponent' && (f.source?.name || f.source?.path)
   );
 }
 
 /**
- * Another document's solids, as triangles.
+ * Break the link, and keep what came through it.
+ *
+ * Fusion's Break Link. The geometry stays exactly as it is and stops being
+ * anybody else's: it will not change again when the other file does, and it
+ * cannot be put back except by deriving it afresh, so it asks first.
+ */
+async function cmdBreakLink() {
+  const derived = derivedFeatures();
+  if (!derived.length) {
+    setStatus('Nothing in this document is linked to another file.');
+    return;
+  }
+  const choice = await window.anvil.message({
+    type: 'warning',
+    title: 'Break the link',
+    message: `${derived.length} part${derived.length === 1 ? '' : 's'} would stop following the file${
+      derived.length === 1 ? ' it came from' : 's they came from'
+    }.`,
+    detail:
+      'What is here stays exactly as it is and will not change again when that ' +
+      'file does. Deriving it afresh is the only way back.',
+    buttons: ['Break the link', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1
+  });
+  if (choice?.response !== 0) return;
+
+  pushUndo('break link');
+  for (const f of derived) {
+    f.source = null;
+    // The sketches and parameters stay, and stop being anyone else's to
+    // overwrite, so the marks that said otherwise come off.
+    for (const id of f.derivedSketches || []) {
+      const sk = state.doc.sketches[id];
+      if (sk) {
+        delete sk.derivedFrom;
+        delete sk.derivedName;
+      }
+    }
+    for (const f2 of state.doc.features || []) {
+      if (f2.derivedFrom === f.id) delete f2.derivedFrom;
+    }
+    for (const name of f.derivedParameters || []) {
+      const pm = (state.doc.parameters || []).find((p) => p.name === name);
+      if (pm) {
+        delete pm.derivedFrom;
+        delete pm.derivedName;
+      }
+    }
+    f.derivedSketches = [];
+    f.derivedParameters = [];
+  }
+  state.dirty = true;
+  rebuildAll();
+  setStatus(`${derived.length} link${derived.length === 1 ? '' : 's'} broken. The geometry stays.`);
+}
+
+/**
+ * Edit the document a derived part came from, and come back to this one.
+ *
+ * Fusion calls it Edit In Place and shows the other design inside the assembly.
+ * Anvil has one window, so what it does instead is take you there and bring you
+ * back: this document is saved, the other one opens, and a Return button puts
+ * you back with the derive refreshed. The difference is that the surrounding
+ * part is not on screen while you work, which matters for fitting something
+ * around it and not at all for the rest.
+ */
+async function cmdEditInPlace() {
+  const derived = derivedFeatures();
+  if (!derived.length) {
+    setStatus('Nothing in this document is linked to another file.');
+    return;
+  }
+  const target =
+    derived.length === 1
+      ? derived[0]
+      : await new Promise((resolve) => {
+          promptChoice(
+            'Which one to go and edit',
+            derived.map((f) => [f.id, f.label || f.source.name || f.source.path]),
+            (id) => resolve(derived.find((f) => f.id === id) || null)
+          );
+        });
+  if (!target) return;
+
+  if (!state.docPath) {
+    setStatus('Save this document first, or there is nothing to come back to.');
+    return;
+  }
+  if (state.dirty && !(await cmdSave(false))) return;
+
+  const res = await window.anvil.readLinked?.(target.source.name, target.source.path);
+  if (!res?.ok) {
+    setStatus(res?.error || 'That linked document could not be found.');
+    return;
+  }
+  const opened = await window.anvil.openPath?.(res.path);
+  if (!opened?.ok) {
+    setStatus(opened?.error || 'That document could not be opened.');
+    return;
+  }
+  adoptOpenedDocument(opened);
+  // Where to come back to, and what to refresh when we get there. Held in the
+  // session rather than in either document: it is where you are, not a fact
+  // about the part.
+  state.returnTo = { path: state.docPath, feature: target.id, label: target.label };
+  state.docPath = opened.path;
+  showReturnBar();
+  setStatus(`Editing ${el.docname.textContent}. Return when you are done.`);
+}
+
+/** Go back to the document that sent us here, and refresh what we went for. */
+async function cmdReturnFromEdit() {
+  const back = state.returnTo;
+  if (!back) return;
+  if (state.dirty && !(await cmdSave(false))) return;
+
+  const opened = await window.anvil.openPath?.(back.path);
+  if (!opened?.ok) {
+    setStatus(opened?.error || 'That document could not be reopened.');
+    return;
+  }
+  adoptOpenedDocument(opened);
+  state.docPath = opened.path;
+  state.returnTo = null;
+  showReturnBar();
+  await cmdRefreshDerived();
+}
+
+/** Take an opened document as the one being worked on. */
+function adoptOpenedDocument(res) {
+  exitSketch();
+  state.doc = migrate(res.data);
+  state.selection.bodies.clear();
+  state.hiddenBodies.clear();
+  state.dirty = false;
+  el.docname.textContent = String(res.path).split(/[\\/]/).pop();
+  rebuildAll();
+  state.vp.fit();
+}
+
+/** The way back, shown only while there is one. */
+function showReturnBar() {
+  let bar = document.getElementById('returnbar');
+  if (!state.returnTo) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement('button');
+    bar.id = 'returnbar';
+    bar.className = 'returnbar';
+    bar.addEventListener('click', () => cmdReturnFromEdit());
+    document.body.appendChild(bar);
+  }
+  bar.textContent = `Return to ${String(state.returnTo.path).split(/[\\/]/).pop()}`;
+}
+
+/**
+ * What another document holds, ready to be chosen from.
  *
  * Rebuilt in a scope of its own and thrown away straight afterwards, so nothing
  * of the other document's kernel handles outlives this call.
  */
-async function bodiesFromDocument(text) {
+async function contentsOfDocument(text) {
   let other;
   try {
     other = migrate(JSON.parse(text));
@@ -10118,20 +10549,33 @@ async function bodiesFromDocument(text) {
     return null;
   }
 
-  const meshes = [];
+  const bodies = [];
   try {
-    for (const b of res.bodies) {
+    res.bodies.forEach((b, i) => {
       const mesh = b.solid ? K.meshData(b.solid) : b.sheet;
-      if (!mesh?.triVerts?.length) continue;
-      meshes.push({
-        verts: Array.from(mesh.vertProperties),
-        tris: Array.from(mesh.triVerts)
+      if (!mesh?.triVerts?.length) return;
+      bodies.push({
+        name: b.name || `Body ${i + 1}`,
+        mesh: {
+          verts: Array.from(mesh.vertProperties),
+          tris: Array.from(mesh.triVerts)
+        }
       });
-    }
+    });
   } finally {
     res.dispose();
   }
-  return { name: other.name || 'Inserted part', meshes };
+
+  // A sketch that was itself derived from somewhere else is not offered on: a
+  // chain of derives is a chain of documents to keep in step, and this one has
+  // no way to say where the far end is.
+  const sketches = Object.values(other.sketches || {})
+    .filter((sk) => !sk.derivedFrom)
+    .map((sk, i) => ({ ...sk, name: sk.name || `Sketch ${i + 1}` }));
+
+  const parameters = (other.parameters || []).filter((p) => p.name && !p.derivedFrom);
+
+  return { name: other.name || 'Inserted part', bodies, sketches, parameters };
 }
 
 /**
@@ -21057,6 +21501,50 @@ function promptText(title, initial, cb) {
   $('#modalOk').onclick = () => closeModal(input.value);
 }
 
+/**
+ * A list to tick things off, for when the answer is several of them.
+ *
+ * Grouped, because a derive offers bodies, sketches and parameters at once and
+ * an unlabelled run of thirty names is not a question anybody can answer.
+ */
+function promptChecklist(title, items, cb) {
+  const modal = $('#modal');
+  $('#modalTitle').textContent = title;
+  const body = $('#modalBody');
+  body.innerHTML = '';
+
+  const boxes = [];
+  let lastGroup = null;
+  const heading = { bodies: 'Bodies', sketches: 'Sketches', parameters: 'Parameters' };
+  for (const item of items) {
+    if (item.group !== lastGroup) {
+      lastGroup = item.group;
+      const h = document.createElement('div');
+      h.className = 'hint';
+      h.textContent = heading[item.group] || item.group;
+      body.appendChild(h);
+    }
+    const row = document.createElement('label');
+    row.className = 'checkrow';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    // Bodies on, the rest off. Taking the solids is what a derive is for nearly
+    // every time; a sketch or a parameter is the deliberate extra.
+    box.checked = item.group === 'bodies';
+    boxes.push({ box, item });
+    row.appendChild(box);
+    const text = document.createElement('span');
+    text.textContent = item.label;
+    row.appendChild(text);
+    body.appendChild(row);
+  }
+
+  modal.classList.remove('hidden');
+  modalResolve = cb;
+  $('#modalOk').onclick = () =>
+    closeModal(boxes.filter((b) => b.box.checked).map((b) => b.item));
+}
+
 function promptChoice(title, options, cb) {
   const modal = $('#modal');
   $('#modalTitle').textContent = title;
@@ -21133,6 +21621,9 @@ window.anvilDev = {
   form: FM,
   refreshEditForm,
   snapModelPoint,
+  // Deriving from another document goes through a file dialog no probe can
+  // answer, so the parts either side of the dialog are reachable directly.
+  derive: { contentsOfDocument, applyDerived, clearDerived, derivedFeatures, describeTaken },
   // The parameter file readers, so a probe can put a table out and read it back
   // without going through a save dialog it cannot answer.
   expr: { parametersToCsv, parametersFromCsv },

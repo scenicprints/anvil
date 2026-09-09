@@ -1,6 +1,7 @@
 'use strict';
 
 const { app, BrowserWindow, protocol, ipcMain, dialog, shell } = require('electron');
+const LIB = require('./library.js');
 const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
@@ -264,6 +265,7 @@ function setTitle() {
 }
 
 app.whenReady().then(() => {
+  loadLibraryRoot();
   registerProtocol();
   createWindow();
   setTitle();
@@ -353,6 +355,90 @@ ipcMain.handle('import:vector', async (_e, kind) => {
  * A path can be given, which is how a derived part is refreshed later without
  * asking again, and only a path that ends in .anvil is read.
  */
+/** What an Anvil document is called, and what a file cannot be called. */
+const DOC_EXT = /\.anvil$/i;
+const BAD_NAME = /[\\/:*?"<>|]/;
+
+/*
+ * The library: one folder the user picks, and the reason a design can name
+ * another design at all.
+ *
+ * A path is not a name. The same two files on a laptop and a desktop sit under
+ * different roots, and a link recorded as an absolute path works on exactly one
+ * machine. Recorded against the library root it is the same name everywhere,
+ * and the root is the only thing each machine has to know for itself.
+ *
+ * The root is kept here rather than in the renderer because it is a fact about
+ * this installation, not about the document, and because resolving a name has
+ * to happen where the files are.
+ */
+let libraryRoot = null;
+
+const rootFile = () => path.join(app.getPath('userData'), 'library.json');
+
+function loadLibraryRoot() {
+  try {
+    const got = JSON.parse(fsSync.readFileSync(rootFile(), 'utf8'));
+    if (got && typeof got.root === 'string') libraryRoot = got.root;
+  } catch {
+    /* no library chosen yet, which is the ordinary first run */
+  }
+}
+
+/** The two library questions, asked against whichever root is set. */
+const libraryNameFor = (file) => LIB.libraryNameFor(libraryRoot, file);
+const libraryPathFor = (name) => LIB.libraryPathFor(libraryRoot, name);
+
+ipcMain.handle('library:get', async () => ({ root: libraryRoot }));
+
+ipcMain.handle('library:choose', async () => {
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Choose the library folder',
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+  libraryRoot = res.filePaths[0];
+  try {
+    await fs.writeFile(rootFile(), JSON.stringify({ root: libraryRoot }, null, 2), 'utf8');
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  return { ok: true, root: libraryRoot };
+});
+
+/**
+ * Every document in the library, as names rather than paths.
+ *
+ * Walked rather than read from an index. An index would be a cache and the
+ * files are the truth, and a library of a few hundred parts is a directory walk
+ * nobody will notice.
+ */
+ipcMain.handle('library:list', async () => {
+  if (!libraryRoot) return { ok: false, error: 'No library folder has been chosen yet' };
+  const out = [];
+  const walk = async (dir, depth) => {
+    if (depth > 8) return;
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.')) continue;
+        await walk(full, depth + 1);
+      } else if (DOC_EXT.test(entry.name)) {
+        out.push({ name: libraryNameFor(full), path: full, modified: await modifiedAt(full) });
+      }
+    }
+  };
+  await walk(libraryRoot, 0);
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return { ok: true, root: libraryRoot, documents: out };
+});
+
 ipcMain.handle('doc:readAnother', async (_e, file) => {
   let target = file;
   if (!target) {
@@ -371,10 +457,45 @@ ipcMain.handle('doc:readAnother', async (_e, file) => {
   try {
     const text = await fs.readFile(target, 'utf8');
     const at = await modifiedAt(target);
-    return { ok: true, path: target, text, modified: at };
+    return { ok: true, path: target, name: libraryNameFor(target), text, modified: at };
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+/**
+ * A linked document, found by its library name first and its path second.
+ *
+ * That order is the whole point. The name is the same on every machine, so it
+ * is tried first and the path is only a fallback: for a link made before there
+ * was a library, or to a file that sits outside it.
+ */
+ipcMain.handle('doc:readLinked', async (_e, opts) => {
+  const name = opts?.name || null;
+  const file = opts?.file || null;
+  const byName = libraryPathFor(name);
+  for (const target of [byName, file]) {
+    if (!target) continue;
+    try {
+      const text = await fs.readFile(target, 'utf8');
+      return {
+        ok: true,
+        path: target,
+        name: libraryNameFor(target) || name,
+        viaName: target === byName,
+        text,
+        modified: await modifiedAt(target)
+      };
+    } catch {
+      /* try the next way of finding it */
+    }
+  }
+  return {
+    ok: false,
+    error: name
+      ? name + ' is not in the library, and the path it was linked by is gone too'
+      : 'That linked document could not be found'
+  };
 });
 
 /**
@@ -445,6 +566,7 @@ const LOCK_BEAT_MS = 30 * 1000;
 let lockBeat = null;
 
 const lockPathFor = (file) => `${file}.anvillock`;
+
 
 function whoWeAre() {
   return {
@@ -634,7 +756,71 @@ ipcMain.handle('doc:changedOnDisk', async () => {
   return { changed: now > lastWrittenAt + 1, at: now, path: currentPath };
 });
 
-ipcMain.handle('doc:currentPath', async () => currentPath);
+ipcMain.handle('doc:currentPath', async () => ({
+  path: currentPath,
+  name: libraryNameFor(currentPath)
+}));
+
+/**
+ * Rename the open document, on disk and as the document of record.
+ *
+ * Fusion's Data Panel rename, which locally is just this. The lock moves with
+ * it, or the old name keeps a lock nobody will ever clear and the new one has
+ * none at all.
+ */
+ipcMain.handle('doc:rename', async (_e, to) => {
+  if (!currentPath) return { ok: false, error: 'Save this document before renaming it' };
+  const clean = String(to || '').trim();
+  if (!clean || BAD_NAME.test(clean)) {
+    return { ok: false, error: 'That name has characters a file cannot have' };
+  }
+  const next = path.join(path.dirname(currentPath), DOC_EXT.test(clean) ? clean : clean + '.anvil');
+  if (path.resolve(next) === path.resolve(currentPath)) {
+    return { ok: true, path: currentPath, name: libraryNameFor(currentPath) };
+  }
+  try {
+    await fs.access(next);
+    return { ok: false, error: 'There is already a document by that name here' };
+  } catch {
+    /* nothing in the way, which is what we want */
+  }
+  try {
+    await dropLock(currentPath);
+    await fs.rename(currentPath, next);
+    currentPath = next;
+    lastWrittenAt = await modifiedAt(next);
+    await takeLock(next);
+    setTitle();
+    return { ok: true, path: next, name: libraryNameFor(next) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+/**
+ * Write a copy somewhere else and carry on editing this one.
+ *
+ * Not Save As, which is the same act with the opposite ending: Save As leaves
+ * you working in the new file, and a copy is for when what you want is the
+ * copy, not to move house.
+ */
+ipcMain.handle('doc:saveCopy', async (_e, opts) => {
+  const suggested = currentPath
+    ? currentPath.replace(DOC_EXT, ' copy.anvil')
+    : 'Untitled copy.anvil';
+  const res = await dialog.showSaveDialog(win, {
+    title: 'Save a Copy',
+    defaultPath: suggested,
+    filters: DOC_FILTERS
+  });
+  if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+  try {
+    await writeAtomic(res.filePath, JSON.stringify(opts?.data, null, 2));
+    return { ok: true, path: res.filePath, name: libraryNameFor(res.filePath) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
 
 /* ------------------------------------------------------------------ */
 /* Mesh export                                                         */

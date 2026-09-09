@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld('anvil', {
   open: () => ipcRenderer.invoke('doc:open'),
   openPath: (file) => ipcRenderer.invoke('doc:openPath', file),
   readAnother: (file) => ipcRenderer.invoke('doc:readAnother', file),
+  readLinked: (name, file) => ipcRenderer.invoke('doc:readLinked', { name, file }),
+  rename: (to) => ipcRenderer.invoke('doc:rename', to),
+  saveCopy: (data) => ipcRenderer.invoke('doc:saveCopy', { data }),
+  library: () => ipcRenderer.invoke('library:get'),
+  chooseLibrary: () => ipcRenderer.invoke('library:choose'),
+  listLibrary: () => ipcRenderer.invoke('library:list'),
   save: (data, saveAs, sidecar) =>
     ipcRenderer.invoke('doc:save', { data, saveAs, sidecar }),
   currentPath: () => ipcRenderer.invoke('doc:currentPath'),

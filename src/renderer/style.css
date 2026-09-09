@@ -1411,3 +1411,41 @@ table.params .starbtn:hover {
   border-left-style: dashed;
   opacity: 0.75;
 }
+
+/*
+ * The way back out of a document you went into to edit.
+ *
+ * Fixed to the top of the viewport rather than put in the ribbon, because it is
+ * not a command that belongs to this document: it is the fact that you are
+ * somewhere on your way to somewhere else, and it has to be visible whatever
+ * tab is open.
+ */
+.returnbar {
+  position: fixed;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 6px 16px;
+  border: 1px solid #d84b1e;
+  border-radius: 4px;
+  background: #d84b1e;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.returnbar:hover {
+  filter: brightness(1.1);
+}
+
+/* A row in a list of things to tick off. */
+.checkrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  cursor: pointer;
+}
+.checkrow input {
+  margin: 0;
+}

@@ -14,6 +14,20 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const electron = require(path.join(root, 'node_modules', 'electron'));
 
+/*
+ * The parts that do not need a window go first, in this process.
+ *
+ * They are quick, and a failure in them is a failure worth seeing even on a
+ * machine where the window will not start at all.
+ */
+try {
+  require('./library.test.js');
+} catch (err) {
+  process.stderr.write(`${err.message}
+`);
+  process.exit(1);
+}
+
 const args = [root, '--anvil-test'];
 if (process.argv.includes('--debug')) args.push('--anvil-debug');
 
