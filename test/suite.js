@@ -12182,6 +12182,111 @@ async function run() {
     near(volumes[1], 40 * 30 * 4, 1, 'and the one made to the thick one');
   });
 
+  test('sheet metal: a contour flange can straddle the plane it was drawn on', () => {
+    // The width runs along the sketch plane's normal. One side of it is what
+    // this always did; the plane is usually a face of something else, and a
+    // channel grown entirely to one side of it is out of place by its whole
+    // width.
+    const channel = (extra) => {
+      const doc = newDocument();
+      doc.sheetMetalRules = [
+        { ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2', bendRadius: '2' }
+      ];
+      doc.sheetMetalRule = 'Thin';
+      // An open section on XZ: up, across, down. The plane's normal is Y, so
+      // that is the direction the width runs in.
+      const sk = openSketch('XZ', [[0, 20], [0, 0], [30, 0], [30, 20]], 'Section');
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: uid('f'), type: 'contourFlange', sketch: sk.id, entities: [], width: '40', ...extra }
+      ];
+      const out = rebuild(doc);
+      assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+      const bb = K.boundingBox(out.bodies[0].solid);
+      const v = out.bodies[0].solid.volume();
+      out.dispose();
+      return { lo: +bb.min[1].toFixed(2), hi: +bb.max[1].toFixed(2), volume: v };
+    };
+
+    const one = channel({});
+    // The same channel wherever it sits, so the volume must not move with the
+    // direction: this is where the width goes, not how much of it there is.
+    const sym = channel({ direction: 'symmetric' });
+    near(sym.volume, one.volume, one.volume * 0.001, 'the same channel, put somewhere else');
+    near(sym.hi - sym.lo, one.hi - one.lo, 0.05, 'and the same width');
+    near((sym.lo + sym.hi) / 2, 0, 0.05, 'straddling the plane it was drawn on');
+
+    const two = channel({ direction: 'two', width: '40', width2: '10' });
+    near(two.hi - two.lo, 50, 0.05, 'so much each way is the two added up');
+  });
+
+  test('sheet metal: the height datum decides what the height is measured from', () => {
+    // A flange panel begins where the bend arc ends, so a height handed to the
+    // panel tree is measured from the bend tangent. A bracket is dimensioned to
+    // its outside, and the arc's end sits a radius above the inner face and a
+    // radius plus a thickness above the outer one.
+    const bracket = (extra) => {
+      const doc = newDocument();
+      doc.sheetMetalRules = [
+        { ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2', bendRadius: '2' }
+      ];
+      doc.sheetMetalRule = 'Thin';
+
+      const sk = newSketch('XY', 'Plate');
+      sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] }
+      ];
+      let out = rebuild(doc);
+      const topo = buildTopology(K.meshData(out.bodies[0].solid));
+      const edge = topo.edges.find(
+        (e) => e.kind === 'line' && e.convex && Math.abs(e.refPoint[0] - 60) < 0.01 &&
+          Math.abs(e.refPoint[2] - 2) < 0.01
+      );
+      assert(edge, 'found the edge to flange off');
+      const ref = edgeReference(edge, topo);
+      out.dispose();
+
+      doc.features.push({
+        id: uid('f'),
+        type: 'flange',
+        bodies: 'all',
+        edges: [ref],
+        angle: '90',
+        height: '20',
+        ...extra
+      });
+      out = rebuild(doc);
+      assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+      const top = K.boundingBox(out.bodies[0].solid).max[2];
+      out.dispose();
+      return top;
+    };
+
+    // The plate lies from z = 0 to z = 2. The bend arc ends at z = 4.
+    const tangent = bracket({});
+    near(tangent, 24, 0.05, 'from the end of the bend, twenty past z = 4');
+
+    // From the inner face at z = 2, twenty is z = 22.
+    near(bracket({ heightDatum: 'inner' }), 22, 0.05, 'from the inner face');
+
+    // From the outer face at z = 0, twenty is z = 20.
+    near(bracket({ heightDatum: 'outer' }), 20, 0.05, 'from the outer face');
+
+    // Saying nothing is the tangent, so nothing already built moves.
+    near(bracket({ heightDatum: undefined }), tangent, 1e-6, 'an absent datum is the tangent');
+  });
+
   test('sheet metal: a flange can take part of an edge instead of all of it', () => {
     // Fusion's Flange Width Type. The full edge is what a flange has always
     // been here; taking a piece of it is how a tab gets made without cutting

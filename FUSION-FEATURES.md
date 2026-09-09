@@ -825,15 +825,23 @@ every row carries its own settings.
 | Flange Width Type (edge) | Full Edge, Symmetric, Two Sides, Two Offsets | has, v2.55.0. The offsets are given as distances rather than picked against reference faces |
 | Extent Type (edge) | Distance, **To Object** with an offset | partial — distance |
 | Angle (edge) | | has |
-| **Height Datum** (edge) | Inner Faces, Outer Faces, Tangent To Bend | **missing** |
+| Height Datum (edge) | Inner Faces, Outer Faces, Tangent To Bend | has, v2.59.0 |
 | Bend Position (edge) | Inside, Outside, Adjacent, Tangent | has |
 | Flip (edge) | | *pending* |
 | Miter Corners (edge) | | has, as its own command |
 | Orientation (base, contour) | Side 1, Side 2, Center | has, v2.46.0, on base |
 | Operation (base, contour) | New Body, New Component | has, v2.46.0, on base |
-| Direction (contour) | One Side, Two Sides, Symmetric | **missing** |
+| Direction (contour) | One Side, Two Sides, Symmetric | has, v2.59.0 |
 | Sheet Metal Rule | pick the rule when the first body is made | partial |
 | Override Rules | per-flange overrides of bend radius, bend relief, and 2- and 3-bend corner relief | has, v2.47.0 |
+
+The height datum is worth a word because it is the one that gets a bracket
+made wrong. A flange panel begins where the bend arc ends, so a height handed
+to the panel tree is measured from the bend tangent, which is Fusion's Tangent
+To Bend. Nobody dimensions a bracket to a tangent point: they measure to the
+outside. The arc's end sits a radius above the inner face and a radius plus a
+thickness above the outer one, so those two datums take that much off the
+panel. Tangent stays the default, so nothing already built moves.
 
 The overrides were the substantial gap and they shipped in v2.47.0. They are
 the reason the rules system exists: a rule sets what a part is made to, and any

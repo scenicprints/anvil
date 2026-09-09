@@ -15390,6 +15390,7 @@ function cmdFlange() {
     widthType: 'full',
     width: '',
     widthOffset: '0',
+    heightDatum: 'tangent',
     bendPosition: 'inside',
     relief: true
   };
@@ -15413,7 +15414,9 @@ function cmdContourFlange() {
     type: 'contourFlange',
     sketch: sketchId,
     entities: [],
+    direction: 'one',
     width: '40',
+    width2: '40',
     radius: ''
   };
   openFeatureEditor(feature, 'Contour Flange', contourFlangeFields());
@@ -15788,6 +15791,18 @@ function flangeFields() {
       showIf: (f) => ['twoSides', 'offsets'].includes(f.widthType)
     },
     { key: 'height', label: 'Height', type: 'expr' },
+    {
+      // Where that height is measured from. A bracket is dimensioned to its
+      // outside, not to a tangent point nobody can put a rule on.
+      key: 'heightDatum',
+      label: 'Measured from',
+      type: 'select',
+      options: [
+        ['tangent', 'The end of the bend'],
+        ['inner', 'The inner face'],
+        ['outer', 'The outer face']
+      ]
+    },
     { key: 'angle', label: 'Angle', type: 'expr' },
     { key: 'radius', label: 'Bend radius', type: 'expr' },
     sheetRuleField(),
@@ -15810,7 +15825,28 @@ function flangeFields() {
 
 function contourFlangeFields() {
   return [
-    { key: 'width', label: 'Width', type: 'expr' },
+    {
+      // Where the width sits relative to the plane the section was drawn on.
+      // The same question the base flange's orientation answers, and it
+      // matters for the same reason: that plane is usually a face of something
+      // else, and a channel grown entirely to one side of it is out of place
+      // by its whole width.
+      key: 'direction',
+      label: 'Width runs',
+      type: 'select',
+      options: [
+        ['one', 'One side of the sketch plane'],
+        ['symmetric', 'Symmetric about it'],
+        ['two', 'So much each way']
+      ]
+    },
+    { key: 'width', label: (f) => (f.direction === 'two' ? 'Width one way' : 'Width'), type: 'expr' },
+    {
+      key: 'width2',
+      label: 'Width the other way',
+      type: 'expr',
+      showIf: (f) => f.direction === 'two'
+    },
     { key: 'radius', label: 'Bend radius', type: 'expr' },
     sheetRuleField(),
     ...sheetOverrideFields(),

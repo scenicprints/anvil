@@ -7327,9 +7327,32 @@ export function rebuild(doc, options = {}) {
     if (!targets.length) throw new Error('Flange works on a sheet metal body');
 
     const angle = (safeEval(feature.angle, scope, 90) * Math.PI) / 180;
-    const height = safeEval(feature.height, scope, 20);
+    const stated = safeEval(feature.height, scope, 20);
     const radius = feature.radius ? safeEval(feature.radius, scope, rule.bendRadius) : rule.bendRadius;
-    if (!(height > 1e-6)) throw new Error('A flange of no height is nothing');
+
+    /*
+     * Fusion's Height Datum: where the height is measured from.
+     *
+     * A flange panel begins where the bend arc ends, so a height given to the
+     * panel tree is measured from the bend tangent, which is Fusion's Tangent
+     * To Bend and is what this has always done. The other two are measured
+     * from a face of the parent, and the arc's end sits a radius above the
+     * inner face and a radius plus a thickness above the outer one. So the
+     * panel gets that much less.
+     *
+     * It matters because a bracket is dimensioned to its outside, not to a
+     * tangent point nobody can measure to with a rule.
+     */
+    const datum = feature.heightDatum || 'tangent';
+    const back = datum === 'outer' ? radius + rule.thickness : datum === 'inner' ? radius : 0;
+    const height = stated - back;
+    if (!(height > 1e-6)) {
+      throw new Error(
+        back > 0
+          ? `A height of ${stated} measured that way leaves nothing past the bend`
+          : 'A flange of no height is nothing'
+      );
+    }
 
     for (const body of targets) {
       const part = SM.clonePart(body.sheetMetal);
@@ -7623,6 +7646,24 @@ export function rebuild(doc, options = {}) {
 
     const width = safeEval(feature.width, scope, 40);
     if (!(width > 1e-6)) throw new Error('A contour flange of no width is nothing');
+
+    /*
+     * Fusion's Direction on a contour flange: where the width sits relative to
+     * the plane the section was drawn on. One Side runs from the plane, which
+     * is what this has always done; Symmetric straddles it; Two Sides takes a
+     * stated amount each way.
+     *
+     * It matters for the same reason the base flange's orientation does: the
+     * plane you drew the section on is usually a face of something else, and a
+     * channel that grows entirely to one side of it is in the wrong place by
+     * its whole width.
+     */
+    const second = safeEval(feature.width2, scope, width);
+    const dirType = feature.direction || 'one';
+    const w0 = dirType === 'symmetric' ? -width / 2 : dirType === 'two' ? -second : 0;
+    const w1 = dirType === 'symmetric' ? width / 2 : width;
+    const span = w1 - w0;
+    if (!(span > 1e-6)) throw new Error('That contour flange has no width to it');
     const radius = feature.radius ? safeEval(feature.radius, scope, rule.bendRadius) : rule.bendRadius;
 
     // The section, thinned to its corners: a run of straight legs.
@@ -7655,8 +7696,17 @@ export function rebuild(doc, options = {}) {
       along[2] * wide[0] - along[0] * wide[2],
       along[0] * wide[1] - along[1] * wide[0]
     ];
+    // The width is moved by seating the whole part rather than by writing the
+    // base panel's corners somewhere other than zero. A bend line is expressed
+    // in its parent's frame and the panel on the far side of it starts its own
+    // v at zero, so a base panel written from minus twenty left its children
+    // starting from zero and the channel came out sixty wide instead of forty.
     const baseFrame = {
-      origin: [start.x, start.y, start.z],
+      origin: [
+        start.x + wide[0] * w0,
+        start.y + wide[1] * w0,
+        start.z + wide[2] * w0
+      ],
       x: along,
       y: wide,
       n: face
@@ -7664,7 +7714,7 @@ export function rebuild(doc, options = {}) {
 
     SM.addBasePanel(
       part,
-      [[0, 0], [legs[0].length, 0], [legs[0].length, width], [0, width]],
+      [[0, 0], [legs[0].length, 0], [legs[0].length, span], [0, span]],
       [],
       baseFrame,
       `${feature.id}:p0`
@@ -7682,7 +7732,7 @@ export function rebuild(doc, options = {}) {
       const res = SM.addFlangePanel(
         part,
         parentId,
-        { a: [reach, 0], b: [reach, width] },
+        { a: [reach, 0], b: [reach, span] },
         {
           angle: turn,
           radius,

@@ -1089,6 +1089,12 @@ side, or straddling it, which is the same question a rib's start side answers
 and matters for the same reason: the plane you drew on is usually a face of
 something else. It can go into a component of its own.
 
+A **flange**'s height can be measured from the end of the bend, from the inner
+face, or from the outer face. That last one is how a bracket is actually
+dimensioned: nobody measures to a tangent point. A **contour flange**'s width
+can run one side of the sketch plane, straddle it, or take a stated amount each
+way, for the same reason the base flange has an orientation.
+
 A **flange** can take the whole of an edge or a piece of it: symmetric about
 the middle, so much either side of a point, or held off both ends. That is how a
 tab gets made without cutting the panel first.
