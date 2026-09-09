@@ -539,6 +539,23 @@ matters: a four bar passing through the position where it lines up straight
 makes the Jacobian go thin, and undamped it throws itself across the room. A
 linkage asked for a position it cannot reach says so rather than half solving.
 
+**Presets.** Every dialog with anything to save has a Preset row at the top:
+save these settings under a name, mark one as the default, rename or delete
+them. A part gets the same 0.6 chamfer on every edge it has, and typing 0.6
+into a fresh dialog forty times is forty chances to type 0.8.
+
+A preset carries settings and never geometry. What was picked belongs to the
+part it was picked on, so the rows filled by clicking in the canvas are left
+out, and a preset only fills rows the feature already has: one saved off a
+fillet with three edge sets, applied to a fillet with one, fills that one and
+stops rather than conjuring the other two into being.
+
+Last used is recorded and offered in the list, and deliberately not applied on
+its own. Only a preset you marked as the default opens a dialog. Extrude opens
+at a distance of zero on purpose so nothing appears until a length is given,
+and quietly restoring the last distance would undo that for someone who never
+asked for a preset.
+
 **Parameters.** Name a value once and use it anywhere a number is asked for.
 Every numeric field takes an expression, including a sketch dimension, so
 `wall * 2` or `len / 2 - clearance` are valid, and they stay expressions in the

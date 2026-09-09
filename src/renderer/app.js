@@ -38,6 +38,7 @@ import {
   uid
 } from './features.js';
 import { recognise } from './recognise.js';
+import * as PRESET from './presets.js';
 import * as SEL from './select.js';
 import { readSTEP } from './stepread.js';
 import { projectRunOnto, isoCurves } from './sheet.js';
@@ -12592,6 +12593,18 @@ function openFeatureEditor(feature, title, fields, isExisting = false, opts = {}
     snapshot: JSON.stringify(feature)
   };
 
+  // A preset marked as the default for this kind of feature is applied to a
+  // fresh one, which is the whole point of marking it: the same 0.6 chamfer on
+  // every part without typing it. Never to an existing feature being edited,
+  // where it would silently overwrite what that feature was built with.
+  if (!isExisting && presetTypeOf(feature)) {
+    const chosen = PRESET.openingPreset(presetStore(), presetTypeOf(feature));
+    if (chosen) {
+      PRESET.applyValues(feature, chosen.values);
+      state.editing.snapshot = JSON.stringify(feature);
+    }
+  }
+
   el.inspectorTitle.textContent = title;
   el.inspector.classList.remove('hidden');
   renderFields();
@@ -12601,7 +12614,9 @@ function openFeatureEditor(feature, title, fields, isExisting = false, opts = {}
   if (!isExisting && !opts.keepView) turnToSeeDepth(feature);
 
   if (opts.keepFocus) return;
-  const firstInput = el.inspectorBody.querySelector('input, select');
+  const firstInput = el.inspectorBody.querySelector(
+    '.field:not(.presetrow) input, .field:not(.presetrow) select'
+  );
   if (firstInput) {
     firstInput.focus();
     if (firstInput.select) firstInput.select();
@@ -12619,10 +12634,178 @@ function setPath(obj, path, value) {
   target[last] = value;
 }
 
+/* ------------------------------------------------------------------ */
+/* Dialog presets                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Presets belong to the person, not the part: the point of saving a 0.6 chamfer
+ * is that it is there in the next document too. There is no profile to hang
+ * them on yet, so they live in the renderer's own storage, which for a desktop
+ * application is a file in the user data folder. When profiles arrive they move
+ * onto the profile, and this is the one place that has to change.
+ */
+/**
+ * What a preset is filed under.
+ *
+ * The feature type, except where one type is several dialogs. A primitive is a
+ * box or a cylinder or a sphere and they ask for different things, so a box
+ * preset has no business appearing in a cylinder dialog. `applyValues` would
+ * skip the rows that do not exist anyway, but offering a preset that does
+ * nothing is worse than not offering it.
+ */
+function presetTypeOf(feature) {
+  if (!feature?.type) return null;
+  return feature.shape ? `${feature.type}:${feature.shape}` : feature.type;
+}
+
+function presetStore() {
+  if (!state.presets) state.presets = PRESET.loadPresets(window.localStorage);
+  return state.presets;
+}
+
+function writePresetStore(data) {
+  state.presets = data;
+  PRESET.savePresets(window.localStorage, data);
+}
+
+/**
+ * The preset row at the top of a feature dialog.
+ *
+ * One select and the four things Fusion offers beside it. It is only drawn
+ * where there is something to save: a dialog of nothing but pick rows has no
+ * settings, and offering to name them would be offering nothing.
+ */
+function renderPresetRow(feature, fields) {
+  const type = presetTypeOf(feature);
+  if (!type) return;
+  if (!PRESET.presetKeys(fields).length) return;
+
+  const entry = PRESET.presetsFor(presetStore(), type);
+  const wrap = document.createElement('div');
+  wrap.className = 'field presetrow';
+
+  const label = document.createElement('label');
+  label.textContent = 'Preset';
+  wrap.appendChild(label);
+
+  const row = document.createElement('div');
+  row.className = 'row';
+
+  const sel = document.createElement('select');
+  const options = [['', 'Defaults']];
+  if (entry.lastUsed) options.push(['__lastUsed', 'Last used']);
+  for (const p of entry.saved) {
+    options.push([p.name, p.name === entry.default ? `${p.name} (default)` : p.name]);
+  }
+  for (const [value, text] of options) {
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = text;
+    sel.appendChild(o);
+  }
+  // Nothing is selected in it: the list is a thing to apply, not a record of
+  // what the feature currently holds. A feature edited after a preset was
+  // applied no longer matches it, and showing the name would say it did.
+  sel.value = '';
+  sel.addEventListener('change', () => {
+    const name = sel.value;
+    if (!name) return;
+    const chosen =
+      name === '__lastUsed'
+        ? { name: 'Last used', values: entry.lastUsed }
+        : entry.saved.find((p) => p.name === name);
+    if (!chosen) return;
+    const { applied, skipped } = PRESET.applyValues(feature, chosen.values);
+    renderFields();
+    rebuildAll();
+    setStatus(
+      skipped.length
+        ? `${chosen.name}: ${applied.length} setting${applied.length === 1 ? '' : 's'} applied, ${skipped.length} this feature does not have.`
+        : `${chosen.name} applied.`
+    );
+  });
+  row.appendChild(sel);
+
+  const button = (text, title, run) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener('click', run);
+    row.appendChild(b);
+  };
+
+  button('Save', 'Save these settings under a name', () => {
+    promptText('Name this preset', `${state.editing.title || feature.type}`, (name) => {
+      const clean = String(name || '').trim();
+      if (!clean) return;
+      writePresetStore(
+        PRESET.putPreset(
+          presetStore(),
+          type,
+          clean,
+          PRESET.captureValues(feature, fields)
+        )
+      );
+      renderFields();
+      setStatus(`Saved as ${clean}.`);
+    });
+  });
+
+  if (entry.saved.length || entry.lastUsed) {
+    button('Default', 'Open this kind of dialog with the chosen preset', () => {
+      const choices = [['', 'The feature own defaults']];
+      if (entry.lastUsed) choices.push(['__lastUsed', 'Last used']);
+      for (const p of entry.saved) choices.push([p.name, p.name]);
+      promptChoice('Open new ones with', choices, (name) => {
+        writePresetStore(PRESET.setDefaultPreset(presetStore(), type, name));
+        renderFields();
+        setStatus(
+          name
+            ? `New ${state.editing.title || feature.type} dialogs will open with ${name === '__lastUsed' ? 'the last used values' : name}.`
+            : `New ${state.editing.title || feature.type} dialogs will open with their own defaults.`
+        );
+      });
+    });
+  }
+
+  if (entry.saved.length) {
+    button('Rename', 'Rename a saved preset', () => {
+      promptChoice(
+        'Rename which preset',
+        entry.saved.map((p) => [p.name, p.name]),
+        (from) => {
+          promptText('New name', from, (to) => {
+            const clean = String(to || '').trim();
+            if (!clean || clean === from) return;
+            writePresetStore(PRESET.renamePreset(presetStore(), type, from, clean));
+            renderFields();
+          });
+        }
+      );
+    });
+    button('Delete', 'Delete a saved preset', () => {
+      promptChoice(
+        'Delete which preset',
+        entry.saved.map((p) => [p.name, p.name]),
+        (name) => {
+          writePresetStore(PRESET.dropPreset(presetStore(), type, name));
+          renderFields();
+          setStatus(`${name} deleted.`);
+        }
+      );
+    });
+  }
+
+  wrap.appendChild(row);
+  el.inspectorBody.appendChild(wrap);
+}
+
 function renderFields() {
   const { feature, fields } = state.editing;
   el.inspectorBody.innerHTML = '';
   const scope = resolveParameters(state.doc.parameters).scope;
+  renderPresetRow(feature, fields);
 
   for (const f of fields) {
     if (f.showIf && !f.showIf(feature)) continue;
@@ -13490,6 +13673,18 @@ function commitEdit() {
   // A sketch that has been built on gets out of the way, the same as Fusion
   // turning off a consumed sketch. It stays in the browser to switch back on.
   if (feature?.sketch) state.hiddenSketches.add(feature.sketch);
+
+  // What this dialog was left set to, so it can be offered back as "last used"
+  // in the preset list. Offered, not applied: see openingPreset.
+  if (presetTypeOf(feature) && state.editing.fields) {
+    writePresetStore(
+      PRESET.rememberLastUsed(
+        presetStore(),
+        presetTypeOf(feature),
+        PRESET.captureValues(feature, state.editing.fields)
+      )
+    );
+  }
 
   state.undo.push({ snapshot: preEdit, label: (title || 'feature').toLowerCase() });
   if (state.undo.length > UNDO_LIMIT) state.undo.shift();
@@ -19207,7 +19402,9 @@ function showInspector(title, fields, onOk) {
     onOk(values);
   };
   $('#inspectorOk').onclick = ok;
-  const firstInput = el.inspectorBody.querySelector('input, select');
+  const firstInput = el.inspectorBody.querySelector(
+    '.field:not(.presetrow) input, .field:not(.presetrow) select'
+  );
   if (firstInput) firstInput.focus();
 }
 

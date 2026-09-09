@@ -123,7 +123,7 @@ that is the thing that makes a loft between two rectangles not twist.
 
 | Option | Values | Anvil |
 |---|---|---|
-| **Presets** | last used, defaults, save, rename, delete, set as default | **missing** (and missing app-wide) |
+| Presets | last used, defaults, save, rename, delete, set as default | has, v2.40.0, on every dialog |
 | Profile | an open sketch profile | has |
 | Direction | Symmetric, One Direction | has, v2.30.0 |
 | Start | Bottom, Top | **missing** |
@@ -134,16 +134,40 @@ that is the thing that makes a loft between two rectangles not twist.
 | Draft Angle + Draft Pull Direction + flip | | **missing** |
 | Fillet Radius | a fillet at the foot of the rib | **missing** — Anvil has this on Boss, not Rib |
 
-**Presets are a Fusion-wide idea Anvil has nowhere.** A dialog can save its
-current values under a name and reuse them, with one marked as the default for
-new features. Rib is where the reference documents it, but it belongs to the
-dialog machinery rather than to Rib.
+Presets were a Fusion-wide idea Anvil had nowhere, and shipped in v2.40.0 on
+every dialog that has anything to save. Rib is where the reference documents
+them, but they belong to the dialog machinery rather than to Rib.
+
+Two rules are what make them safe rather than merely convenient, and both are
+tested.
+
+**A preset carries settings and never geometry.** What was picked belongs to
+the part it was picked on. Rows filled by clicking in the canvas are left out,
+along with the buttons, the notes, and the synthetic rows a dialog builds for
+itself.
+
+**A preset only fills rows the feature already has.** One saved off a fillet
+with three edge sets, applied to a fillet with one, fills that one and stops.
+Writing `sets.1` into a feature that has no second set would put a half made
+object in the array and the rebuild would work from it.
+
+One deliberate difference from Fusion: **last used is recorded and offered in
+the list, but is never applied on its own.** Only a preset explicitly marked as
+the default opens a dialog. Extrude opens at a distance of zero on purpose so
+that nothing appears until a length is given, and quietly restoring the last
+distance would undo that for everyone who never asked for a preset at all.
+
+Presets are filed by dialog rather than by feature type, so a Box preset does
+not turn up in a Cylinder dialog. They live in the renderer's own storage for
+now, which for a desktop application is a file in the user data folder. When
+profiles arrive they move onto the profile, and `presetStore` is the one place
+that has to change.
 ### Web — near complete
 
 Same option set as Rib, but perpendicular to the sketch plane rather than
 parallel. Anvil has profile, thickness, direction, extent type (To Next or
-Depth), depth, flip, draft angle and extend curves. Missing: **Presets** and
-**Fillet Radius**.
+Depth), depth, flip, draft angle and extend curves. Missing: **Fillet Radius**.
+Presets arrived app-wide in v2.40.0.
 
 Note the pairing: Rib is parallel to the sketch plane, Web is perpendicular.
 Anvil's Web has To Next and its Rib does not, which is the wrong way round from

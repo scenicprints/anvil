@@ -16,6 +16,7 @@ import {
   parametersToCsv,
   parametersFromCsv
 } from '../src/renderer/expr.js';
+import * as PRESET from '../src/renderer/presets.js';
 import { solveSketch } from '../src/renderer/solver.js';
 import {
   findRegions,
@@ -361,6 +362,103 @@ async function run() {
     const noHeader = parametersFromCsv('wall,2\nspan,10');
     assert(noHeader.taken.length === 2, `both rows kept, got ${noHeader.taken.length}`);
     assert(noHeader.taken[0].name === 'wall', 'and the first one is still there');
+  });
+
+  test('presets: settings are carried and geometry never is', () => {
+    // The rows a chamfer dialog has: two that are typed or chosen, one filled
+    // by clicking edges in the canvas, one button, and one synthetic view of
+    // the feature. Only the first two may be saved.
+    const fields = [
+      { key: 'sets.0.radius', type: 'expr' },
+      { key: 'sets.0.chamferType', type: 'select' },
+      { key: '__set0', type: 'pick', pick: 'set:0' },
+      { key: '__addSet', type: 'action' },
+      { key: '__rotAxis', type: 'select' },
+      { key: '__note', type: 'note' }
+    ];
+    const keys = PRESET.presetKeys(fields);
+    assert(keys.length === 2, `two savable rows, got ${JSON.stringify(keys)}`);
+    assert(!keys.some((k) => k.startsWith('__')), 'nothing synthetic');
+
+    const feature = {
+      type: 'chamfer',
+      sets: [{ radius: '0.6', chamferType: 'equal', edges: [{ kind: 'line', length: 40 }] }]
+    };
+    const values = PRESET.captureValues(feature, fields);
+    assert(values['sets.0.radius'] === '0.6', 'the distance came along');
+    assert(!('edges' in values), 'and the edges did not');
+    assert(
+      !JSON.stringify(values).includes('length'),
+      `nothing about the picked geometry: ${JSON.stringify(values)}`
+    );
+  });
+
+  test('presets: a bigger preset fills what a smaller feature has and stops', () => {
+    // Saved off a fillet with three sets, applied to one with a single set.
+    // Writing sets.1 and sets.2 would put half-made objects in the array and
+    // the rebuild would work from them.
+    const values = {
+      'sets.0.radius': '5',
+      'sets.1.radius': '9',
+      'sets.2.radius': '12',
+      'nothere.deep.value': '3'
+    };
+    const feature = { type: 'fillet', sets: [{ radius: '2', edges: [] }] };
+    const { applied, skipped } = PRESET.applyValues(feature, values);
+
+    assert(feature.sets.length === 1, `still one set, got ${feature.sets.length}`);
+    assert(feature.sets[0].radius === '5', `the one set took the value, got ${feature.sets[0].radius}`);
+    assert(applied.length === 1, `one landed, got ${JSON.stringify(applied)}`);
+    assert(skipped.length === 3, `three were left, got ${JSON.stringify(skipped)}`);
+    assert(feature.nothere === undefined, 'and no path was conjured into being');
+  });
+
+  test('presets: only a default opens a dialog, and deleting it clears it', () => {
+    let data = {};
+    data = PRESET.putPreset(data, 'chamfer', 'Print 0.6', { 'sets.0.radius': '0.6' });
+    data = PRESET.rememberLastUsed(data, 'chamfer', { 'sets.0.radius': '3' });
+
+    // Last used is recorded and offered, but never applied on its own. Extrude
+    // opens at a distance of zero on purpose, and restoring the last distance
+    // would undo that for someone who never asked for a preset.
+    assert(PRESET.openingPreset(data, 'chamfer') === null, 'nothing opens it yet');
+
+    data = PRESET.setDefaultPreset(data, 'chamfer', 'Print 0.6');
+    assert(PRESET.openingPreset(data, 'chamfer')?.values['sets.0.radius'] === '0.6', 'now it does');
+
+    // Deleting the default must clear it too, or every later dialog opens
+    // looking for a preset that is not there.
+    data = PRESET.dropPreset(data, 'chamfer', 'Print 0.6');
+    assert(PRESET.presetsFor(data, 'chamfer').default === null, 'the default went with it');
+    assert(PRESET.openingPreset(data, 'chamfer') === null, 'and nothing is applied');
+
+    // Renaming carries the default across rather than orphaning it.
+    let d2 = PRESET.putPreset({}, 'fillet', 'Soft', { 'sets.0.radius': '4' });
+    d2 = PRESET.setDefaultPreset(d2, 'fillet', 'Soft');
+    d2 = PRESET.renamePreset(d2, 'fillet', 'Soft', 'Softer');
+    assert(PRESET.presetsFor(d2, 'fillet').default === 'Softer', 'the default followed the name');
+    assert(PRESET.openingPreset(d2, 'fillet')?.values['sets.0.radius'] === '4', 'and still resolves');
+  });
+
+  test('presets: storage that is missing or broken never stops a dialog', () => {
+    // A preset list is a convenience. Losing it must not be the reason a dialog
+    // will not open, so a read that throws comes back empty and a write that
+    // throws says so rather than escaping.
+    assert(Object.keys(PRESET.loadPresets(null)).length === 0, 'no storage at all');
+    const broken = {
+      getItem: () => {
+        throw new Error('denied');
+      },
+      setItem: () => {
+        throw new Error('denied');
+      }
+    };
+    assert(Object.keys(PRESET.loadPresets(broken)).length === 0, 'a read that throws');
+    assert(PRESET.savePresets(broken, { a: 1 }) === false, 'a write that throws says so');
+    assert(
+      Object.keys(PRESET.loadPresets({ getItem: () => 'not json' })).length === 0,
+      'and rubbish in the store is not rubbish out'
+    );
   });
 
   test('expression: functions work in degrees', () => {
