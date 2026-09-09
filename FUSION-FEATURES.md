@@ -103,7 +103,7 @@ thin extrude.
 
 | Option | Values | Anvil |
 |---|---|---|
-| Profiles | sketch, edge or face, in an order you can change | partial — no reorder |
+| Profiles | sketch, edge or face, in an order you can change | has, v2.38.0 |
 | End condition (per profile) | Free, Direction, Tangent, Smooth, Sharp, Point Tangent | partial — connected and tangent only |
 | Guide Type | **Rail**, **Centerline** | partial — rails only |
 | Rails / Guide | any number of rails; one centerline | has (rails) |
@@ -1063,14 +1063,28 @@ canvas**.
 | Selection priority filters | partial |
 | Selection filters | has |
 | **Select by name** | **missing** |
-| **Selection sets** (name a selection and come back to it) | **missing** |
+| Selection sets (name a selection and come back to it) | has, v2.38.0 |
 
 Anvil adds select similar and select tangent run, which Fusion carries as the
 Tangent Chain setting instead.
 
-**Selection sets are the one worth having**, because they are what makes a
-thirty-edge fillet survive being edited: name the set once, and every later
-feature that wants those edges refers to the name.
+Selection sets shipped in v2.38.0. **One correction to what this file used to
+say about them**: it claimed a set was what makes a thirty edge fillet survive
+being edited, with later features referring to the set by name. Fusion's
+selection sets do not do that. They are saved selections, not parametric
+references, and a feature holds its own copy of what it was given. The version
+built here is the honest one.
+
+What it does do is keep the picking. The set stores references, not indices: an
+index is a position in this rebuild's topology and means nothing after the next
+one. So a set saved before an earlier dimension changed still finds the same
+places afterwards, and the demo proves it against a rebuild that doubles the
+edge count and moves every edge in the set. Restore the set, press Fillet, and
+the thirty edge fillet is two clicks rather than thirty.
+
+References that no longer resolve are counted and said out loud. A set that
+held thirty edges and now finds twenty six is the one thing you need to know
+before pressing Fillet, and coming back quietly short would hide exactly that.
 
 ---
 

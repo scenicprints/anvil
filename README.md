@@ -301,7 +301,11 @@ of model edges. Then
 | Orientation | **Perpendicular** stays square to the path, **Parallel** keeps the profile facing the way it started |
 | Operation | The same set as Extrude |
 
-**Loft** takes its sections in the order you click them. A section is a sketch
+**Loft** takes its sections in the order you click them, and the order can be
+changed afterwards: each section past the first has a row that moves it
+earlier. The same three sections in a different order are a different shape, and
+before this the only fix for a mis-ordered loft was clicking them all again and
+getting it right the second time. A section is a sketch
 profile, a planar face, or a single sketch **point**, which is how a loft comes
 to a tip. Then
 
@@ -724,6 +728,15 @@ so a pocket comes whole however many faces it turns out to be made of.
 **Tangent Run** takes the whole of one smooth surface, stopping where there is
 a crease. **Select Similar** matches what was picked: pick one M3 bore and the
 other three come with it. **Grow**, **Shrink** and **Invert** do the obvious.
+
+**Save as a selection set** names what is chosen and puts it in the browser to
+come back to. It stores references rather than positions, so a set saved before
+an earlier dimension changed still finds the same places afterwards, which is
+the whole point: picking thirty edges once is a chore, picking them again after
+every edit is why people stop editing parts. Restore the set, press Fillet.
+References that no longer resolve are counted and said out loud, because a set
+that held thirty edges and now finds twenty six is exactly what you need to
+know before pressing anything.
 
 **Priority** is a setting rather than a mode: faces only, edges only, bodies
 only, or anything. On a part where the edges are everywhere and the faces are

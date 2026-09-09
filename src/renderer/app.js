@@ -1980,6 +1980,9 @@ async function runCommand(cmd) {
     case 'selectSeedBoundary':
       cmdSeedAndBoundary();
       break;
+    case 'createSelectionSet':
+      createSelectionSet();
+      break;
     case 'selectBySize':
       cmdSelectBySize();
       break;
@@ -2556,6 +2559,7 @@ function migrate(data) {
   doc.construction = doc.construction || [];
   doc.components = doc.components || [];
   doc.joints = doc.joints || [];
+  doc.selectionSets = doc.selectionSets || [];
   doc.baseBodies = doc.baseBodies || [];
   normalizeSheetRules(doc);
   doc.meshData = doc.meshData || {};
@@ -3017,6 +3021,23 @@ function renderTree() {
   const { errors: perrs } = resolveParameters(state.doc.parameters);
   for (const p of state.doc.parameters) {
     addNode(`${p.name} = ${p.expr}`, { child: true, error: perrs[p.name] });
+  }
+
+  if ((state.doc.selectionSets || []).length) {
+    addNode('Selection Sets', { head: true });
+    for (const s of state.doc.selectionSets) {
+      addNode(`${s.name} (${selectionSetCount(s)})`, {
+        child: true,
+        onClick: () => restoreSelectionSet(s),
+        onDblClick: () => renameSelectionSet(s),
+        remove: () => {
+          pushUndo('delete selection set');
+          state.doc.selectionSets = state.doc.selectionSets.filter((x) => x.id !== s.id);
+          state.dirty = true;
+          renderTree();
+        }
+      });
+    }
   }
 
   addNode('Origin', { head: true });
@@ -4947,12 +4968,48 @@ function loftSectionText(f) {
   return `${n} section${n === 1 ? '' : 's'}`;
 }
 
+/**
+ * What one loft section is, written short enough for a row.
+ *
+ * Order is the whole point of the list, so each row says where it sits as well
+ * as what it is.
+ */
+function loftSectionRowText(entry, i) {
+  const what = entry?.point
+    ? 'a sketch point'
+    : entry?.face
+      ? 'a face'
+      : entry?.seed
+        ? 'a profile'
+        : 'a section';
+  return `${i + 1}. ${what}`;
+}
+
 /** The Loft dialog: the sections in order, how the ends leave, and any rails. */
-function loftFields() {
+function loftFields(feature) {
   const CONDITIONS = [
     ['connected', 'Connected'],
     ['tangent', 'Tangent']
   ];
+  // Fusion lets the profile order be changed, and the order is what a loft is:
+  // the same three sections in a different order is a different shape. Clicking
+  // them again in the right order was the only way to fix a mis-ordered loft,
+  // which on a five section one means five more picks and getting it right the
+  // second time.
+  const reorder = [];
+  (feature?.sections || []).forEach((entry, i) => {
+    if (i === 0) return;
+    reorder.push({
+      key: `__up${i}`,
+      label: `Move ${loftSectionRowText(entry, i)} earlier`,
+      type: 'action',
+      run: (f) => {
+        const list = f.sections;
+        [list[i - 1], list[i]] = [list[i], list[i - 1]];
+      }
+    });
+  });
+
   return [
     {
       key: '__sections',
@@ -4964,6 +5021,7 @@ function loftFields() {
         f.sections = [];
       }
     },
+    ...reorder,
     { key: 'startCondition', label: 'Start', type: 'select', options: CONDITIONS },
     {
       key: 'startWeight',
@@ -5838,6 +5896,7 @@ const RIBBON_MENUS = {
     ['selectSimilar', 'Select Similar'],
     ['selectSeedBoundary', 'Seed And Boundary'],
     ['selectBySize', 'Select By Size'],
+    ['createSelectionSet', 'Save As A Selection Set'],
     ['isolate', 'Isolate'],
     ['unisolate', 'Show All Again']
   ],
@@ -6277,7 +6336,7 @@ function startLoft() {
   delete feature.sketch;
   delete feature.seeds;
   delete feature.faces;
-  openFeatureEditor(feature, 'Loft', loftFields());
+  openFeatureEditor(feature, 'Loft', loftFields(feature));
   setEditPick('sections');
   setStatus('Click each profile in turn, in the order the loft runs through them.');
 }
@@ -11237,6 +11296,151 @@ function bodySelectionOrAll() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Selection sets                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Name what is selected so it can be got back.
+ *
+ * Fusion calls these Selection Sets. The reason to have them is a thirty edge
+ * fillet: picking those edges once is a chore, picking them again after a
+ * rebuild has renumbered everything is why people stop editing parts.
+ *
+ * What is stored is references, not indices. An index is a position in this
+ * rebuild's topology and means nothing after the next one. A reference is
+ * orientation, then size and position, which is the same thing every feature in
+ * the document uses to hold on to a face across a dimension change.
+ */
+function createSelectionSet() {
+  const sel = state.selection;
+  if (!sel.faces.size && !sel.edges.size && !sel.bodies.size) {
+    setStatus('Select something first, then name it.');
+    return;
+  }
+
+  const set = {
+    id: uid('s'),
+    name: `Set ${(state.doc.selectionSets || []).length + 1}`,
+    bodies: [...sel.bodies],
+    faces: [],
+    edges: []
+  };
+  for (const [bodyId, refs] of selectedFaceRefs()) {
+    for (const face of refs) set.faces.push({ bodyId, face });
+  }
+  for (const [bodyId, refs] of selectedEdgeRefs()) {
+    for (const edge of refs) set.edges.push({ bodyId, edge });
+  }
+
+  promptText('Name this selection set', set.name, (name) => {
+    const clean = String(name || '').trim();
+    if (!clean) return;
+    set.name = clean;
+    pushUndo('create selection set');
+    state.doc.selectionSets = state.doc.selectionSets || [];
+    state.doc.selectionSets.push(set);
+    state.dirty = true;
+    renderTree();
+    setStatus(`${set.name}: ${selectionSetCount(set)} saved.`);
+  });
+}
+
+/** How much is in a set, written the way the browser row wants it. */
+function selectionSetCount(set) {
+  const bits = [];
+  if (set.edges?.length) bits.push(`${set.edges.length} edge${set.edges.length === 1 ? '' : 's'}`);
+  if (set.faces?.length) bits.push(`${set.faces.length} face${set.faces.length === 1 ? '' : 's'}`);
+  if (set.bodies?.length) bits.push(`${set.bodies.length} bod${set.bodies.length === 1 ? 'y' : 'ies'}`);
+  return bits.join(', ') || 'empty';
+}
+
+/**
+ * Put a saved selection back.
+ *
+ * References that no longer resolve are counted and said out loud rather than
+ * passed over. A set that used to hold thirty edges and now finds twenty six is
+ * the one thing you need to know before pressing Fillet, and a silent set would
+ * hide exactly that.
+ */
+function restoreSelectionSet(set) {
+  const sel = state.selection;
+  sel.faces.clear();
+  sel.edges.clear();
+  sel.bodies.clear();
+  sel.profiles = [];
+
+  let lost = 0;
+  const byBody = (list) => {
+    const m = new Map();
+    for (const item of list || []) {
+      if (!m.has(item.bodyId)) m.set(item.bodyId, []);
+      m.get(item.bodyId).push(item);
+    }
+    return m;
+  };
+
+  for (const [bodyId, items] of byBody(set.faces)) {
+    const rec = (state.records || []).find((r) => r.id === bodyId);
+    if (!rec?.topology) {
+      lost += items.length;
+      continue;
+    }
+    for (const item of items) {
+      const [face] = resolveFaceRefs(rec.topology, [item.face]);
+      if (!face) {
+        lost++;
+        continue;
+      }
+      sel.faces.add(`${bodyId}:${rec.topology.faces.indexOf(face)}`);
+    }
+  }
+
+  for (const [bodyId, items] of byBody(set.edges)) {
+    const rec = (state.records || []).find((r) => r.id === bodyId);
+    if (!rec?.topology) {
+      lost += items.length;
+      continue;
+    }
+    for (const item of items) {
+      const [edge] = resolveEdgeRefs(rec.topology, [item.edge]);
+      if (!edge) {
+        lost++;
+        continue;
+      }
+      sel.edges.add(`${bodyId}:${rec.topology.edges.indexOf(edge)}`);
+    }
+  }
+
+  for (const id of set.bodies || []) {
+    if ((state.result?.bodies || []).some((b) => b.id === id)) sel.bodies.add(id);
+    else lost++;
+  }
+
+  refreshHighlight();
+  renderTree();
+  setStatus(
+    lost
+      ? `${set.name}: ${selectionSetCount({
+          edges: [...sel.edges],
+          faces: [...sel.faces],
+          bodies: [...sel.bodies]
+        })} back, ${lost} no longer in the model.`
+      : `${set.name} restored.`
+  );
+}
+
+function renameSelectionSet(set) {
+  promptText('Rename this selection set', set.name, (name) => {
+    const clean = String(name || '').trim();
+    if (!clean) return;
+    pushUndo('rename selection set');
+    set.name = clean;
+    state.dirty = true;
+    renderTree();
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* Edge and face features                                              */
 /* ------------------------------------------------------------------ */
 
@@ -12907,6 +13111,12 @@ function pickIntoEdit(hit) {
     const at = f.sections.findIndex((x) => sameSection(x, entry));
     if (at >= 0) f.sections.splice(at, 1);
     else f.sections.push(entry);
+    // A loft grows a "move this one earlier" row per section past the first, so
+    // picking one changes what rows there are and not only what they say. The
+    // field list was worked out when the dialog opened. Done here rather than
+    // for every pick because a dialog opened with a hand built list would have
+    // its rows swapped out from under it.
+    if (f.type === 'loft') state.editing.fields = loftFields(f);
   } else if (ed.pickInto === 'path' || ed.pickInto === 'rail') {
     const key = ed.pickInto;
     if (hit.kind === 'sketchLine') f[key] = { sketch: hit.sketch };
@@ -18301,7 +18511,7 @@ function describeFeature(feature) {
     case 'sweep':
       return { title: 'Sweep', fields: sweepFields() };
     case 'loft':
-      return { title: 'Loft', fields: loftFields() };
+      return { title: 'Loft', fields: loftFields(feature) };
     case 'hole':
       return { title: 'Hole', fields: holeFields() };
     case 'primitive': {
@@ -18974,6 +19184,33 @@ function promptValue(title, initial, cb) {
 }
 
 /** A modal list of choices, for the few places a dropdown has to be modal. */
+/**
+ * Ask for one line of text in the same modal the choice prompt uses.
+ *
+ * The window's own `prompt` is not available under the content security policy
+ * this application runs with, and would look like a browser box anyway.
+ */
+function promptText(title, initial, cb) {
+  const modal = $('#modal');
+  $('#modalTitle').textContent = title;
+  const body = $('#modalBody');
+  body.innerHTML = '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = initial ?? '';
+  input.style.width = '100%';
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') closeModal(input.value);
+  });
+  body.appendChild(input);
+  modal.classList.remove('hidden');
+  input.focus();
+  input.select();
+
+  modalResolve = cb;
+  $('#modalOk').onclick = () => closeModal(input.value);
+}
+
 function promptChoice(title, options, cb) {
   const modal = $('#modal');
   $('#modalTitle').textContent = title;
@@ -19043,6 +19280,7 @@ window.anvilDev = {
   // camera is. These are here so a probe can measure it rather than infer it.
   axisDragAmount,
   pullTarget,
+  edgeReference,
   // The parameter file readers, so a probe can put a table out and read it back
   // without going through a save dialog it cannot answer.
   expr: { parametersToCsv, parametersFromCsv },

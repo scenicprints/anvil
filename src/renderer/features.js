@@ -70,6 +70,10 @@ export function newDocument() {
     units: 'mm',
     components: [],
     joints: [],
+    // Named selections, held as references rather than indices so they survive
+    // the renumbering a rebuild does. Not part of the timeline: a set is a
+    // convenience for picking, not a thing the model is built from.
+    selectionSets: [],
     captureHistory: true,
     baseBodies: [],
     rollback: null,
