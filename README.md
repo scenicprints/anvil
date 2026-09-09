@@ -251,7 +251,7 @@ dialog's or the document's, so a profile picked into a dialog looks picked.
 | Patterns | Rectangular, circular, **along a path**, and **of features** |
 | Move | Translate, rotate about a picked pivot, point to point, or along a direction taken off the model, snapping to corners, edge middles and hole centres. Any of them can move a copy instead |
 | Scale | Uniform or per axis, about the part, the origin, or a point |
-| Align | A face of one body put flat against another |
+| Align | One body lined up with another by a face, a round face, a circle or an edge |
 | Delete Face | A round hole filled back in |
 | Silhouette Split | Parted at the outline seen from a direction, into two bodies or into one body with the faces split there |
 | Split Face | A face divided in two, with the shape left alone |
@@ -355,8 +355,10 @@ a distance and the angle it leans at. Where three chamfers meet, the three
 bevelled faces can run together to a point, which is the **mitre** and is what
 it has always made, or be joined by a fourth facet across the corner, which is
 the **chamfered corner**. A fillet set is asked for in one of six
-ways. **Rule** takes every edge of the part at once, filtered to the outside
-corners, the inside ones, or both: in the trade an outside corner is a round
+ways. **Rule** takes every edge of the part at once, or only the edges where two
+faces you picked meet, which on a boss is its whole foot in one pick of two
+faces. Either way it can be filtered to the outside corners, the inside ones, or
+both: in the trade an outside corner is a round
 and an inside one is a fillet, and softening the outside corners while leaving
 the inside ones sharp is usually what a printed part wants. The other five are
 picked edge by edge. **Constant** and **variable radius** are the plain ones. **Asymmetric**

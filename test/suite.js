@@ -4353,6 +4353,63 @@ async function run() {
     );
   });
 
+  test('fillet: the rule can be held to where the chosen faces meet', () => {
+    // Fusion's other rule. Every edge of the part is one thing; the edges where
+    // two chosen faces meet is another, and on a boss it is its whole foot in
+    // one pick of two faces instead of a dozen picks of edges.
+    const doc = boxDoc(40, 40, 40);
+    let res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = topo.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    const side = topo.faces.find((f) => f.planar && f.normal[0] > 0.99);
+    assert(top && side, 'found a top and a side');
+    const refs = [faceReference(top), faceReference(side)];
+    const plain = res.bodies[0].solid.volume();
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      edges: [],
+      sets: [
+        { edges: [], all: true, ruleScope: 'between', ruleFaces: refs, radius: '4' }
+      ]
+    });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+
+    // Exactly one edge is between those two faces, so exactly one corner is
+    // rounded. The volume taken off is the corner of a square section: r
+    // squared less a quarter circle, along the 40 of the edge.
+    const off = plain - res.bodies[0].solid.volume();
+    const want = (16 - Math.PI * 4) * 40;
+    near(off, want, want * 0.05, 'one edge rounded, and only one');
+    res.dispose();
+
+    // Faces that do not meet have no edge between them, and that is said
+    // rather than passed over as nothing to do.
+    const apart = boxDoc(40, 40, 40);
+    const other = rebuild(apart);
+    const t2 = buildTopology(K.meshData(other.bodies[0].solid));
+    const up = faceReference(t2.faces.find((f) => f.planar && f.normal[2] > 0.99));
+    const down = faceReference(t2.faces.find((f) => f.planar && f.normal[2] < -0.99));
+    other.dispose();
+    apart.features.push({
+      id: uid('f'),
+      type: 'fillet',
+      bodies: 'all',
+      edges: [],
+      sets: [{ edges: [], all: true, ruleScope: 'between', ruleFaces: [up, down], radius: '4' }]
+    });
+    const missed = rebuild(apart);
+    assert(
+      missed.errors.some((e) => /do not meet/.test(e.message)),
+      `expected a word about not meeting, got ${JSON.stringify(missed.errors)}`
+    );
+    missed.dispose();
+  });
+
   test('fillet: an old document that meant every edge still means it', () => {
     // Before there were sets, one empty list was the only way to say "the whole
     // part". Those documents have to come back rounded, not untouched, so the
@@ -10135,6 +10192,63 @@ async function run() {
   });
 
   /* -------- assembly constraints -------- */
+
+  test('align: a peg can be lined up by a round face, not just a flat one', () => {
+    // Fusion aligns by a point, a line, a plane, a circle or a coordinate
+    // system. What align actually needs of any of them is a place and a
+    // direction, and a round face has both: its centre and its axis. That is
+    // how a peg goes into a bore when there is no flat anywhere near either.
+    const doc = newDocument();
+    // A plate with a bore through it, lying flat.
+    doc.features.push(prim('box', { width: '60', depth: '60', height: '10', centered: true }));
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'cylinder',
+      params: { diameter: '10', height: '30', x: '0', y: '0', z: '0', centered: true },
+      op: 'cut'
+    });
+    // And a peg standing somewhere else entirely, lying on its side.
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'cylinder',
+      params: { diameter: '10', height: '20', x: '100', y: '40', z: '25', centered: true },
+      op: 'new'
+    });
+
+    let res = rebuild(doc);
+    assert(res.bodies.length === 2, `a plate and a peg, got ${res.bodies.length}`);
+    const plate = res.bodies[0];
+    const peg = res.bodies[1];
+
+    const bore = buildTopology(K.meshData(plate.solid)).faces.find((f) => f.cylinder);
+    const barrel = buildTopology(K.meshData(peg.solid)).faces.find((f) => f.cylinder);
+    assert(bore && barrel, 'found the bore and the peg barrel');
+    const from = { bodyId: peg.id, face: faceReference(barrel) };
+    const to = { bodyId: plate.id, face: faceReference(bore) };
+    const pegId = peg.id;
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'align',
+      bodies: [pegId],
+      from,
+      to
+    });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+
+    // The peg's axis lands on the bore's, which for a bore through a flat plate
+    // means the peg ends up standing on the origin rather than lying at x=100.
+    const moved = res.bodies.find((b) => b.id === pegId) || res.bodies[1];
+    const bb = K.boundingBox(moved.solid);
+    near((bb.min[0] + bb.max[0]) / 2, 0, 0.2, 'the peg came to the bore in x');
+    near((bb.min[1] + bb.max[1]) / 2, 0, 0.2, 'and in y');
+    near(bb.max[2] - bb.min[2], 20, 0.2, 'and it is standing up, not lying down');
+    res.dispose();
+  });
 
   test('constrain: mate turns a face to look at the one it meets', () => {
     const child = { p: [0, 0, 0], axis: [0, 0, 1] };

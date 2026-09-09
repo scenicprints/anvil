@@ -4689,9 +4689,44 @@ export function rebuild(doc, options = {}) {
           fillets: (e) => !e.convex,
           both: () => true
         };
-        const edges = set.all
-          ? topo.edges.filter(kinds[set.ruleKind || 'rounds'] || kinds.rounds)
-          : resolveEdgeRefs(topo, set.edges || []);
+        const kind0 = kinds[set.ruleKind || 'rounds'] || kinds.rounds;
+
+        /*
+         * Fusion's other rule: between faces, rather than every edge of the
+         * part. The edges wanted are the ones where two of the chosen faces
+         * meet, which on a boss is its whole foot in one pick of two faces
+         * instead of a dozen picks of edges.
+         *
+         * One list rather than Fusion's two boxes: an edge between two faces
+         * is between them whichever box each was put in, and asking twice for
+         * a set that is used as one set is asking twice.
+         */
+        let ruled = null;
+        if (set.all && set.ruleScope === 'between') {
+          const faces = resolveFaceRefs(topo, set.ruleFaces || []);
+          if (faces.length < 2) {
+            errs.push({
+              feature: feature.id,
+              message: 'Between faces needs at least two faces to find edges between'
+            });
+            continue;
+          }
+          const ids = new Set(faces.map((f) => topo.faces.indexOf(f)));
+          ruled = topo.edges.filter((e) => kind0(e) && ids.has(e.faceA) && ids.has(e.faceB));
+          if (!ruled.length) {
+            errs.push({
+              feature: feature.id,
+              message: 'Those faces do not meet each other, so there is no edge between them'
+            });
+            continue;
+          }
+        }
+
+        const edges = ruled
+          ? ruled
+          : set.all
+            ? topo.edges.filter(kind0)
+            : resolveEdgeRefs(topo, set.edges || []);
         if (!edges.length) continue;
 
         const type = kind === 'fillet' ? set.filletType || 'constant' : 'constant';
@@ -5597,14 +5632,62 @@ export function rebuild(doc, options = {}) {
   }
 
   /** A named plane or a face of the model, as an origin and a normal. */
+  /**
+   * A place and a direction to align by.
+   *
+   * Fusion takes a point, a line, a plane, a circle or a coordinate system.
+   * What this actually needs of any of them is the same two things, so the
+   * question is only what each one offers.
+   *
+   * A flat face gives its middle and the way it faces, which is what this
+   * always took. A cylindrical face or a circular edge gives its centre and its
+   * axis, which is how a peg is dropped into a bore without a flat anywhere
+   * near either of them. A straight edge gives its middle and its own
+   * direction. An origin or construction plane gives its origin and normal.
+   */
   function alignFrame(ref) {
     if (!ref) return null;
     if (ref.plane) {
       const pl = resolvePlane(ref.plane, scope, builtConstruction);
       return pl ? { o: pl.origin, n: pl.n } : null;
     }
+
+    if (ref.edge) {
+      const pool = ref.bodyId ? bodies.filter((b) => b.id === ref.bodyId) : bodies;
+      for (const b of pool.length ? pool : bodies) {
+        if (!b.solid) continue;
+        let topo;
+        try {
+          topo = buildTopology(meshOf(b));
+        } catch {
+          continue;
+        }
+        const [edge] = resolveEdgeRefs(topo, [ref.edge]);
+        if (!edge) continue;
+        if (edge.kind === 'circle' && edge.centre && edge.axis) {
+          return { o: [...edge.centre], n: [...edge.axis] };
+        }
+        if (edge.kind === 'line' && edge.dir && edge.start && edge.end) {
+          return {
+            o: [0, 1, 2].map((i) => (edge.start[i] + edge.end[i]) / 2),
+            n: [...edge.dir]
+          };
+        }
+        return null;
+      }
+      return null;
+    }
+
     const found = findFace(ref);
-    if (!found || !found.face.planar) return null;
+    if (!found) return null;
+    // A round face is as good a thing to align by as a flat one, and better
+    // for anything that goes into a hole: its axis is the direction and its
+    // centre is the place.
+    if (found.face.cylinder?.dir && found.face.cylinder?.origin) {
+      const c = found.face.cylinder;
+      return { o: [...c.origin], n: [...c.dir] };
+    }
+    if (!found.face.planar) return null;
     return { o: found.face.centre, n: found.face.normal };
   }
 

@@ -583,8 +583,11 @@ function handleViewportDown(e) {
         'surfaceCurves',
         'sheetEdges',
         // A loft section can be a run of model edges, so an edge has to be
-        // offered there as well as a profile.
+        // offered there as well as a profile. An align can be lined up by a
+        // circle, so the same goes for its two rows.
         'sections',
+        'alignFrom',
+        'alignTo',
         ...Object.keys(DIRECTION_PICKS)
       ].includes(armed) || !!blendPickRow(armed);
     // A plane click has to be offered before the body raycast, or a plane
@@ -3595,6 +3598,12 @@ function extrudeFields() {
  * hold line the blend has to run out on. Both are edge picks into the same set,
  * so they are told apart by name rather than by two separate flows.
  */
+/** Which set a between-faces rule is picking faces into, if any. */
+function ruleFacesRow(armed) {
+  const m = /^ruleFaces:([0-9]+)$/.exec(String(armed || ''));
+  return m ? Number(m[1]) : null;
+}
+
 function blendPickRow(armed) {
   const m = /^(set|hold):(\d+)$/.exec(String(armed || ''));
   if (!m) return null;
@@ -3675,6 +3684,37 @@ function blendFields(kind) {
             set: (f, v) => {
               f.sets[i].all = v === 'rule';
               if (v !== 'rule') f.sets[i].filletType = v;
+            }
+          });
+          out.push({
+            // Fusion's other rule. Between faces takes the edges where two of
+            // the chosen faces meet, which on a boss is its whole foot in one
+            // pick of two faces instead of a dozen picks of edges.
+            //
+            // One list rather than Fusion's two boxes: an edge between two
+            // faces is between them whichever box each was put in, and asking
+            // twice for a set used as one set is asking twice.
+            key: `sets.${i}.ruleScope`,
+            label: `Set ${n} rule`,
+            type: 'select',
+            options: [
+              ['all', 'Every edge of the part'],
+              ['between', 'Only where the chosen faces meet']
+            ],
+            showIf: (f) => !!f.sets[i]?.all
+          });
+          out.push({
+            key: `__ruleFaces${i}`,
+            label: `Set ${n} faces`,
+            type: 'pick',
+            pick: `ruleFaces:${i}`,
+            showIf: (f) => !!f.sets[i]?.all && f.sets[i]?.ruleScope === 'between',
+            summary: (f) => {
+              const c = f.sets[i]?.ruleFaces?.length || 0;
+              return c ? `${c} face${c === 1 ? '' : 's'}` : 'Nothing yet';
+            },
+            clear: (f) => {
+              f.sets[i].ruleFaces = [];
             }
           });
           out.push({
@@ -12810,6 +12850,7 @@ const PICK_PROMPTS = {
   movePointFrom: 'Click where to measure from.',
   movePointTo: 'Click where to measure to.',
   movePivot: 'Click the point to turn about.',
+  'ruleFaces:0': 'Click the faces. Every edge where two of them meet is taken.',
   moveFaces: 'Click the faces to move.',
   fullRoundFaces: 'Click the flat face to round away.',
   alignRegion: 'Click the flat region of the mesh to lay down.',
@@ -12822,8 +12863,8 @@ const PICK_PROMPTS = {
   groupFaces: 'Click the faces to group.',
   holdEdges: 'Click the edge the fillet should run out on.',
   jointAxis2: 'Click the edge or face giving the second direction.',
-  alignFrom: 'Click the face on the part being moved.',
-  alignTo: 'Click the face it should land on.',
+  alignFrom: 'Click the face or circle on the part being moved.',
+  alignTo: 'Click the face or circle it should line up with.',
   silhouetteDir: 'Click the plane or face to look along.'
 };
 
@@ -13661,6 +13702,22 @@ function pickIntoEdit(hit) {
     } else {
       return true;
     }
+  } else if (ruleFacesRow(ed.pickInto) !== null) {
+    // Faces for a between-faces rule. Any face at all: a boss meets its plate
+    // along a curved edge as readily as a flat one.
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const index = ruleFacesRow(ed.pickInto);
+    const set = f.sets?.[index];
+    if (!set) return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = record?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    set.ruleFaces = set.ruleFaces || [];
+    const ref = faceReference(face);
+    const at = set.ruleFaces.findIndex((x) => sameFaceRef(x, ref));
+    if (at >= 0) set.ruleFaces.splice(at, 1);
+    else set.ruleFaces.push(ref);
+    if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (blendPickRow(ed.pickInto)) {
     // An edge into one of a blend's sets, or into that set's hold line.
     if (hit.kind !== 'edge') return true;
@@ -13720,13 +13777,33 @@ function pickIntoEdit(hit) {
     ed.pickInto === 'silhouetteDir'
   ) {
     const key = ed.pickInto === 'alignFrom' ? 'from' : ed.pickInto === 'alignTo' ? 'to' : 'direction';
+    const aligning = key !== 'direction';
     if (hit.kind === 'plane') {
       f[key] = { plane: hit.planeName };
+    } else if (hit.kind === 'edge' && aligning) {
+      // A circular edge gives its centre and its axis; a straight one gives
+      // its middle and its own direction. Both are places with a direction,
+      // which is all an align needs of anything.
+      const record = (state.records || []).find((r) => r.id === hit.bodyId);
+      const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
+      if (!edge || (edge.kind !== 'circle' && edge.kind !== 'line')) {
+        setStatus('An align takes a circle or a straight edge, not that one.');
+        return true;
+      }
+      f[key] = { bodyId: hit.bodyId, edge: edgeReference(edge, record.topology) };
     } else if (hit.kind === 'face' && hit.faceId !== null) {
       const record = (state.records || []).find((r) => r.id === hit.bodyId);
       const face = record?.topology?.faces[hit.faceId];
-      if (!face || !face.planar) {
-        setStatus('That has to be a flat face or an origin plane.');
+      // A round face is as good to align by as a flat one, and better for
+      // anything that goes into a hole: its axis is the direction and its
+      // centre is the place. A silhouette direction still wants a flat.
+      const usable = face && (face.planar || (aligning && face.cylinder?.dir));
+      if (!usable) {
+        setStatus(
+          aligning
+            ? 'That has to be a flat face, a round one, a circle, or an origin plane.'
+            : 'That has to be a flat face or an origin plane.'
+        );
         return true;
       }
       f[key] = { bodyId: hit.bodyId, face: faceReference(face) };

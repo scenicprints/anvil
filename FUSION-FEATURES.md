@@ -324,7 +324,7 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 | Tangency Weight | | has, v2.37.0. How hard the G2 curve is pulled toward the corner |
 | Radius Points | radius and position along one edge (variable only) | has |
 | Corner Type | Rolling Ball, Setback | **missing** |
-| Rule | All Edges, **Between Faces/Features** (rule fillet) | partial — All Edges, v2.48.0 |
+| Rule | All Edges, Between Faces/Features (rule fillet) | has. All Edges v2.48.0, between faces v2.64.0. One list of faces rather than Fusion's two boxes: an edge between two faces is between them whichever box each was put in |
 | Round/Fillets | Rounds and Fillets, Rounds Only, Fillets Only (rule fillet) | has, v2.48.0 |
 | Center Faces / Side 1 / Side 2 | full round fillet | partial — the centre face is picked, the two sides are found from it |
 
@@ -546,7 +546,7 @@ still cut it, and the feature only complains when nothing cut anything.
 | Option | Values | Anvil |
 |---|---|---|
 | Object | Bodies, Components | partial — bodies |
-| From / To geometry | **point, line, plane, circle, or coordinate system** | partial — face to face |
+| From / To geometry | point, line, plane, circle, or coordinate system | has, v2.64.0, less a coordinate system. A flat face, a round face, a circular edge, a straight edge or a plane: what align needs of any of them is a place and a direction, and those all have both |
 | Flip | invert 180 degrees | has |
 | Angle | rotate 90 degrees per click | has, as a typed angle rather than a click |
 
