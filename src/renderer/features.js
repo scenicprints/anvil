@@ -7057,10 +7057,48 @@ export function rebuild(doc, options = {}) {
         const line = SM.orientBendLine(found.panel.contour, { a: found.a, b: found.b });
         const shifted = shiftLineInto(found.panel.contour, line, back);
 
+        // Fusion's Flange Width Type. Full Edge is the whole of the edge and
+        // is what a flange has always been here; the others take a piece of
+        // it, which is how a tab gets made without cutting the panel first.
+        // The panel tree already carried v0 and v1, so this is a matter of
+        // working out what to pass rather than new geometry.
+        const full = SM.bendLineLength(found.panel, shifted);
+        const width = feature.widthType || 'full';
+        let v0;
+        let v1;
+        if (width !== 'full' && full > 0) {
+          const w = Math.abs(safeEval(feature.width, scope, full / 2));
+          const off = safeEval(feature.widthOffset, scope, 0);
+          if (width === 'symmetric') {
+            const half = Math.min(w, full) / 2;
+            v0 = full / 2 - half;
+            v1 = full / 2 + half;
+          } else if (width === 'twoSides') {
+            // From a point along the edge, so much each way.
+            const at = Math.max(0, Math.min(full, off));
+            v0 = Math.max(0, at - w / 2);
+            v1 = Math.min(full, at + w / 2);
+          } else if (width === 'offsets') {
+            // Held off both ends by a stated amount, which is what a flange
+            // between two reference faces comes to.
+            v0 = Math.max(0, off);
+            v1 = Math.max(v0, full - w);
+          }
+          if (!(v1 > v0 + 1e-6)) {
+            errs.push({
+              feature: feature.id,
+              message: 'That flange width leaves nothing of the edge to fold'
+            });
+            continue;
+          }
+        }
+
         const res = SM.addFlangePanel(part, found.panel.id, shifted, {
           angle,
           radius,
           height,
+          v0,
+          v1,
           panelId: `${feature.id}:p${n}`,
           bendId: `${feature.id}:b${n}`,
           relief: feature.relief !== false

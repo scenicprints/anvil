@@ -489,6 +489,18 @@ export function foldPanel(part, panelId, line, opts) {
  * order. Only one of the two ways round a line can satisfy that, so the line is
  * ordered here, once, and nothing after this has to check.
  */
+/**
+ * How long a bend line is across the panel it sits on.
+ *
+ * The same ordering `addFlangePanel` uses, so a width measured against this is
+ * measured in the same direction the flange is built in. Without that a width
+ * given from one end would be applied from the other on half the edges.
+ */
+export function bendLineLength(panel, line) {
+  const ordered = orientBendLine(panel.contour, line);
+  return Math.hypot(ordered.b[0] - ordered.a[0], ordered.b[1] - ordered.a[1]);
+}
+
 export function orientBendLine(contour, line) {
   const d = unit2([line.b[0] - line.a[0], line.b[1] - line.a[1]]);
   // Out of the panel is whichever perpendicular points away from its middle.

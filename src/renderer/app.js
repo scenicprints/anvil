@@ -15312,6 +15312,9 @@ function cmdFlange() {
     angle: '90',
     height: '20',
     radius: '',
+    widthType: 'full',
+    width: '',
+    widthOffset: '0',
     bendPosition: 'inside',
     relief: true
   };
@@ -15682,6 +15685,32 @@ function flangeFields() {
       clear: (f) => {
         f.edges = [];
       }
+    },
+    {
+      // Fusion's Flange Width Type. Full Edge is what a flange has always been
+      // here; the others take a piece of the edge, which is how a tab is made
+      // without cutting the panel first.
+      key: 'widthType',
+      label: 'Width',
+      type: 'select',
+      options: [
+        ['full', 'The full edge'],
+        ['symmetric', 'Symmetric about the middle'],
+        ['twoSides', 'So much either side of a point'],
+        ['offsets', 'Held off both ends']
+      ]
+    },
+    {
+      key: 'width',
+      label: (f) => (f.widthType === 'offsets' ? 'Held off the far end by' : 'Width'),
+      type: 'expr',
+      showIf: (f) => (f.widthType || 'full') !== 'full'
+    },
+    {
+      key: 'widthOffset',
+      label: (f) => (f.widthType === 'offsets' ? 'Held off the near end by' : 'Centred at'),
+      type: 'expr',
+      showIf: (f) => ['twoSides', 'offsets'].includes(f.widthType)
     },
     { key: 'height', label: 'Height', type: 'expr' },
     { key: 'angle', label: 'Angle', type: 'expr' },

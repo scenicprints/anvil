@@ -11979,6 +11979,88 @@ async function run() {
     near(volumes[1], 40 * 30 * 4, 1, 'and the one made to the thick one');
   });
 
+  test('sheet metal: a flange can take part of an edge instead of all of it', () => {
+    // Fusion's Flange Width Type. The full edge is what a flange has always
+    // been here; taking a piece of it is how a tab gets made without cutting
+    // the panel first.
+    const bracket = (extra) => {
+      const doc = newDocument();
+      doc.sheetMetalRules = [
+        { ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2', bendRadius: '2' }
+      ];
+      doc.sheetMetalRule = 'Thin';
+
+      const sk = newSketch('XY', 'Plate');
+      sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      doc.sketches[sk.id] = sk;
+
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] }
+      ];
+      let out = rebuild(doc);
+      const topo = buildTopology(K.meshData(out.bodies[0].solid));
+      const edge = topo.edges.find(
+        (e) => e.kind === 'line' && e.convex && Math.abs(e.refPoint[0] - 60) < 0.01 &&
+          Math.abs(e.refPoint[2] - 2) < 0.01
+      );
+      assert(edge, 'found the edge to flange off');
+      const ref = edgeReference(edge, topo);
+      const plateVolume = out.bodies[0].solid.volume();
+      out.dispose();
+
+      doc.features.push({
+        id: uid('f'),
+        type: 'flange',
+        bodies: 'all',
+        edges: [ref],
+        angle: '90',
+        height: '20',
+        ...extra
+      });
+      out = rebuild(doc);
+      assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+      const v = out.bodies[0].solid.volume();
+      const bb = out.bodies[0].solid.boundingBox();
+      out.dispose();
+      return { added: v - plateVolume, width: bb.max[1] - bb.min[1] };
+    };
+
+    const whole = bracket({});
+    const half = bracket({ widthType: 'symmetric', width: '20' });
+
+    // The edge is 40 long, so half of it is half the metal added.
+    assert(
+      half.added < whole.added * 0.6 && half.added > whole.added * 0.4,
+      `a twenty wide flange on a forty edge is about half: ${half.added.toFixed(1)} against ${whole.added.toFixed(1)}`
+    );
+    // And the plate is still its full width, so it is the flange that shrank
+    // rather than the part.
+    near(half.width, whole.width, 0.01, 'the plate is untouched');
+
+    // A width that leaves nothing is refused rather than built as nothing.
+    const doc = newDocument();
+    void doc;
+    const none = (() => {
+      try {
+        return bracket({ widthType: 'offsets', width: '40', widthOffset: '40' });
+      } catch (err) {
+        return { failed: String(err.message) };
+      }
+    })();
+    assert(
+      none.failed || none.added < whole.added,
+      'a width that leaves nothing must not come back as a full flange'
+    );
+  });
+
   test('sheet metal: orientation decides which side of the plane the metal goes', () => {
     const plate = (extra) => {
       const doc = newDocument();

@@ -751,7 +751,7 @@ every row carries its own settings.
 | Type | Base, Edge, Contour | has, as three commands |
 | Selection box, per-row settings | several flanges in one feature | **missing** — one at a time |
 | Edges / Profiles | | has |
-| **Flange Width Type** (edge) | Full Edge, Symmetric, Two Sides, **Two Offsets** against reference faces | **missing** — full edge only |
+| Flange Width Type (edge) | Full Edge, Symmetric, Two Sides, Two Offsets | has, v2.55.0. The offsets are given as distances rather than picked against reference faces |
 | Extent Type (edge) | Distance, **To Object** with an offset | partial — distance |
 | Angle (edge) | | has |
 | **Height Datum** (edge) | Inner Faces, Outer Faces, Tangent To Bend | **missing** |

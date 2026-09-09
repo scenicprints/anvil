@@ -1067,6 +1067,10 @@ side, or straddling it, which is the same question a rib's start side answers
 and matters for the same reason: the plane you drew on is usually a face of
 something else. It can go into a component of its own.
 
+A **flange** can take the whole of an edge or a piece of it: symmetric about
+the middle, so much either side of a point, or held off both ends. That is how a
+tab gets made without cutting the panel first.
+
 **Lofted Flange** is the one sheet metal feature that is not a fold. A
 transition from a square duct to a round one has no bend line anywhere on it, so
 it cannot go in the panel and bend tree and it has no flat pattern here. That is
