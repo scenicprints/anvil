@@ -1218,6 +1218,13 @@ takes the roughness out without taking the size out with it; shrinking is a
 setting rather than a side effect. **Plane Cut** trims, splits into two bodies,
 or splits the faces only, and caps what it opened. **Erase And Fill** removes
 faces and closes over where they were, which is how a lump of scan noise goes.
+**Align** lays a chosen flat region of a mesh down on a chosen plane, which is
+the first thing anybody does with a downloaded or scanned part: it arrives at
+whatever angle the exporter felt like and nothing can be measured, cut or
+printed until its flat bottom is flat. The region is one of the face groups, so
+it is already a fitted plane rather than something to fit. The part turns face
+down and then slides along the plane's normal until it reaches it, because
+turning alone leaves it hanging where it was.
 **Shell** hollows a mesh out with an even wall, by the same erosion the solid
 Shell uses, because that is what gives an even wall through curves and a
 downloaded part is nothing but curves. It refuses an open mesh: there is no

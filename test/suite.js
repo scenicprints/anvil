@@ -7213,6 +7213,70 @@ async function run() {
     res.dispose();
   });
 
+  test('mesh align: a tilted part is laid flat on the plane it was given', () => {
+    // A box turned off square, which is what a scan or a downloaded part
+    // arrives as. Laying one of its faces on XY has to leave that face flat and
+    // sitting on z = 0, or nothing about the part can be measured or printed.
+    const scope = new K.Scope();
+    const tilted = K.transform(
+      K.box([20, 20, 10], true, scope),
+      new THREE.Matrix4()
+        .makeRotationX(0.4)
+        .multiply(new THREE.Matrix4().makeRotationY(0.25)).elements,
+      scope
+    );
+    const mesh = K.meshData(tilted);
+    scope.dispose();
+
+    const run = (extra) => {
+      const doc = newDocument();
+      doc.meshData.m1 = {
+        verts: Array.from(mesh.vertProperties),
+        tris: Array.from(mesh.triVerts)
+      };
+      doc.features = [
+        { id: uid('f'), type: 'insertMesh', data: 'm1', label: 'Tilted', scale: '1', at: [0, 0, 0] },
+        { id: uid('f'), type: 'faceGroups', bodies: 'all', angle: '20' },
+        { id: uid('f'), type: 'meshAlign', bodies: 'all', plane: 'XY', ...extra }
+      ];
+      return rebuild(doc);
+    };
+
+    // Which region: the widest one, which on a box laid over is a face.
+    const found = run({});
+    assert(
+      found.errors.some((e) => /Click a flat region/.test(e.message)),
+      `nothing picked should say so, got ${JSON.stringify(found.errors)}`
+    );
+    const topo = buildTopology(found.bodies[0].sheet);
+    const biggest = topo.faces.slice().sort((a, b) => b.area - a.area)[0];
+    assert(biggest, 'the mesh has face groups to pick from');
+    const ref = faceReference(biggest);
+    found.dispose();
+
+    const res = run({ face: ref });
+    assert(res.errors.length === 0, `errors: ${JSON.stringify(res.errors)}`);
+    const after = buildTopology(res.bodies[0].sheet);
+    // Found by which way it faces, not by reference: a face reference matches
+    // on orientation first and turning the part is exactly what changes that.
+    // Not by size either, because a twenty by twenty by ten box has two faces
+    // of the same area and the one on top is as big as the one underneath.
+    // The builder resolves against the mesh as it stood before the turn, which
+    // is why the feature itself is stable across rebuilds.
+    const laid = after.faces.find((f) => f.normal[2] < -0.98);
+    assert(laid, 'a region ended up facing down');
+    near(laid.area, biggest.area, biggest.area * 0.01, 'and it is the region that was picked');
+    // And it reaches the plane rather than hanging above it.
+    near(laid.centre[2], 0, 0.02, 'sitting on it');
+    // The part is above, not through.
+    const pts = MT.meshPoints(res.bodies[0].sheet);
+    assert(
+      pts.every((p) => p[2] > -0.05),
+      'and nothing of it is below the plane'
+    );
+    res.dispose();
+  });
+
   test('mesh scale: resized about its middle, or about the origin', () => {
     // A scanned mesh arrives in whatever units the scanner felt like, and a
     // printed one often wants a percent or two of shrink allowance. Scaling

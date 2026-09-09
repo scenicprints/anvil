@@ -1951,6 +1951,9 @@ async function runCommand(cmd) {
     case 'meshShell':
       cmdMeshShell();
       break;
+    case 'meshAlign':
+      cmdMeshAlign();
+      break;
     case 'convertMesh':
       cmdConvertMesh();
       break;
@@ -12377,6 +12380,7 @@ const PICK_PROMPTS = {
   movePointTo: 'Click where to measure to.',
   movePivot: 'Click the point to turn about.',
   moveFaces: 'Click the faces to move.',
+  alignRegion: 'Click the flat region of the mesh to lay down.',
   moveDirection: 'Click an edge, a flat face, or an origin plane.',
   startTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
   endTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
@@ -13732,6 +13736,16 @@ function pickIntoEdit(hit) {
   } else if (ed.pickInto === 'trimKeep') {
     if (!hit.point) return true;
     f.keep = [hit.point.x, hit.point.y, hit.point.z];
+    ed.pickInto = null;
+  } else if (ed.pickInto === 'alignRegion') {
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const rec = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = rec?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    f.face = faceReference(face);
+    if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
+    // One region is all this takes, so let go rather than swallowing the next
+    // click as well.
     ed.pickInto = null;
   } else if (ed.pickInto === 'eraseFaces') {
     if (hit.kind !== 'face' || hit.faceId === null) return true;
@@ -16022,6 +16036,49 @@ function meshShellFields() {
       label: '',
       type: 'note',
       text: 'A mesh has to be closed before it can be hollowed: there is no inside to take away otherwise. The wall is even all round, including through curves, which is what a downloaded or scanned part is made of.'
+    }
+  ];
+}
+
+function cmdMeshAlign() {
+  startMeshFeature('meshAlign', 'Align Mesh', meshAlignFields(), {
+    plane: 'XY',
+    face: null,
+    flip: false
+  });
+  setEditPick('alignRegion');
+  setStatus('Click the flat region of the mesh to lay down.');
+}
+
+function meshAlignFields() {
+  return [
+    meshBodyField(),
+    {
+      key: '__region',
+      label: 'Region to lay down',
+      type: 'pick',
+      pick: 'alignRegion',
+      summary: (f) => (f.face ? 'A flat region of the mesh' : 'Nothing yet'),
+      clear: (f) => {
+        f.face = null;
+      }
+    },
+    {
+      key: 'plane',
+      label: 'Lay it on',
+      type: 'select',
+      options: planeOptions(),
+      get: (f) => optionForPlane(f.plane),
+      set: (f, v) => {
+        f.plane = planeSpecFromOption(v);
+      }
+    },
+    { key: 'flip', label: 'Stand it on that face instead', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The region is one of the mesh face groups, so it is already a fitted plane. If the mesh has no groups yet, run Generate Face Groups first.'
     }
   ];
 }
@@ -18895,6 +18952,8 @@ function describeFeature(feature) {
       return { title: 'Plane Cut', fields: meshPlaneCutFields() };
     case 'meshShell':
       return { title: 'Shell Mesh', fields: meshShellFields() };
+    case 'meshAlign':
+      return { title: 'Align Mesh', fields: meshAlignFields() };
     case 'meshErase':
       return { title: 'Erase And Fill', fields: meshEraseFields() };
     case 'textureExtrude':

@@ -1342,6 +1342,10 @@ export function rebuild(doc, options = {}) {
           doMeshShell(feature, scope, scopeObj, errors);
           break;
 
+        case 'meshAlign':
+          doMeshAlign(feature, scope, scopeObj, errors);
+          break;
+
         case 'textureExtrude':
           doTextureExtrude(feature, scope, scopeObj, errors);
           break;
@@ -7972,6 +7976,74 @@ export function rebuild(doc, options = {}) {
   }
 
   /**
+   * Turn a mesh body so a chosen flat region of it lies on a chosen plane.
+   *
+   * The first thing anybody does with a downloaded or scanned part: it arrives
+   * at whatever angle the scanner or the exporter felt like, and nothing can be
+   * measured, cut or printed until its flat bottom is flat. Doing it by hand
+   * means guessing three angles.
+   *
+   * The face groups a mesh already carries are the fit: a group is a run of
+   * triangles that meet smoothly, so its normal is the plane through them and
+   * no separate fitting step is needed.
+   */
+  function doMeshAlign(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Align works on a mesh body');
+
+    const onto = resolvePlane(feature.plane || 'XY', scope, builtConstruction);
+
+    for (const b of targets) {
+      const topo = buildTopology(b.sheet);
+      const faces = feature.face ? resolveFaceRefs(topo, [feature.face]) : [];
+      const face = faces[0];
+      if (!face) {
+        errs.push({
+          feature: feature.id,
+          message: feature.face
+            ? 'The region this was aligned by is no longer on the mesh'
+            : 'Click a flat region of the mesh to lay down'
+        });
+        continue;
+      }
+
+      // The picked face goes face down on the plane, so its own normal ends up
+      // pointing the opposite way to the plane's. That is what laying a part
+      // down means; flipping stands it on its head instead.
+      const want = feature.flip ? [...onto.n] : [-onto.n[0], -onto.n[1], -onto.n[2]];
+      const from = new THREE.Vector3(face.normal[0], face.normal[1], face.normal[2]).normalize();
+      const to = new THREE.Vector3(want[0], want[1], want[2]).normalize();
+      const q = new THREE.Quaternion().setFromUnitVectors(from, to);
+
+      const pivot = new THREE.Vector3(face.centre[0], face.centre[1], face.centre[2]);
+      const m = new THREE.Matrix4()
+        .makeTranslation(pivot.x, pivot.y, pivot.z)
+        .multiply(new THREE.Matrix4().makeRotationFromQuaternion(q))
+        .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+
+      const points = MT.meshPoints(b.sheet).map((p) => {
+        const v = new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(m);
+        return [v.x, v.y, v.z];
+      });
+
+      // Turning alone leaves the part hanging wherever it was. Laying it down
+      // means the picked region actually reaches the plane, so the whole body
+      // slides along the plane's normal until it does.
+      const gap =
+        (pivot.x - onto.origin[0]) * onto.n[0] +
+        (pivot.y - onto.origin[1]) * onto.n[1] +
+        (pivot.z - onto.origin[2]) * onto.n[2];
+      for (const p of points) {
+        p[0] -= onto.n[0] * gap;
+        p[1] -= onto.n[1] * gap;
+        p[2] -= onto.n[2] * gap;
+      }
+
+      replaceBody(bodies, b, { sheet: SH.makeSheet(points, MT.meshTris(b.sheet)) });
+    }
+  }
+
+  /**
    * Push a mesh's surface in and out by the brightness of an image.
    *
    * A texture that is really there, in the geometry, so it survives being
@@ -8328,6 +8400,7 @@ export const FEATURE_LABELS = {
   meshSmooth: 'Smooth',
   meshPlaneCut: 'Plane Cut',
   meshShell: 'Shell Mesh',
+  meshAlign: 'Align Mesh',
   meshSeparate: 'Separate',
   meshMerge: 'Merge Bodies',
   meshErase: 'Erase And Fill',

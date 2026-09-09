@@ -668,16 +668,22 @@ surface body, as opposed to a solid.
 | Smooth | has |
 | Reverse normal | has |
 | Erase and Fill | has |
-| Align to a plane | **missing**. Needs picking a planar region on the mesh, fitting a plane to it and turning the body onto a chosen one, so it is category 2 rather than a quick win |
+| Align to a plane | has, v2.44.0 |
 | Extrude texture | has |
 | Separate | has |
 | Scale | has, v2.32.0. Uniform or per axis, about the body's middle or the origin |
 | Convert to solid | has |
 | Mesh Selection Palette | **missing** |
 
-Anvil also has patch, repair, stitch and section, which are its own. The gaps
-left are align to a plane and the selection palette that governs how clicking
-picks mesh faces.
+Anvil also has patch, repair, stitch and section, which are its own. The gap
+left is the selection palette that governs how clicking picks mesh faces.
+
+Align to a plane turned out to need no fitting step at all. The face groups a
+mesh already carries are the fit: a group is a run of triangles that meet
+smoothly, so its normal is the plane through them. Pick the region, pick the
+plane, and the part turns face down onto it and then slides along the plane's
+normal until it actually reaches it. Turning alone leaves the part hanging
+wherever it was, which looks aligned from one angle and is not.
 
 Mesh Shell uses the same erosion the solid Shell does, because the answer is
 the same answer: a ball rolled around the inside is what gives an even wall
