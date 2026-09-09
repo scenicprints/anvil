@@ -360,6 +360,7 @@ export function normalizeBlend(f) {
     // A blend made in this session always writes both, so an absent one is an
     // old document, and an old document was circular and G1.
     if (set.radius2 === undefined) set.radius2 = set.radius;
+    if (set.setback === undefined) set.setback = '1.5';
     if (!set.continuity) set.continuity = 'G1';
     if (set.weight === undefined) set.weight = '1';
   }
@@ -2079,6 +2080,70 @@ export function rebuild(doc, options = {}) {
     }
 
     apply(feature, solid, feature.op || 'new');
+
+    /*
+     * Fusion's Tangent Edges: Merge or Keep.
+     *
+     * A loft between sections in line with each other comes out as one smooth
+     * side, which is the default and is what makes the flank of a lofted duct
+     * one face. Kept, each band between two sections is its own face, which is
+     * what you want when the next thing you do is draft or press pull one of
+     * them.
+     *
+     * Done by labelling the triangles rather than by tagging the geometry,
+     * which was the first attempt: the boolean step tags the whole tool with
+     * the feature's own name to give its faces provenance, so anything tagged
+     * before that is overwritten. A label is carried on the body and the
+     * topology treats it as a hard boundary in both directions.
+     */
+    if (feature.tangentEdges === 'keep' && picked.length > 2) {
+      const made = bodies[bodies.length - 1];
+      if (made?.solid) {
+        const mesh = K.meshData(made.solid);
+        const stride = mesh.numProp;
+        const pos = mesh.vertProperties;
+        const tris = mesh.triVerts;
+        const count = tris.length / 3;
+        // Where each section sits along the run, so a triangle can be put in
+        // the band it belongs to by its own middle.
+        const n = picked[0].plane.n;
+        const at = (p) => p[0] * n[0] + p[1] * n[1] + p[2] * n[2];
+        const cuts = picked.map((sec) => at(sec.plane.origin));
+        const rising = cuts[cuts.length - 1] >= cuts[0];
+        // A label says "these triangles are one face and nothing else joins
+        // them", so labelling purely by band would merge each band's sides,
+        // top and all into a single face. What is wanted is the ordinary
+        // angular grouping and then a further split at each section, so the
+        // label carries both: which face the angle put it in, and which band
+        // it falls in.
+        let byAngle;
+        try {
+          byAngle = buildTopology(mesh);
+        } catch {
+          byAngle = null;
+        }
+        if (byAngle) {
+          const faceOf = new Int32Array(count).fill(0);
+          byAngle.faces.forEach((face, i) => {
+            for (const t of face.tris) faceOf[t] = i;
+          });
+          const labels = new Int32Array(count);
+          for (let t = 0; t < count; t++) {
+            let c = 0;
+            for (let k = 0; k < 3; k++) {
+              const v = tris[t * 3 + k] * stride;
+              c += (pos[v] * n[0] + pos[v + 1] * n[1] + pos[v + 2] * n[2]) / 3;
+            }
+            let band = 0;
+            for (let i = 1; i < cuts.length - 1; i++) {
+              if (rising ? c > cuts[i] : c < cuts[i]) band = i;
+            }
+            labels[t] = faceOf[t] * 1000 + band;
+          }
+          replaceBody(bodies, made, { groupLabels: labels });
+        }
+      }
+    }
   }
 
   /** One loft section: a sketch profile, a planar face, a point, or model edges. */
@@ -3059,6 +3124,18 @@ export function rebuild(doc, options = {}) {
     const angle = safeEval(feature.angle, scope, 3);
     if (Math.abs(angle) < 1e-9) return bodies;
 
+    /*
+     * Fusion's Parting Line type. A fixed plane holds the part's size where it
+     * crosses that plane; a parting line holds it along an edge already on the
+     * part, which is what a moulded shape with a curved split actually has.
+     *
+     * The two meet in the same place: a face leans about the line where it
+     * meets the thing that holds it. A plane gives that line by intersection,
+     * and a parting edge is that line already, so the only difference is where
+     * the line comes from. The plane is still needed for the pull direction,
+     * which is the way the mould opens and is not something an edge can say.
+     */
+    const byLine = feature.partingType === 'line';
     const neutral = resolvePlane(feature.neutral || 'XY', scope, builtConstruction);
     // Which way the mould opens. Flipping it turns every lean the other way,
     // because the axis each face turns about is the cross of its normal with
@@ -3076,6 +3153,17 @@ export function rebuild(doc, options = {}) {
         errs.push({
           feature: feature.id,
           message: 'Draft has lost the faces it was applied to'
+        });
+        continue;
+      }
+
+      const partingEdges = byLine ? resolveEdgeRefs(topo, feature.partingEdges || []) : [];
+      if (byLine && !partingEdges.length) {
+        errs.push({
+          feature: feature.id,
+          message: (feature.partingEdges || []).length
+            ? 'Draft has lost the parting line it was drafted about'
+            : 'Click the edges the draft should turn about'
         });
         continue;
       }
@@ -3105,8 +3193,24 @@ export function rebuild(doc, options = {}) {
         }
         const d = [axis[0] / axisLen, axis[1] / axisLen, axis[2] / axisLen];
 
-        // A point on the line where the face meets the neutral plane.
-        const pivot = planeIntersectionPoint(face, neutral, d);
+        // A point on the line the face turns about: where it meets the
+        // neutral plane, or a point on the parting edge that lies on it.
+        let pivot;
+        if (byLine) {
+          const id = topo.faces.indexOf(face);
+          const mine = partingEdges.filter((e) => e.faceA === id || e.faceB === id);
+          const on = mine[0] || null;
+          if (!on) {
+            errs.push({
+              feature: feature.id,
+              message: 'One of those faces has none of the parting edges on it'
+            });
+            continue;
+          }
+          pivot = on.refPoint ? [...on.refPoint] : null;
+        } else {
+          pivot = planeIntersectionPoint(face, neutral, d);
+        }
         if (!pivot) continue;
 
         const prism = buildFacePrism(mesh, face, span, ks);
@@ -4771,7 +4875,9 @@ export function rebuild(doc, options = {}) {
           sizeFor,
           continuity,
           weight: continuity === 'G2' ? safeEval(set.weight, scope, 1) : undefined,
-          cornerType: kind === 'chamfer' ? set.cornerType || 'miter' : undefined,
+          cornerType:
+            kind === 'chamfer' ? set.cornerType || 'miter' : set.cornerType || 'ball',
+          setback: kind === 'fillet' ? safeEval(set.setback, scope, 1.5) : undefined,
           size2:
             kind === 'chamfer'
               ? chamferSecondDistance(kind, set, size, scope)

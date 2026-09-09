@@ -2077,6 +2077,81 @@ async function run() {
     near(other.hi, -one.lo, 0.01, 'mirrored about it');
   });
 
+  test('draft: a parting line holds the size along an edge, not at a plane', () => {
+    // Fusion's Parting Line type. A fixed plane holds the part's size where it
+    // crosses that plane; a parting line holds it along an edge already on the
+    // part. On a box drafted about its own top rim, the top stays exactly the
+    // size it was and everything below it leans in.
+    // Built here rather than with the shared helper, which is declared further
+    // down the file than this test runs.
+    const plainBox = () => {
+      const d = newDocument();
+      d.features.push(prim('box', { width: '40', depth: '40', height: '20', centered: true }));
+      return d;
+    };
+    const doc = plainBox();
+    let res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const sides = topo.faces.filter((f) => f.planar && Math.abs(f.normal[2]) < 0.01);
+    assert(sides.length === 4, `four walls, got ${sides.length}`);
+    const rim = topo.edges.filter(
+      (e) => e.kind === 'line' && Math.abs(e.refPoint[2] - 10) < 0.01
+    );
+    assert(rim.length === 4, `four edges round the top, got ${rim.length}`);
+    const faces = sides.map((f) => faceReference(f));
+    const edges = rim.map((e) => edgeReference(e, topo));
+    const plain = res.bodies[0].solid.volume();
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'draft',
+      bodies: 'all',
+      faces,
+      angle: '6',
+      neutral: 'XY',
+      partingType: 'line',
+      partingEdges: edges
+    });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+
+    // Measured face by face rather than by the bounding box, which cannot say
+    // which end of the part grew: what is being checked is that the rim held
+    // its size and the far end did not.
+    const after = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = after.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    const bottom = after.faces.find((f) => f.planar && f.normal[2] < -0.99);
+    assert(top && bottom, 'the box still has a top and a bottom');
+    near(top.area, 40 * 40, 1, 'the top is still the size the rim held it to');
+    assert(
+      Math.abs(bottom.area - 40 * 40) > 100,
+      `and the far end leaned: ${bottom.area.toFixed(0)} against ${40 * 40}`
+    );
+    near(K.boundingBox(res.bodies[0].solid).max[2], 10, 0.05, 'as tall as it was');
+    assert(res.bodies[0].solid.volume() !== plain, 'and the shape changed');
+    res.dispose();
+
+    // Nothing picked is said rather than passed over.
+    const empty = plainBox();
+    empty.features.push({
+      id: uid('f'),
+      type: 'draft',
+      bodies: 'all',
+      faces,
+      angle: '6',
+      neutral: 'XY',
+      partingType: 'line',
+      partingEdges: []
+    });
+    const out = rebuild(empty);
+    assert(
+      out.errors.some((e) => /turn about/.test(e.message)),
+      `expected a word about picking edges, got ${JSON.stringify(out.errors)}`
+    );
+    out.dispose();
+  });
+
   test('draft: two sides may lean by different amounts', () => {
     // A box drafted about a plane through its middle. Symmetric leans the same
     // amount each way; two sides takes an angle each, which is what a part with
@@ -3739,6 +3814,73 @@ async function run() {
     assert(
       centred.reach > plain.reach + 1,
       `and leans it over: ${centred.reach.toFixed(1)} against ${plain.reach.toFixed(1)}`
+    );
+  });
+
+  test('loft: tangent edges can be kept as a face per section', () => {
+    // Three sections, so the loft has two bands that meet smoothly along the
+    // way. Merged, the sides read as one surface each; kept, each band is its
+    // own face, which is what lets a draft or a press pull take one of them.
+    const build = (extra) => {
+      const doc = newDocument();
+      const at = (side, offset, name) => {
+        const sk = newSketch(offset ? { base: 'XY', offset: String(offset) } : 'XY', name);
+        const h = side / 2;
+        sk.points = [
+          { x: -h, y: -h },
+          { x: h, y: -h },
+          { x: h, y: h },
+          { x: -h, y: h }
+        ];
+        sk.entities = [
+          { id: 1, type: 'line', p: [0, 1] },
+          { id: 2, type: 'line', p: [1, 2] },
+          { id: 3, type: 'line', p: [2, 3] },
+          { id: 4, type: 'line', p: [3, 0] }
+        ];
+        sk.nextEntityId = 5;
+        doc.sketches[sk.id] = sk;
+        doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+        return sk.id;
+      };
+      // Evenly spaced and evenly shrinking, so the two bands are in line with
+      // each other and the sides really are smooth all the way up. Sections
+      // that changed direction at the middle would put a crease there and the
+      // topology would split the faces anyway, which would prove nothing.
+      const a = at(20, 0, 'Bottom');
+      const b = at(17, 20, 'Middle');
+      const c = at(14, 40, 'Top');
+      doc.features.push({
+        id: uid('f'),
+        type: 'loft',
+        sections: [{ sketch: a }, { sketch: b }, { sketch: c }],
+        op: 'new',
+        ...extra
+      });
+      const res = rebuild(doc);
+      assert(res.errors.length === 0, JSON.stringify(res.errors));
+      // Read with the body's own options, which is where the labels live. Read
+      // without them the labels are ignored and both answers come back the
+      // same, which is how this test failed first.
+      const out = {
+        faces: buildTopology(K.meshData(res.bodies[0].solid), topologyOptions(res.bodies[0]))
+          .faces.length,
+        volume: res.bodies[0].solid.volume()
+      };
+      res.dispose();
+      return out;
+    };
+
+    const merged = build({});
+    const kept = build({ tangentEdges: 'keep' });
+
+    // The same solid either way. This decides how the surface is read, not
+    // what shape it is, and a version that cut the part instead of tagging it
+    // would fail here first.
+    near(kept.volume, merged.volume, merged.volume * 0.001, 'the same part either way');
+    assert(
+      kept.faces > merged.faces,
+      `keeping them leaves more faces: ${kept.faces} against ${merged.faces}`
     );
   });
 

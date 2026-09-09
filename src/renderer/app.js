@@ -308,7 +308,14 @@ function rebuildAll() {
         // A mesh body can say at what angle two triangles stop being the same
         // surface. Without that a scan is a million faces of one triangle each
         // and nothing on it can be pointed at.
-        topology = buildTopology(mesh, topologyOptions(b));
+        // The document's own palette setting stands behind whatever a body
+        // carries, so choosing how much a click takes works on a mesh that has
+        // never had face groups worked out for it.
+        const opts = topologyOptions(b);
+        if (b.mesh && !opts.smoothDeg && state.doc.meshSelectAngle) {
+          opts.smoothDeg = state.doc.meshSelectAngle;
+        }
+        topology = buildTopology(mesh, opts);
       } catch (err) {
         res.errors.push({ feature: b.createdBy, message: `Topology: ${err.message}` });
       }
@@ -582,6 +589,7 @@ function handleViewportDown(e) {
         'jointAxis2',
         'surfaceCurves',
         'sheetEdges',
+        'partingEdges',
         // A loft section can be a run of model edges, so an edge has to be
         // offered there as well as a profile. An align can be lined up by a
         // circle, so the same goes for its two rows.
@@ -2013,6 +2021,9 @@ async function runCommand(cmd) {
     case 'selectByName':
       cmdSelectByName();
       break;
+    case 'meshPalette':
+      cmdMeshPalette();
+      break;
     case 'isolate':
       cmdIsolate();
       break;
@@ -2587,6 +2598,9 @@ function migrate(data) {
   doc.components = doc.components || [];
   doc.joints = doc.joints || [];
   doc.selectionSets = doc.selectionSets || [];
+  // How much of a mesh one click takes. Absent means the topology's own
+  // default, which is what every document before this used.
+  if (doc.meshSelectAngle === undefined) doc.meshSelectAngle = null;
   doc.baseBodies = doc.baseBodies || [];
   normalizeSheetRules(doc);
   doc.meshData = doc.meshData || {};
@@ -3849,6 +3863,8 @@ function blendFields(kind) {
             filletType: 'constant',
             continuity: 'G1',
             weight: '1',
+            cornerType: 'ball',
+            setback: '1.5',
             chord: '2',
             holdEdges: [],
             chamferType: 'equal',
@@ -4856,8 +4872,41 @@ function draftFields() {
       }
     },
     {
+      // Fusion's Type. A fixed plane holds the part's size where it crosses
+      // that plane; a parting line holds it along an edge already on the part,
+      // which is what a moulded shape with a curved split actually has.
+      key: 'partingType',
+      label: 'Type',
+      type: 'select',
+      options: [
+        ['plane', 'Fixed plane'],
+        ['line', 'Parting line, an edge on the part']
+      ]
+    },
+    {
+      key: '__partingEdges',
+      label: 'Parting line',
+      type: 'pick',
+      pick: 'partingEdges',
+      showIf: (f) => f.partingType === 'line',
+      summary: (f) => {
+        const n = (f.partingEdges || []).length;
+        return n ? `${n} edge${n === 1 ? '' : 's'}` : 'Nothing yet';
+      },
+      clear: (f) => {
+        f.partingEdges = [];
+      }
+    },
+    {
+      key: '__partingNote',
+      label: '',
+      type: 'note',
+      showIf: (f) => f.partingType === 'line',
+      text: 'The plane below is still what says which way the mould opens. The parting line only says where the part keeps its size.'
+    },
+    {
       key: '__neutral',
-      label: 'Neutral plane',
+      label: (f) => (f.partingType === 'line' ? 'Pull direction from' : 'Neutral plane'),
       type: 'pick',
       pick: 'neutral',
       summary: (f) => objectRefText(f.neutralRef) ,
@@ -5354,6 +5403,19 @@ function loftFields(feature) {
       clear: (f) => {
         f.rails = [];
       }
+    },
+    {
+      // Fusion's Tangent Edges. Merged, the smooth joins along the loft are
+      // read as one surface, which is what makes the side of a lofted duct one
+      // face. Kept, each band stays its own face, which is what you want when
+      // the next thing you do is draft or press pull one of them.
+      key: 'tangentEdges',
+      label: 'Tangent edges',
+      type: 'select',
+      options: [
+        ['merge', 'Merged into one face'],
+        ['keep', 'Kept as a face per section']
+      ]
     },
     { key: 'closed', label: 'Closed loop', type: 'bool' },
     { key: 'op', label: 'Operation', type: 'select', options: EXTRUDE_OP_OPTIONS,
@@ -6323,6 +6385,7 @@ const RIBBON_MENUS = {
     ['selectSeedBoundary', 'Seed And Boundary'],
     ['selectBySize', 'Select By Size'],
     ['selectByName', 'Select By Name'],
+    ['meshPalette', 'Mesh Selection Palette'],
     ['createSelectionSet', 'Save As A Selection Set'],
     ['duplicateComponent', 'Duplicate The Active Component With Its Joints'],
     ['isolate', 'Isolate'],
@@ -6758,6 +6821,7 @@ function startLoft() {
     startCondition: 'connected',
     endCondition: 'connected',
     guideType: 'rail',
+    tangentEdges: 'merge',
     startWeight: '1',
     endWeight: '1',
     startAngle: '90',
@@ -6942,6 +7006,8 @@ function startDraft() {
     angle2: '3',
     neutral: 'XY',
     sides: 'one',
+    partingType: 'plane',
+    partingEdges: [],
     flipPull: false
   };
   openFeatureEditor(feature, 'Draft', draftFields());
@@ -12064,6 +12130,8 @@ function startEdgeBlend(kind) {
         endRadius: null,
         continuity: 'G1',
         weight: '1',
+        cornerType: 'ball',
+        setback: '1.5',
         chamferType: 'equal',
         distance2: '1',
         angle: '45'
@@ -12850,6 +12918,7 @@ const PICK_PROMPTS = {
   movePointFrom: 'Click where to measure from.',
   movePointTo: 'Click where to measure to.',
   movePivot: 'Click the point to turn about.',
+  partingEdges: 'Click the edges the draft should turn about.',
   'ruleFaces:0': 'Click the faces. Every edge where two of them meet is taken.',
   moveFaces: 'Click the faces to move.',
   fullRoundFaces: 'Click the flat face to round away.',
@@ -13865,6 +13934,28 @@ function pickIntoEdit(hit) {
       return true;
     }
     ed.pickInto = null;
+  } else if (ed.pickInto === 'partingEdges') {
+    // The edges a parting line draft turns about. Clicking one takes the whole
+    // run that carries on from it, the same as a fillet: a parting line round a
+    // moulded part is never one edge.
+    if (hit.kind !== 'edge') return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
+    if (!edge) return true;
+    f.partingEdges = f.partingEdges || [];
+    const run = SEL.tangentEdgeRun(record.topology, [edge.id])
+      .map((id) => record.topology.edges.find((e) => e.id === id))
+      .filter(Boolean)
+      .map((e) => edgeReference(e, record.topology));
+    const ref = edgeReference(edge, record.topology);
+    if (f.partingEdges.some((x) => sameEdgeRef(x, ref))) {
+      f.partingEdges = f.partingEdges.filter((x) => !run.some((r) => sameEdgeRef(x, r)));
+    } else {
+      for (const r of run) {
+        if (!f.partingEdges.some((x) => sameEdgeRef(x, r))) f.partingEdges.push(r);
+      }
+    }
+    if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (ed.pickInto === 'openFaces' || ed.pickInto === 'draftFaces') {
     if (hit.kind !== 'face' || hit.faceId === null) return true;
     const record = (state.records || []).find((r) => r.id === hit.bodyId);
@@ -17247,6 +17338,59 @@ function cmdSelectByName() {
         .join(', ')}.`
     );
   });
+}
+
+/**
+ * Fusion's Mesh Selection Palette: how much of a mesh one click takes.
+ *
+ * A mesh has no faces of its own, only triangles that have been grouped into
+ * regions by the angle between them. That angle is the whole of the answer, and
+ * it is already a setting on the body; the palette is a name for choosing it
+ * without hunting for where it lives.
+ *
+ * The three offered are the three anybody wants. Loose takes a whole smooth
+ * surface and is what a downloaded part usually wants. Tight takes a facet at a
+ * time, which is what a scan with noise in it wants. Between them is the
+ * default the topology uses when nothing is said.
+ */
+function cmdMeshPalette() {
+  const meshes = (state.result?.bodies || []).filter((b) => b.mesh);
+  if (!meshes.length) {
+    setStatus('The selection palette is for mesh bodies, and there are none.');
+    return;
+  }
+  showInspector(
+    'Mesh Selection Palette',
+    [
+      {
+        key: 'angle',
+        label: 'Faces meet within',
+        type: 'select',
+        value: String(state.doc.meshSelectAngle ?? 35),
+        options: [
+          ['60', 'Loose: a whole smooth surface at a time'],
+          ['35', 'Ordinary'],
+          ['12', 'Tight: nearly facet by facet']
+        ]
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'How far two triangles may lean apart and still count as one region. It applies to every mesh body in the document and is remembered with it.'
+      }
+    ],
+    (values) => {
+      const angle = Number(values.angle) || 35;
+      state.doc.meshSelectAngle = angle;
+      for (const f of state.doc.features) {
+        if (f.type === 'faceGroups') f.angle = String(angle);
+      }
+      state.dirty = true;
+      rebuildAll();
+      setStatus(`Mesh regions now break at ${angle} degrees.`);
+    }
+  );
 }
 
 function cmdSelectBySize() {

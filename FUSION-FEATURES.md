@@ -118,7 +118,7 @@ under Path + Guide Rail and nowhere else, and why Anvil now does too.
 | Closed | join the first and last profile into a loop | has |
 | Takeoff Weight / Takeoff Angle | with the Direction end condition | has, v2.41.0 |
 | Tangency Weight | with Tangent, Smooth or Point Tangent | has (start and end weight) |
-| Tangent Edges | Merge, Keep | **missing** |
+| Tangent Edges | Merge, Keep | has, v2.65.0 |
 | Operation / Objects To Cut | | partial |
 | Analysis tab | None, Zebra, Curvature Map, Isocurve | **missing** here |
 
@@ -135,6 +135,14 @@ so ninety degrees is straight out of the plane and reproduces the tangent case
 exactly. That is pinned by a test, because if the two disagree then the angle
 is being measured off the wrong thing and every value of it is wrong by the
 same amount.
+
+Tangent Edges took two goes and the first is worth writing down. Tagging the
+bands as their own geometry does not work: the boolean step tags the whole tool
+with the feature's own name to give its faces provenance, so anything tagged
+before it is overwritten. Labels survive, but a label says "these triangles are
+one face and nothing else joins them", so labelling purely by band merged each
+band's sides and top into a single face. The label carries both in the end:
+which face the angle put the triangle in, and which band it falls in.
 
 Fusion also maps matching corners between closed sections with the same number
 of corners, so the orientation is worked out rather than guessed. Worth knowing:
@@ -323,7 +331,7 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 | Tangent Chain | select tangentially connected edges as one | has, v2.35.0, per set and on by default |
 | Tangency Weight | | has, v2.37.0. How hard the G2 curve is pulled toward the corner |
 | Radius Points | radius and position along one edge (variable only) | has |
-| Corner Type | Rolling Ball, Setback | **missing** |
+| Corner Type | Rolling Ball, Setback | has, v2.65.0. Same construction, larger ball: the sphere is the corner, so a bigger one sits further back along every edge |
 | Rule | All Edges, Between Faces/Features (rule fillet) | has. All Edges v2.48.0, between faces v2.64.0. One list of faces rather than Fusion's two boxes: an edge between two faces is between them whichever box each was put in |
 | Round/Fillets | Rounds and Fillets, Rounds Only, Fillets Only (rule fillet) | has, v2.48.0 |
 | Center Faces / Side 1 / Side 2 | full round fillet | partial — the centre face is picked, the two sides are found from it |
@@ -420,10 +428,10 @@ broken.
 
 | Option | Values | Anvil |
 |---|---|---|
-| Type | Fixed Plane, **Parting Line** | partial — fixed plane |
+| Type | Fixed Plane, Parting Line | has, v2.65.0 |
 | Flip Pull Direction | | has, v2.29.0 |
 | Pull Direction | a plane or face | has (neutral plane) |
-| Parting Tool | plane, face, edge or sketch curve | **missing** |
+| Parting Tool | plane, face, edge or sketch curve | partial — a plane, a face or a run of model edges. A sketch curve that is not on the part is *pending* |
 | Faces | | has. A curved face is refused now rather than taken and then silently skipped |
 | Tangent Chain | | has, v2.36.0. The run is cut back to the flats, because a curved face has no line to lean about and taking one would put a face in the list that could never move |
 | Angle | one, or Angle 1 and Angle 2 for two-sided | has |
@@ -787,7 +795,7 @@ surface body, as opposed to a solid.
 | Separate | has |
 | Scale | has, v2.32.0. Uniform or per axis, about the body's middle or the origin |
 | Convert to solid | has |
-| Mesh Selection Palette | **missing** |
+| Mesh Selection Palette | has, v2.65.0. A mesh has no faces of its own, only triangles grouped by the angle between them, so how much a click takes is that angle and the palette is a name for choosing it |
 
 Anvil also has patch, repair, stitch and section, which are its own. The gap
 left is the selection palette that governs how clicking picks mesh faces.

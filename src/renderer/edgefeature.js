@@ -476,9 +476,21 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
 
       const r = vertexSize.get(v) ?? size;
       if (!(r > 0)) continue;
-      const centre = ballCentre(planes, r);
+
+      /*
+       * Fusion's Corner Type. A rolling ball leaves the corner at the fillet's
+       * own radius, which is what a ball of that size rolling into it would
+       * do. A setback pulls the blend back from the corner and rounds it more
+       * softly, which is what a moulded part wants and what stops three
+       * fillets meeting in a point that will not fill.
+       *
+       * Same construction, larger ball: the sphere is the corner, so a bigger
+       * one sits further back along every edge and leaves a wider round.
+       */
+      const grown = opts.cornerType === 'setback' ? r * Math.max(1, opts.setback ?? 1.5) : r;
+      const centre = ballCentre(planes, grown);
       if (!centre) continue;
-      blends.push(K.translate(K.sphere(r, circleSegments(r), scope), centre, scope));
+      blends.push(K.translate(K.sphere(grown, circleSegments(grown), scope), centre, scope));
     }
   }
 

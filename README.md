@@ -370,6 +370,10 @@ width rather than the same radius. **Hold line** asks for an edge the blend has
 to run out on and takes the radius from the distance to it, which is how a
 fillet is made to die exactly at a step rather than near it.
 
+Where several fillets meet at a corner, the corner is left at the fillet's own
+radius or **set back** from it and rounded more softly, which is what stops
+three fillets meeting in a point that will not fill.
+
 Any of them can be **curvature continuous**, which Fusion calls G2. A circular
 arc meets a flat face with a jump in curvature, from nothing to one over the
 radius, and on a shiny part that jump is a line you can see. G2 keeps the
@@ -389,7 +393,10 @@ of faces that carry on smoothly from it. Its inside corners can be left sharp or
 **rounded to the wall thickness**: eroding leaves them square, which is fine on
 a milled part, a stress raiser on a printed one, and a shape no tool can cut on
 a moulded one. **Draft** tapers one side of the neutral plane
-or both, which is the shape a moulded part has about its parting line.
+or both, which is the shape a moulded part has about its parting line. The size
+can be held at a **fixed plane** or along a **parting line**, an edge already on
+the part, which is what a moulded shape with a curved split actually has; the
+plane still says which way the mould opens.
 
 **Rib** goes two ways, and they are different features rather than settings of
 one. **Along the sketch plane** is Fusion's: the curve is drawn edge on, the
