@@ -1826,6 +1826,98 @@ async function run() {
     res.dispose();
   });
 
+  test('rib: to next stops at the part rather than running through it', () => {
+    // A plate lying at z = 0, and a rib drawn on a plane above it running down.
+    // The depth that reaches the plate is a number nobody should have to work
+    // out, and one that goes stale the moment the plate moves.
+    const build = (extra) => {
+      const doc = newDocument();
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '60', depth: '40', height: '10', centered: true },
+        op: 'new'
+      });
+      // On a plane 20 above the middle of the plate, so the wall has 15 of air
+      // to cross before it arrives and would carry on out of the bottom.
+      const sk = openSketch('XY', [[-20, 0], [20, 0]], 'Rib');
+      sk.plane = { base: 'XY', offset: '20' };
+      doc.sketches[sk.id] = sk;
+      doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+      doc.features.push({
+        id: uid('f'),
+        type: 'rib',
+        sketch: sk.id,
+        thickness: '4',
+        flip: true,
+        op: 'join',
+        targets: 'all',
+        ...extra
+      });
+      return rebuild(doc);
+    };
+
+    const plate = 60 * 40 * 10;
+
+    // A stated depth long enough to reach also carries on out the far side.
+    const through = build({ extent: 'depth', depth: '40' });
+    assert(through.errors.length === 0, JSON.stringify(through.errors));
+    assert(
+      K.boundingBox(through.bodies[0].solid).min[2] < -5 - 1e-3,
+      'a stated depth that long goes out the bottom, which is the problem'
+    );
+    through.dispose();
+
+    const stopped = build({ extent: 'toNext' });
+    assert(stopped.errors.length === 0, JSON.stringify(stopped.errors));
+    const bb = K.boundingBox(stopped.bodies[0].solid);
+    near(bb.min[2], -5, 0.01, 'and to next stops at the plate, not through it');
+    near(bb.max[2], 20, 0.01, 'starting from the plane it was drawn on');
+    // Plate plus a wall 40 long, 4 thick, 15 tall: from z = 20 down to the top
+    // of the plate at z = 5.
+    near(
+      K.properties(stopped.bodies[0].solid).volume,
+      plate + 40 * 4 * 15,
+      1,
+      'exactly the air between the sketch and the part'
+    );
+    stopped.dispose();
+  });
+
+  test('rib: a draft angle leans the wall in as it goes', () => {
+    const wall = (taper) => {
+      const doc = newDocument();
+      const sk = openSketch('XY', [[-20, 0], [20, 0]], 'Rib');
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        {
+          id: uid('f'),
+          type: 'rib',
+          sketch: sk.id,
+          thickness: '6',
+          depth: '10',
+          taper,
+          op: 'new',
+          targets: 'all'
+        }
+      ];
+      const res = rebuild(doc);
+      assert(res.errors.length === 0, JSON.stringify(res.errors));
+      const v = K.properties(res.bodies[0].solid).volume;
+      res.dispose();
+      return v;
+    };
+
+    const straight = wall('0');
+    const leaned = wall('8');
+    assert(leaned < straight, `a draft angle narrows it: ${leaned} against ${straight}`);
+    // Not so much that it has closed up: eight degrees over ten is well under
+    // the three millimetres of half thickness there is to give.
+    assert(leaned > straight * 0.5, 'and it is still a wall');
+  });
+
   /* -------- draft, split, thread -------- */
 
   test('rib: the thickness sits either side of the curve or all to one side', () => {

@@ -6566,12 +6566,20 @@ function startRib() {
     thickness: '2',
     direction: 'symmetric',
     start: 'bottom',
+    extent: 'depth',
     depth: '10',
+    taper: '0',
     flip: false,
     op: state.result?.bodies.length ? 'join' : 'new',
     targets: 'all'
   };
-  openFeatureEditor(feature, 'Rib', [
+  openFeatureEditor(feature, 'Rib', ribFields());
+}
+
+/** The Rib dialog. Its own function so a rib can be reopened from the timeline. */
+function ribFields() {
+  const paths = sketchesWithPaths();
+  return [
     {
       key: 'sketch',
       label: 'Curve',
@@ -6598,10 +6606,33 @@ function startRib() {
         ['top', 'The other']
       ]
     },
-    { key: 'depth', label: 'Depth', type: 'expr' },
+    {
+      // Fusion's Extent Type. To Next runs the wall out until it meets the
+      // part, which is what a rib is for: the depth that reaches the base is a
+      // number nobody should have to work out and one that goes stale the
+      // moment anything above it moves.
+      key: 'extent',
+      label: 'Extent',
+      type: 'select',
+      options: [
+        ['depth', 'A stated depth'],
+        ['toNext', 'To the next body it meets']
+      ]
+    },
+    { key: 'depth', label: 'Depth', type: 'expr', showIf: (f) => f.extent !== 'toNext' },
+    {
+      // Not offered with To Next. A tapered wall run out to a length it does
+      // not know shrinks to nothing before it arrives, so the two settings
+      // contradict each other rather than combining.
+      key: 'taper',
+      label: 'Draft angle (deg)',
+      type: 'expr',
+      showIf: (f) => f.extent !== 'toNext'
+    },
     { key: 'flip', label: 'Flip direction', type: 'bool' },
-    { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS }
-  ]);
+    { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS },
+    TARGETS_FIELD
+  ];
 }
 
 function startDraft() {
@@ -19433,6 +19464,10 @@ function describeFeature(feature) {
       return { title: 'Emboss', fields: embossFields() };
     case 'web':
       return { title: 'Web', fields: webFields(feature) };
+    // Rib had no entry here, so reopening one from the timeline gave nothing
+    // to edit. Its dialog was built inline and is a function now.
+    case 'rib':
+      return { title: 'Rib', fields: ribFields() };
     case 'align':
       return { title: 'Align', fields: alignFields() };
     case 'deleteFace':

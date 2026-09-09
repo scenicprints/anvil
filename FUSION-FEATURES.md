@@ -140,13 +140,13 @@ that is the thing that makes a loft between two rectangles not twist.
 | Presets | last used, defaults, save, rename, delete, set as default | has, v2.40.0, on every dialog |
 | Profile | an open sketch profile | has |
 | Direction | Symmetric, One Direction | has, v2.30.0 |
-| Start | Bottom, Top | **missing** |
 | Thickness | | has |
-| Extent Type | **To Next**, Depth | partial — depth only |
+| Extent Type | To Next, Depth | has, v2.51.0 |
 | Depth | | has |
 | Flip Direction | | has |
-| Draft Angle + Draft Pull Direction + flip | | **missing** |
-| Fillet Radius | a fillet at the foot of the rib | **missing** — Anvil has this on Boss, not Rib |
+| Draft Angle + Draft Pull Direction + flip | | partial — angle and flip, v2.51.0. The pull direction is the sketch normal and is not separately settable |
+| Fillet Radius | a fillet at the foot of the rib | **missing** — Anvil has this on Boss, not Rib. Boss builds its fillet into a revolved section, which a rib of any shape cannot use, so this wants the concave edges of the join found by provenance |
+| Start | Bottom, Top | **missing**, and *pending* a read of what Fusion means by it. Anvil's Start is which side of the curve the thickness sits, which is a different question and is already there |
 
 Presets were a Fusion-wide idea Anvil had nowhere, and shipped in v2.40.0 on
 every dialog that has anything to save. Rib is where the reference documents

@@ -368,6 +368,12 @@ straddling the original surface, and one click on the mouth takes the whole run
 of faces that carry on smoothly from it. **Draft** tapers one side of the neutral plane
 or both, which is the shape a moulded part has about its parting line.
 
+**Rib** thickens an open sketch curve into a wall. Its depth can be a number or
+**to the next body it meets**, which is what a rib is usually for: the depth
+that reaches the base is a number nobody should have to work out and one that
+goes stale the moment anything above it moves. A draft angle leans the wall in
+as it goes, for the same reason a moulded wall has one.
+
 **Hole** has a type, an extent of distance, to an object, or all, a drill point
 angle, a counterbore or countersink, and can be **tapped**, which cuts a real
 thread into the bore rather than drawing one on.

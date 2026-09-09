@@ -2524,8 +2524,73 @@ export function rebuild(doc, options = {}) {
     const plane = sketchPlanes[sk.id] || resolvePlane(sk.plane, scope, builtConstruction);
 
     const thickness = safeEval(feature.thickness, scope, 2);
-    const depth = safeEval(feature.depth, scope, 10);
+    const toNext = feature.extent === 'toNext';
+    const taper = safeEval(feature.taper, scope, 0);
+
+    // To Next runs the wall out far enough to be sure of crossing whatever is
+    // in the way, and the trim below decides where it actually stops.
+    const reach = () => {
+      let far = 0;
+      for (const b of bodies) {
+        if (!b.solid) continue;
+        const bb = K.boundingBox(b.solid);
+        for (const c of [bb.min, bb.max]) {
+          far = Math.max(
+            far,
+            Math.abs(
+              (c[0] - plane.origin[0]) * plane.n[0] +
+                (c[1] - plane.origin[1]) * plane.n[1] +
+                (c[2] - plane.origin[2]) * plane.n[2]
+            )
+          );
+        }
+      }
+      return far + 10;
+    };
+
+    const depth = toNext ? reach() : safeEval(feature.depth, scope, 10);
     if (thickness <= 0 || depth <= 0) return;
+
+    // What the wall has to stop at. Only bodies it is being joined to: a rib
+    // that stopped at something it is not touching would end in mid air.
+    const blockers = toNext ? pickBodies(feature, bodies) : [];
+
+    /**
+     * Cut the wall back to where it first meets the part.
+     *
+     * Taking the body away leaves the wall in pieces: the bit between the
+     * sketch plane and the part, which is the rib, and whatever came out the
+     * far side, which is not. They are told apart by which one still touches
+     * the plane the sketch was drawn on.
+     */
+    const trimToNext = (wall) => {
+      if (!blockers.length) return wall;
+      let cut = wall;
+      for (const b of blockers) cut = K.difference(cut, b.solid, ks);
+      if (K.isEmpty(cut)) return null;
+      const parts = cut.decompose();
+      if (parts.length < 2) return cut;
+      let kept = null;
+      for (const part of parts) {
+        ks.track(part);
+        const bb = K.boundingBox(part);
+        // How near this piece comes to the sketch plane, measured along the
+        // plane's own normal over the corners of its box.
+        let near = Infinity;
+        for (const c of [bb.min, bb.max]) {
+          near = Math.min(
+            near,
+            Math.abs(
+              (c[0] - plane.origin[0]) * plane.n[0] +
+                (c[1] - plane.origin[1]) * plane.n[1] +
+                (c[2] - plane.origin[2]) * plane.n[2]
+            )
+          );
+        }
+        if (near < 1e-3) kept = kept ? K.union(kept, part, ks) : part;
+      }
+      return kept;
+    };
 
     const chains = [];
     const remaining = sk.entities
@@ -2557,16 +2622,30 @@ export function rebuild(doc, options = {}) {
     for (const chain of chains) {
       const contours = thickenPolyline(chain.points, ribWidth(feature, thickness), chain.closed);
       if (!contours) continue;
-      let wall = K.extrudeContours(contours, { height: depth, center: false }, ks);
+      let wall = K.extrudeContours(
+        contours,
+        { height: depth, center: false, taperDeg: toNext ? 0 : taper },
+        ks
+      );
       // The wall grows away from the sketch plane; flipped, it grows the other
       // way, which is what you want when the sketch sits above the part.
       if (feature.flip) {
         wall = K.transform(wall, new THREE.Matrix4().makeScale(1, 1, -1).elements, ks);
       }
-      const placed = K.transform(wall, planeMatrix(plane).elements, ks);
+      let placed = K.transform(wall, planeMatrix(plane).elements, ks);
+      if (toNext) {
+        placed = trimToNext(placed);
+        if (!placed) continue;
+      }
       solid = solid ? K.union(solid, placed, ks) : placed;
     }
-    if (!solid) throw new Error('Rib produced nothing');
+    if (!solid) {
+      throw new Error(
+        toNext
+          ? 'The rib never reaches anything to stop at'
+          : 'Rib produced nothing'
+      );
+    }
 
     apply(feature, solid, feature.op || 'join');
   }
