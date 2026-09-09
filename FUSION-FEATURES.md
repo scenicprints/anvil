@@ -391,11 +391,18 @@ it is what the arrow on a selected face drives.
 | Option | Values | Anvil |
 |---|---|---|
 | Body to Split | | has |
-| Splitting Tool(s) | **several tools at once** | partial — one face or plane. Needs a list picker, so it is category 2 work rather than a quick win |
+| Splitting Tool(s) | **several tools at once** | has, v2.39.0 |
 | Extend Splitting Tool(s) | on by default; uncheck when the tool already crosses the body | n/a — Anvil splits with an unbounded half-space, so the tool always crosses the body |
 
 Anvil also offers a Result of two bodies or keeping only the near side, which
-Fusion does not have here.
+Fusion does not have here. With several tools that becomes the near side of
+every one of them, so two planes leave the corner they share.
+
+The tools are applied in turn and the pieces from one cut are what the next
+cuts, which is the point of doing it in one feature: a box crossed by three
+planes comes out as eight parts, not four. A tool that misses a piece carries
+that piece through untouched rather than dropping it, because another tool may
+still cut it, and the feature only complains when nothing cut anything.
 
 ### Align — partial
 

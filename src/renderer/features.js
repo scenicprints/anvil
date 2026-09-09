@@ -388,6 +388,16 @@ export function normalizeMove(f) {
 
 export function normalizeSplit(f) {
   if (!f.splitType) f.splitType = 'body';
+  // One tool became a list. A split made in this session always writes the
+  // list, so an absent one is an old document, and an old document had exactly
+  // one tool: the face if it named one, otherwise the plane.
+  // A split made in this session always writes the list, even empty, so an
+  // absent one is reliably an old document. Those always cut with something:
+  // the face if they named one, otherwise the plane, and XY when the field was
+  // never touched, which is what the old code fell back to.
+  if (!Array.isArray(f.tools)) {
+    f.tools = [f.faceRef || { plane: f.plane || 'XY' }];
+  }
   return f;
 }
 
@@ -2556,11 +2566,21 @@ export function rebuild(doc, options = {}) {
     normalizeSplit(feature);
     const targets = pickBodies(feature, bodies);
     if (!targets.length) return bodies;
-    // The cutting tool can be an origin or construction plane, or the plane a
-    // face of the model lies in.
-    const plane = feature.faceRef
-      ? objectPlane(feature.faceRef, scope) || resolvePlane(feature.plane || 'XY', scope, builtConstruction)
-      : resolvePlane(feature.plane || 'XY', scope, builtConstruction);
+
+    // Fusion takes several splitting tools at once, and one pass with three
+    // planes is not the same as three features: the pieces from the first cut
+    // are what the second cuts, so a box crossed by three planes comes out as
+    // eight parts rather than four.
+    const planes = (feature.tools || [])
+      .map((t) => objectPlane(t, scope))
+      .filter(Boolean);
+    if (!planes.length) {
+      errs.push({
+        feature: feature.id,
+        message: 'Pick a face or a plane to split with'
+      });
+      return bodies;
+    }
 
     const out = [];
     for (const b of bodies) {
@@ -2575,28 +2595,66 @@ export function rebuild(doc, options = {}) {
           bb.max[1] - bb.min[1],
           bb.max[2] - bb.min[2]
         ) + 20;
-      const below = halfSpace(plane.origin, plane.n, span, ks);
 
-      const keep = K.intersection(b.solid, below, ks);
-      const rest = K.difference(b.solid, below, ks);
+      // Keeping only the near side is a trim rather than a split, and is what
+      // you want when the far half was only ever in the way. With several
+      // tools it is the near side of every one of them.
+      let pieces = [b.solid];
+      let cutAnything = false;
+      for (const plane of planes) {
+        const below = halfSpace(plane.origin, plane.n, span, ks);
+        const next = [];
+        for (const piece of pieces) {
+          const keep = K.intersection(piece, below, ks);
+          const rest = K.difference(piece, below, ks);
+          const keptSomething = !K.isEmpty(keep);
+          const restSomething = !K.isEmpty(rest);
+          if (keptSomething && restSomething) cutAnything = true;
 
-      if (K.isEmpty(keep) || K.isEmpty(rest)) {
+          if (feature.splitType === 'keep') {
+            // A trim by a plane the piece sits entirely on the far side of
+            // leaves nothing, which is a real answer and not an error.
+            if (keptSomething) next.push(keep);
+            continue;
+          }
+          if (!keptSomething || !restSomething) {
+            // This plane misses this piece. Carry it through untouched rather
+            // than dropping it: another plane may still cut it.
+            next.push(piece);
+            continue;
+          }
+          next.push(keep, rest);
+        }
+        pieces = next;
+      }
+
+      if (!cutAnything) {
         errs.push({
           feature: feature.id,
-          message: 'The split plane does not pass through this body'
+          message:
+            planes.length === 1
+              ? 'The split plane does not pass through this body'
+              : 'None of the split planes pass through this body'
         });
         out.push(b);
         continue;
       }
-      out.push({ ...b, solid: keep });
-      // Keeping only the near side is a trim rather than a split, and is what
-      // you want when the far half was only ever in the way.
-      if (feature.splitType !== 'keep') {
+      if (!pieces.length) {
+        errs.push({
+          feature: feature.id,
+          message: 'Trimming left nothing of this body'
+        });
+        continue;
+      }
+
+      out.push({ ...b, solid: pieces[0] });
+      for (let i = 1; i < pieces.length; i++) {
         out.push({
           id: `${feature.id}:${out.length}`,
-          name: `${b.name} split`,
-          solid: rest,
-          createdBy: feature.id
+          name: `${b.name} split ${i}`,
+          solid: pieces[i],
+          createdBy: feature.id,
+          component: b.component || null
         });
       }
     }

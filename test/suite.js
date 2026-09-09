@@ -1738,6 +1738,73 @@ async function run() {
     res.dispose();
   });
 
+  test('split: three planes at once cut a box into eight, not four', () => {
+    // The point of taking several tools in one feature: the pieces from the
+    // first cut are what the second cuts. Three features in a row would do the
+    // same thing, but each one is a row in the timeline and a chance to roll
+    // back to the wrong one.
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '40', centered: true }),
+      {
+        id: uid('f'),
+        type: 'split',
+        bodies: 'all',
+        tools: [{ plane: 'XY' }, { plane: 'XZ' }, { plane: 'YZ' }]
+      }
+    ];
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, `no errors, got ${JSON.stringify(res.errors)}`);
+    assert(res.bodies.length === 8, `eight octants, got ${res.bodies.length}`);
+    const total = res.bodies.reduce((sum, b) => sum + K.properties(b.solid).volume, 0);
+    near(total, 40 * 40 * 40, 1e-3, 'and nothing is lost between them');
+    for (const b of res.bodies) {
+      near(K.properties(b.solid).volume, 20 * 20 * 20, 1e-3, 'each one an eighth');
+    }
+    res.dispose();
+  });
+
+  test('split: a plane that misses one piece still lets another plane cut it', () => {
+    // Two planes, the second of which misses the far half. That half has to
+    // carry through untouched rather than be dropped, and the feature must not
+    // call the whole thing a failure because one plane found nothing.
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '40', centered: true }),
+      {
+        id: uid('f'),
+        type: 'split',
+        bodies: 'all',
+        // XY halves it; a plane at z = 30 is outside the box entirely.
+        tools: [{ plane: 'XY' }, { plane: { base: 'XY', offset: '30' } }]
+      }
+    ];
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, `no errors, got ${JSON.stringify(res.errors)}`);
+    assert(res.bodies.length === 2, `two halves, got ${res.bodies.length}`);
+    const total = res.bodies.reduce((sum, b) => sum + K.properties(b.solid).volume, 0);
+    near(total, 40 * 40 * 40, 1e-3, 'and the whole box is still there');
+    res.dispose();
+  });
+
+  test('split: keeping the near side of two planes keeps the corner they share', () => {
+    const doc = newDocument();
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '40', centered: true }),
+      {
+        id: uid('f'),
+        type: 'split',
+        bodies: 'all',
+        splitType: 'keep',
+        tools: [{ plane: 'XY' }, { plane: 'YZ' }]
+      }
+    ];
+    const res = rebuild(doc);
+    assert(res.bodies.length === 1, `a trim leaves one body, got ${res.bodies.length}`);
+    near(K.properties(res.bodies[0].solid).volume, 40 * 40 * 40 / 4, 1e-3, 'a quarter of it');
+    res.dispose();
+  });
+
   test('thread: cuts a clean helical groove', () => {
     const doc = newDocument();
     doc.features = [

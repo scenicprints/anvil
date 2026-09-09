@@ -3936,27 +3936,59 @@ function scaleFields() {
 }
 
 /** Split: cut a body with a plane, or with the plane a face lies in. */
-function splitFields() {
+/** One splitting tool, written the way its row wants it. */
+function splitToolText(tool) {
+  if (!tool) return 'nothing';
+  if (tool.plane) {
+    const name = optionForPlane(tool.plane);
+    return String(name).startsWith('c:') ? 'a construction plane' : `the ${name} plane`;
+  }
+  return 'a face of the model';
+}
+
+function splitFields(feature) {
+  // Fusion takes several tools at once, and the pieces from one cut are what
+  // the next cuts: a box crossed by three planes comes out as eight parts.
+  // Doing that as three features instead means three rows in the timeline and
+  // three chances to roll back to the wrong one.
+  const drop = [];
+  (feature?.tools || []).forEach((tool, i) => {
+    drop.push({
+      key: `__dropTool${i}`,
+      label: `Remove ${splitToolText(tool)}`,
+      type: 'action',
+      run: (f) => {
+        f.tools.splice(i, 1);
+      }
+    });
+  });
+
   return [
     {
-      key: '__face',
-      label: 'Split with a face',
+      key: '__tools',
+      label: 'Split with',
       type: 'pick',
       pick: 'splitFace',
-      summary: (f) => (f.faceRef ? 'A face of the model' : 'Not using one'),
+      summary: (f) => {
+        const n = (f.tools || []).length;
+        if (!n) return 'Nothing yet';
+        return n === 1 ? splitToolText(f.tools[0]) : `${n} tools`;
+      },
       clear: (f) => {
-        f.faceRef = null;
+        f.tools = [];
       }
     },
+    ...drop,
     {
-      key: 'plane',
-      label: 'Or a plane',
+      key: '__addPlane',
+      label: 'Or add a plane',
       type: 'select',
-      options: planeOptions(),
-      get: (f) => optionForPlane(f.plane),
+      options: [['', 'Pick one'], ...planeOptions()],
+      get: () => '',
       set: (f, v) => {
-        f.plane = planeSpecFromOption(v);
-        f.faceRef = null;
+        if (!v) return;
+        f.tools = f.tools || [];
+        f.tools.push({ plane: planeSpecFromOption(v) });
       }
     },
     {
@@ -6464,9 +6496,13 @@ function startSplit() {
     type: 'split',
     splitType: 'body',
     bodies: bodySelectionOrAll(),
-    plane: 'XY'
+    // Written even when empty, so an absent list is reliably an old document
+    // and empty reliably means nothing picked yet.
+    tools: []
   };
-  openFeatureEditor(feature, 'Split Body', splitFields());
+  openFeatureEditor(feature, 'Split Body', splitFields(feature));
+  setEditPick('splitFace');
+  setStatus('Click a face or a plane to split with. Several can be used at once.');
 }
 
 function startCoil() {
@@ -12217,7 +12253,7 @@ const PICK_PROMPTS = {
   openFaces: 'Click the faces to leave open.',
   draftFaces: 'Click the faces.',
   neutral: 'Click the neutral plane.',
-  splitFace: 'Click the face to cut with.',
+  splitFace: 'Click the faces or planes to cut with.',
   mirrorPlane: 'Click the plane to mirror in.',
   combineTarget: 'Click the body to keep.',
   combineTools: 'Click the bodies to combine with it.',
@@ -12256,6 +12292,7 @@ function pickCountText(armed, f) {
     targets: Array.isArray(f.targets) ? f.targets : null,
     openFaces: f.openFaces,
     draftFaces: f.faces,
+    splitFace: f.tools,
     combineTools: f.tools,
     moveBodies: f.bodies
   }[armed];
@@ -13238,10 +13275,12 @@ function pickIntoEdit(hit) {
     ed.pickInto = null;
     setStatus(`Took the ${(snap?.label || 'point on the face').toLowerCase()} at ${at.map((n) => round(n, 2)).join(', ')}.`);
   } else if (ed.pickInto === 'splitFace' || ed.pickInto === 'mirrorPlane') {
-    const key = ed.pickInto === 'splitFace' ? 'faceRef' : 'planeRef';
+    // A split takes a list of tools; a mirror takes one plane. Both arrive
+    // here because both are pointing at a flat thing.
+    const many = ed.pickInto === 'splitFace';
+    let tool = null;
     if (hit.kind === 'plane') {
-      f.plane = hit.planeName;
-      f[key] = { plane: hit.planeName };
+      tool = { plane: hit.planeName };
     } else if (hit.kind === 'face' && hit.faceId !== null) {
       const record = (state.records || []).find((r) => r.id === hit.bodyId);
       const face = record?.topology?.faces[hit.faceId];
@@ -13249,11 +13288,35 @@ function pickIntoEdit(hit) {
         setStatus('That has to be a flat face or an origin plane.');
         return true;
       }
-      f[key] = { bodyId: hit.bodyId, face: faceReference(face) };
-      if (key === 'planeRef') f.plane = { face: faceReference(face) };
+      tool = { bodyId: hit.bodyId, face: faceReference(face) };
     } else {
       return true;
     }
+
+    if (many) {
+      f.tools = f.tools || [];
+      // Clicking one that is already in takes it out again, the same as every
+      // other list this dialog fills.
+      const at = f.tools.findIndex((x) =>
+        x.plane && tool.plane
+          ? String(optionForPlane(x.plane)) === String(optionForPlane(tool.plane))
+          : !!x.face && !!tool.face && x.bodyId === tool.bodyId && sameFaceRef(x.face, tool.face)
+      );
+      if (at >= 0) f.tools.splice(at, 1);
+      else f.tools.push(tool);
+      // The row set grows a "remove this one" per tool, so the list has to be
+      // worked out again rather than only redrawn.
+      state.editing.fields = splitFields(f);
+      // Stays armed: several tools is the point, and letting go after the
+      // first would mean re-arming the row for every one after it.
+      renderFields();
+      syncPickBar();
+      scheduleRebuild();
+      return true;
+    }
+
+    f.planeRef = tool.plane ? { plane: tool.plane } : tool;
+    f.plane = tool.plane ? tool.plane : { face: tool.face };
     ed.pickInto = null;
     state.vp.setPlanesVisible($('#chkPlanes').checked);
   } else if (ed.pickInto === 'combineTarget') {
@@ -18573,7 +18636,7 @@ function describeFeature(feature) {
     case 'scale':
       return { title: 'Scale', fields: scaleFields() };
     case 'split':
-      return { title: 'Split Body', fields: splitFields() };
+      return { title: 'Split Body', fields: splitFields(feature) };
     case 'offsetFace':
       return { title: 'Press Pull', fields: pressPullFields() };
     case 'mirror':

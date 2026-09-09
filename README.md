@@ -412,8 +412,11 @@ numbers is still there underneath. **Create a copy** on any of them leaves the
 original standing and moves a second body instead. **Scale** grows about the part's
 own middle rather than the world origin, so a part that is not centred does not
 fly off as it grows; the origin and a stated point are the other two choices.
-**Split** cuts with a plane or with the plane a face lies in, and can keep only
-the near side, which is a trim rather than a split. **Press Pull** takes as many
+**Split** cuts with as many planes and faces as you click, applied in turn, so
+the pieces from one cut are what the next cuts and a box crossed by three
+planes comes out as eight parts. It can keep only the near side instead, which
+is a trim rather than a split, and with several tools that means the near side
+of every one of them. **Press Pull** takes as many
 faces as you click.
 
 Two things in Extrude fall short of Fusion and say so rather than pretending. **To
