@@ -582,6 +582,9 @@ function handleViewportDown(e) {
         'jointAxis2',
         'surfaceCurves',
         'sheetEdges',
+        // A loft section can be a run of model edges, so an edge has to be
+        // offered there as well as a profile.
+        'sections',
         ...Object.keys(DIRECTION_PICKS)
       ].includes(armed) || !!blendPickRow(armed);
     // A plane click has to be offered before the body raycast, or a plane
@@ -5153,9 +5156,11 @@ function loftSectionRowText(entry, i) {
     ? 'a sketch point'
     : entry?.face
       ? 'a face'
-      : entry?.seed
-        ? 'a profile'
-        : 'a section';
+      : entry?.edges
+        ? `${entry.edges.length} model edge${entry.edges.length === 1 ? '' : 's'}`
+        : entry?.seed
+          ? 'a profile'
+          : 'a section';
   return `${i + 1}. ${what}`;
 }
 
@@ -5254,8 +5259,21 @@ function loftFields(feature) {
       showIf: leans('endCondition')
     },
     {
+      // A rail says where the outline should reach; a centreline says where the
+      // middle should go. Scaling a section out to meet a curve running through
+      // its own middle would collapse it, so the two are not one setting with
+      // a different name.
+      key: 'guideType',
+      label: 'Guide type',
+      type: 'select',
+      options: [
+        ['rail', 'Rails, which the outline reaches out to'],
+        ['centerline', 'A centreline, which the middle follows']
+      ]
+    },
+    {
       key: '__rails',
-      label: 'Guide rails',
+      label: (f) => (f.guideType === 'centerline' ? 'Centreline' : 'Guide rails'),
       type: 'pick',
       pick: 'rails',
       summary: (f) => {
@@ -6549,6 +6567,7 @@ function startLoft() {
     rails: [],
     startCondition: 'connected',
     endCondition: 'connected',
+    guideType: 'rail',
     startWeight: '1',
     endWeight: '1',
     startAngle: '90',
@@ -12592,7 +12611,7 @@ function endPicking(run) {
 
 const PICK_PROMPTS = {
   profiles: 'Click the profiles and planar faces to use.',
-  sections: 'Click each profile in turn.',
+  sections: 'Click each profile in turn. A model edge takes its whole run as one section.',
   axis: 'Click the line to turn about.',
   path: 'Click the curve to follow.',
   rail: 'Click the guide rail.',
@@ -13711,6 +13730,20 @@ function pickIntoEdit(hit) {
         return true;
       }
       entry = { face: { bodyId: hit.bodyId, face: faceReference(face) } };
+    } else if (hit.kind === 'edge') {
+      // Chain Selection: a run of adjacent model edges taken as one section.
+      // It is how a loft starts from the rim of something already built rather
+      // than from a sketch traced round it, and the rim of a shelled part is
+      // never one edge. Clicking one takes the whole run that carries on from
+      // it, the same as a fillet does.
+      const record = (state.records || []).find((r) => r.id === hit.bodyId);
+      const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
+      if (!edge) return true;
+      const run = SEL.tangentEdgeRun(record.topology, [edge.id])
+        .map((id) => record.topology.edges.find((e) => e.id === id))
+        .filter(Boolean)
+        .map((e) => edgeReference(e, record.topology));
+      entry = { bodyId: hit.bodyId, edges: run };
     } else {
       return true;
     }
@@ -14062,6 +14095,12 @@ function samePoint(a, b) {
  */
 function sameSection(a, b) {
   if (!a || !b) return false;
+  if (a.edges || b.edges) {
+    // Two chains are the same one when they start from the same edge on the
+    // same body, which is what clicking the same edge twice produces.
+    if (!a.edges || !b.edges) return false;
+    return a.bodyId === b.bodyId && sameEdgeRef(a.edges[0], b.edges[0]);
+  }
   if (a.face || b.face) {
     if (!a.face || !b.face) return false;
     return a.face.bodyId === b.face.bodyId && sameFaceRef(a.face.face, b.face.face);

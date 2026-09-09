@@ -321,12 +321,15 @@ changed afterwards: each section past the first has a row that moves it
 earlier. The same three sections in a different order are a different shape, and
 before this the only fix for a mis-ordered loft was clicking them all again and
 getting it right the second time. A section is a sketch
-profile, a planar face, or a single sketch **point**, which is how a loft comes
-to a tip. Then
+profile, a planar face, a single sketch **point**, which is how a loft comes to a
+tip, or a **run of model edges**: one click takes the whole run that carries on
+from it, which is how a loft starts from the rim of something already built
+rather than from a sketch traced round it. Then
 
 | | |
 |---|---|
 | Start and End | **Connected**, **Tangent** with a weight so an end leaves square to its own plane, or **Direction** at a stated takeoff angle to that plane |
+| Guide type | **Rails**, which the outline reaches out to, or a **centreline**, which the middle follows |
 | Guide rails | Sketch curves the intermediate sections are pulled out to meet |
 | Closed loop | Joins the last section back to the first |
 | Operation | The same set as Extrude |

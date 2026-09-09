@@ -3623,6 +3623,125 @@ async function run() {
     );
   });
 
+  test('loft: a run of model edges can be a section', () => {
+    // Fusion's Chain Selection. It is how a loft starts from the rim of
+    // something already built rather than from a sketch traced round it, and
+    // the rim of a part is never one edge.
+    //
+    // Both ends are taken off the model here, one as an edge chain and one as
+    // a face, so what is being checked is the chain and not the sketcher.
+    const doc = newDocument();
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '20', depth: '20', height: '10', centered: true },
+      op: 'new'
+    });
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '10', depth: '10', height: '10', x: '0', y: '0', z: '35', centered: true },
+      op: 'new'
+    });
+
+    let res = rebuild(doc);
+    assert(res.bodies.length === 2, `two boxes, got ${res.bodies.length}`);
+    const lower = res.bodies[0];
+    const upper = res.bodies[1];
+    const topoA = buildTopology(K.meshData(lower.solid));
+    const rim = topoA.edges.filter(
+      (e) => e.kind === 'line' && Math.abs(e.refPoint[2] - 5) < 0.01
+    );
+    assert(rim.length === 4, `four edges round the rim, got ${rim.length}`);
+    const chain = rim.map((e) => edgeReference(e, topoA));
+
+    const topoB = buildTopology(K.meshData(upper.solid));
+    const underside = topoB.faces.find((f) => f.planar && f.normal[2] < -0.99);
+    assert(underside, 'the upper box has an underside');
+    const faceRef = { bodyId: upper.id, face: faceReference(underside) };
+    const ids = [lower.id, upper.id];
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'loft',
+      sections: [{ bodyId: ids[0], edges: chain }, { face: faceRef }],
+      op: 'new'
+    });
+
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+    const lofted = res.bodies.find((b) => !ids.includes(b.id));
+    assert(lofted, 'the loft made a body of its own');
+
+    const box = K.boundingBox(lofted.solid);
+    near(box.min[2], 5, 0.05, 'starting at the rim it was taken from');
+    near(box.max[2], 30, 0.05, 'and finishing at the face it was taken to');
+    near(box.max[0] - box.min[0], 20, 0.1, 'twenty across at the rim end');
+
+    // A frustum, 20 square to 10 square over 25: the prismatoid formula, whose
+    // middle section is the 15 square halfway between.
+    const want = (25 / 6) * (400 + 4 * 225 + 100);
+    near(K.properties(lofted.solid).volume, want, want * 0.03, 'the frustum off the rim');
+    res.dispose();
+  });
+
+  test('loft: a centreline moves the middle where a rail stretches the outline', () => {
+    // The two guides guide different things. A rail says where the outline
+    // should reach, so the sections grow to meet it. A centreline says where
+    // the middle should go, so they move and keep their size. Scaling a
+    // section out to meet a curve running through its own middle would
+    // collapse it, which is why this is not one setting with two names.
+    const guided = (guideType, from, to) => {
+      const built = loftDoc(20, { guideType });
+      // Each guide is drawn where its own kind of guide belongs: a rail on the
+      // outline of the bottom section, a centreline through its middle. Giving
+      // both the same curve would only prove that one of them was handed a
+      // curve it was never meant to read.
+      const rail = newSketch('XZ', 'Guide');
+      rail.points = [{ x: from, y: 0 }, { x: to, y: 30 }];
+      rail.entities = [{ id: 1, type: 'line', p: [0, 1] }];
+      rail.nextEntityId = 2;
+      built.doc.sketches[rail.id] = rail;
+      built.doc.features.splice(2, 0, { id: uid('f'), type: 'sketch', sketch: rail.id });
+      built.f.rails = [{ sketch: rail.id, entities: [1] }];
+      const res = rebuild(built.doc);
+      assert(res.errors.length === 0, JSON.stringify(res.errors));
+      const solid = res.bodies[0].solid;
+      const out = { volume: solid.volume(), reach: K.boundingBox(solid).max[0] };
+      res.dispose();
+      return out;
+    };
+
+    const plain = (() => {
+      const res = rebuild(loftDoc(20, {}).doc);
+      const solid = res.bodies[0].solid;
+      const out = { volume: solid.volume(), reach: K.boundingBox(solid).max[0] };
+      res.dispose();
+      return out;
+    })();
+
+    // The sections are 20 square, so their outline is 10 out. The rail starts
+    // there and leans out to 20; the centreline starts at the middle.
+    const railed = guided('rail', 10, 20);
+    const centred = guided('centerline', 0, 14);
+
+    // The rail stretches the sections out to it, so the part gets fatter.
+    assert(
+      railed.volume > plain.volume * 1.1,
+      `a rail opens it out: ${railed.volume.toFixed(0)} against ${plain.volume.toFixed(0)}`
+    );
+    // The centreline only slides them, so the size is left alone and the part
+    // leans instead. Same volume, further reach.
+    near(centred.volume, plain.volume, plain.volume * 0.05, 'a centreline keeps the size');
+    assert(
+      centred.reach > plain.reach + 1,
+      `and leans it over: ${centred.reach.toFixed(1)} against ${plain.reach.toFixed(1)}`
+    );
+  });
+
   test('loft: still lofts when nothing extra is asked for', () => {
     // The plain path has to keep working with all the new settings absent,
     // which is what an older file looks like.

@@ -1970,6 +1970,80 @@ export function rebuild(doc, options = {}) {
 
     const picked = sections.map((section) => loftSection(section, doc, scope, regionsById));
 
+    /*
+     * A plane fitted to a run of model edges faces whichever way the fit came
+     * out, and half the time that is the opposite of the sections around it.
+     * A loft between one loop and its mirror image turns itself inside out and
+     * the volume comes back negative, which is what happened first.
+     *
+     * Only the fitted ones are turned round. A sketch or a face knows which way
+     * it faces because somebody said so, and a loft that runs downward would
+     * otherwise have its sketches flipped out from under it.
+     */
+    if (picked.length > 1) {
+      const a = picked[0].plane.origin;
+      const b = picked[picked.length - 1].plane.origin;
+      const axis = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      // Against a section that knows which way it faces, where there is one.
+      // The stacking axis is only the fallback: a face taken off the underside
+      // of something faces down while the axis runs up, and turning the fitted
+      // one to agree with the axis instead would leave the two disagreeing
+      // with each other, which builds the loft inside out. It came back as
+      // exactly the right volume, negative.
+      for (const p of picked) {
+        // A sketch faces the way somebody drew it and is left alone. A fitted
+        // plane and a face's plane both face whichever way fell out of the
+        // geometry, and a loft whose sections disagree about which way is up
+        // builds itself inside out: the right volume, negative.
+        if (!p.plane.fitted && !p.plane.fromFace) continue;
+        const n = p.plane.n;
+        if (n[0] * axis[0] + n[1] * axis[1] + n[2] * axis[2] >= 0) continue;
+        // Flip the normal and the frame's second axis together, which keeps
+        // the frame right handed, and mirror what was already written in it.
+        p.plane = {
+          ...p.plane,
+          n: [-n[0], -n[1], -n[2]],
+          y: [-p.plane.y[0], -p.plane.y[1], -p.plane.y[2]]
+        };
+        p.outer = p.outer.map(([u, v]) => [u, -v]);
+        p.holes = p.holes.map((h) => h.map(([u, v]) => [u, -v]));
+      }
+
+      /*
+       * And measured in the same frame as its neighbour.
+       *
+       * A section is written in its own plane's axes, and a plane fitted to a
+       * run of edges gets whatever axes fall out of its normal. Those can sit
+       * at any angle to the ones the section next to it uses, and the loft
+       * pairs the two by their coordinates: a square written in a frame turned
+       * forty five degrees is a square turned forty five degrees, so the loft
+       * twists and pinches in the middle. It came out at 2500 where the
+       * frustum is 5833, with both ends the right size and in the right place,
+       * which is a hard failure to see and an easy one to explain away.
+       *
+       * The world loop was kept for exactly this: the frame is swapped for the
+       * neighbour's and the flat coordinates are worked out again against it.
+       */
+      const ref = picked.find((q) => !q.plane.fitted) || picked[0];
+      for (const p of picked) {
+        if (!p.plane.fitted || p === ref || !p.world) continue;
+        const dot3 = p.plane.n[0] * ref.plane.n[0] + p.plane.n[1] * ref.plane.n[1] +
+          p.plane.n[2] * ref.plane.n[2];
+        // Only where the two face the same way. A section square to its
+        // neighbour has no shared frame to borrow.
+        if (Math.abs(dot3) < 0.99) continue;
+        const frame = { origin: p.plane.origin, x: ref.plane.x, y: ref.plane.y, n: p.plane.n };
+        const flat = p.world.map((pt) => {
+          const q = worldToSketch(frame, { x: pt[0], y: pt[1], z: pt[2] });
+          return [q.u, q.v];
+        });
+        const [first, ...rest] = groupRings([flat]);
+        p.plane = frame;
+        p.outer = first.outer;
+        p.holes = first.holes.concat(rest.map((g) => g.outer));
+      }
+    }
+
     const rails = (feature.rails || [])
       .map((r) => curvePoints(r, doc, scope))
       .filter((r) => r && r.length > 1);
@@ -1980,7 +2054,17 @@ export function rebuild(doc, options = {}) {
       // still the same size, so the surface leaves square to the profile
       // before it starts heading for the next one.
       list = withEndConditions(feature, scope, list);
-      if (rails.length) list = pulledToRails(list, rails);
+      // A rail and a centreline are both curves the loft is guided by, and
+      // they guide different things. A rail says where the outline should
+      // reach, so the sections are scaled out to meet it. A centreline says
+      // where the middle should go, so the sections are moved onto it and keep
+      // their size. Scaling a section to reach a curve running through its own
+      // middle would collapse it.
+      if (rails.length) {
+        list = feature.guideType === 'centerline'
+          ? centredOn(list, rails[0])
+          : pulledToRails(list, rails);
+      }
       return loftLoops(list, ks, { closed: !!feature.closed });
     };
 
@@ -1997,8 +2081,73 @@ export function rebuild(doc, options = {}) {
     apply(feature, solid, feature.op || 'new');
   }
 
-  /** One loft section: a sketch profile, a planar face, or a point. */
+  /** One loft section: a sketch profile, a planar face, a point, or model edges. */
   function loftSection(section, doc, scope, regionsById) {
+    /*
+     * Fusion's Chain Selection: a run of adjacent model edges taken as one
+     * profile. It is how a loft starts from the rim of something already built
+     * rather than from a sketch traced round it, and the rim of a shelled part
+     * is never one edge.
+     *
+     * The edges are joined end to end into a loop and a plane is fitted to it,
+     * so a run that does not close, or does not lie flat, is refused rather
+     * than lofted from a shape that is not a section.
+     */
+    if (section.edges) {
+      const body = section.bodyId
+        ? bodies.find((b) => b.id === section.bodyId && b.solid)
+        : bodies.find((b) => b.solid);
+      if (!body) throw new Error('Loft has lost the body one of its chains was on');
+      let topo;
+      try {
+        topo = buildTopology(meshOf(body));
+      } catch (err) {
+        throw new Error(`Loft could not read that body: ${err.message}`);
+      }
+      const edges = resolveEdgeRefs(topo, section.edges);
+      if (!edges.length) throw new Error('Loft has lost one of its edge chains');
+
+      const segs = [];
+      for (const e of edges) {
+        const pts = e.points || [];
+        for (let i = 1; i < pts.length; i++) segs.push([pts[i - 1], pts[i]]);
+      }
+      const [loop] = chainWorldSegments(segs);
+      if (!loop || loop.length < 3) {
+        throw new Error('Those edges do not close into a loop, so they are not a section');
+      }
+      const fit = fitPlane(loop);
+      if (!fit || fit.spread > 1e-2) {
+        throw new Error('Those edges do not lie flat, so there is no section plane in them');
+      }
+      const plane = { origin: fit.origin, n: fit.normal, ...basisFor(fit.normal), fitted: true };
+      const flat = loop.map((pt) => {
+        const q = worldToSketch(plane, { x: pt[0], y: pt[1], z: pt[2] });
+        return [q.u, q.v];
+      });
+      // Wound the same way a sketch profile is. A chain read off the model
+      // comes back in whatever order the edges were found in, and a loft
+      // between one loop and its mirror image turns itself inside out: the
+      // volume comes back negative, which is what happened first.
+      let area = 0;
+      for (let i = 0; i < flat.length; i++) {
+        const [x0, y0] = flat[i];
+        const [x1, y1] = flat[(i + 1) % flat.length];
+        area += x0 * y1 - x1 * y0;
+      }
+      if (area < 0) flat.reverse();
+
+      const [first, ...rest] = groupRings([flat]);
+      return {
+        outer: first.outer,
+        holes: first.holes.concat(rest.map((g) => g.outer)),
+        plane,
+        // Kept so the frame can be swapped for the neighbouring section's and
+        // the flat coordinates worked out again against it. See doLoft.
+        world: loop
+      };
+    }
+
     if (section.face) {
       const found = faceContour(section.face);
       if (!found) throw new Error('Loft has lost one of its faces');
@@ -2009,7 +2158,15 @@ export function rebuild(doc, options = {}) {
         })
       );
       const [first, ...rest] = groupRings(flat);
-      return { outer: first.outer, holes: first.holes.concat(rest.map((g) => g.outer)), plane: found.plane };
+      return {
+        outer: first.outer,
+        holes: first.holes.concat(rest.map((g) => g.outer)),
+        // A face's plane faces out of the solid it belongs to, which has
+        // nothing to do with which way this loft runs. Marked so it can be
+        // turned to agree with the others.
+        plane: { ...found.plane, fromFace: true },
+        world: found.loops[0]
+      };
     }
 
     const sk = doc.sketches[section.sketch];
@@ -2150,6 +2307,108 @@ export function rebuild(doc, options = {}) {
       );
     }
     return out;
+  }
+
+  /**
+   * Slide each section along its own plane so its middle lands on the guide.
+   *
+   * The centreline version of a rail. The section keeps its size and its plane
+   * and only moves, which is what makes a lofted duct follow a bend without
+   * the bend pinching it.
+   *
+   * The end sections are left where they are. They were placed deliberately,
+   * and a centreline that misses one by a hair would otherwise shift the whole
+   * part off the face it was drawn on.
+   */
+  function centredOn(loops, guide) {
+    if (!guide || guide.length < 2) return loops;
+
+    /*
+     * Two sections and a centreline is the ordinary case, and there is nothing
+     * in between for the curve to move: the ends stay where they were put. So
+     * the curve is followed by putting sections along it, each one a blend of
+     * the two ends sitting where the curve is. That is what makes a lofted
+     * duct go round a bend.
+     */
+    if (loops.length === 2) {
+      const [a, b] = loops;
+      const steps = 8;
+      const out = [a];
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        const at = guidePointAt(guide, t);
+        if (!at) continue;
+        const n = Math.max(a.contour.length, b.contour.length);
+        const sample = (c, k) => c[Math.min(c.length - 1, Math.round((k * (c.length - 1)) / (n - 1)))];
+        const contour = [];
+        for (let k = 0; k < n; k++) {
+          const p = sample(a.contour, k);
+          const q = sample(b.contour, k);
+          contour.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+        }
+        out.push({ contour, plane: { ...a.plane, origin: at } });
+      }
+      out.push(b);
+      loops = out;
+    }
+
+    return loops.map((sec, i) => {
+      if (i === 0 || i === loops.length - 1) return sec;
+      let cx = 0;
+      let cy = 0;
+      for (const [x, y] of sec.contour) {
+        cx += x / sec.contour.length;
+        cy += y / sec.contour.length;
+      }
+      // Where the guide crosses this section's plane, taken as the guide point
+      // nearest to it. A guide that never comes near leaves the section alone.
+      const n = sec.plane.n;
+      let best = null;
+      let near = Infinity;
+      for (const g of guide) {
+        const d = Math.abs(
+          (g[0] - sec.plane.origin[0]) * n[0] +
+            (g[1] - sec.plane.origin[1]) * n[1] +
+            (g[2] - sec.plane.origin[2]) * n[2]
+        );
+        if (d < near) {
+          near = d;
+          best = g;
+        }
+      }
+      if (!best || near > 1e9) return sec;
+      const q = worldToSketch(sec.plane, { x: best[0], y: best[1], z: best[2] });
+      const dx = q.u - cx;
+      const dy = q.v - cy;
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return sec;
+      return {
+        ...sec,
+        contour: sec.contour.map(([x, y]) => [x + dx, y + dy])
+      };
+    });
+  }
+
+  /** A point a fraction of the way along a polyline, by length. */
+  function guidePointAt(points, t) {
+    let total = 0;
+    const runs = [0];
+    for (let i = 1; i < points.length; i++) {
+      total += Math.hypot(
+        points[i][0] - points[i - 1][0],
+        points[i][1] - points[i - 1][1],
+        points[i][2] - points[i - 1][2]
+      );
+      runs.push(total);
+    }
+    if (!(total > 0)) return null;
+    const want = total * Math.max(0, Math.min(1, t));
+    for (let i = 1; i < points.length; i++) {
+      if (runs[i] < want) continue;
+      const span = runs[i] - runs[i - 1];
+      const f = span > 1e-12 ? (want - runs[i - 1]) / span : 0;
+      return [0, 1, 2].map((k) => points[i - 1][k] + (points[i][k] - points[i - 1][k]) * f);
+    }
+    return points[points.length - 1];
   }
 
   /**

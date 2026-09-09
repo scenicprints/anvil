@@ -112,9 +112,9 @@ under Path + Guide Rail and nowhere else, and why Anvil now does too.
 |---|---|---|
 | Profiles | sketch, edge or face, in an order you can change | has, v2.38.0 |
 | End condition (per profile) | Free, Direction, Tangent, Smooth, Sharp, Point Tangent | partial — connected, tangent, and Direction as of v2.41.0 |
-| Guide Type | **Rail**, **Centerline** | partial — rails only |
+| Guide Type | Rail, Centerline | has, v2.58.0 |
 | Rails / Guide | any number of rails; one centerline | has (rails) |
-| Chain Selection | adjacent edges taken as one profile | **missing** |
+| Chain Selection | adjacent edges taken as one profile | has, v2.58.0. One click takes the whole run that carries on from it, the same as a fillet |
 | Closed | join the first and last profile into a loop | has |
 | Takeoff Weight / Takeoff Angle | with the Direction end condition | has, v2.41.0 |
 | Tangency Weight | with Tangent, Smooth or Point Tangent | has (start and end weight) |
@@ -139,6 +139,32 @@ same amount.
 Fusion also maps matching corners between closed sections with the same number
 of corners, so the orientation is worked out rather than guessed. Worth knowing:
 that is the thing that makes a loft between two rectangles not twist.
+
+Chain selection made three separate versions of that mistake, all of which came
+back as a closed solid of the wrong shape, which is the hard kind to see.
+
+A section is written in its own plane's axes, and a plane fitted to a run of
+edges gets whatever axes fall out of its normal. Those can sit at any angle to
+the ones the section beside it uses, and the loft pairs the two by coordinate,
+so a square written in a frame turned forty five degrees is a square turned
+forty five degrees: the loft twists and pinches. It came out at 2500 where the
+frustum is 5833, with both ends the right size and in the right place. The
+world loop is kept now and the coordinates are worked out again in the
+neighbour's frame.
+
+Then the orientation. A sketch faces the way somebody drew it. A fitted plane
+and a face's plane both face whichever way fell out of the geometry, and the
+underside of a box faces down while the loft runs up. Sections that disagree
+about which way is up build the loft inside out: exactly the right volume,
+negative. Both kinds are turned to agree with the way the sections are stacked;
+sketches are left alone.
+
+And the centreline. With two sections there is nothing in between for a curve to
+move, so it did nothing at all. Sections are put along the curve now, each one a
+blend of the two ends sitting where the curve is, which is what makes a lofted
+duct go round a bend. A rail is still the other thing entirely: it says where
+the outline should reach, so the sections grow to meet it, and scaling a section
+out to meet a curve through its own middle would collapse it.
 
 ### Rib — partial
 
