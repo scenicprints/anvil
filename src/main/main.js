@@ -2,6 +2,7 @@
 
 const { app, BrowserWindow, protocol, ipcMain, dialog, shell } = require('electron');
 const LIB = require('./library.js');
+const PROFILES = require('./profiles.js');
 const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
@@ -265,7 +266,7 @@ function setTitle() {
 }
 
 app.whenReady().then(() => {
-  loadLibraryRoot();
+  loadProfiles();
   registerProtocol();
   createWindow();
   setTitle();
@@ -294,6 +295,67 @@ ipcMain.handle('doc:new', async () => {
   return { ok: true };
 });
 
+/**
+ * Read a file, and say so if it is taking a while.
+ *
+ * OneDrive's Files On-Demand leaves a file on disk as a placeholder until
+ * something touches it, and the touch is what downloads it. So a read is not
+ * either instant or a failure: it can be a slow read of a file that is really
+ * there and on its way. Saying nothing for thirty seconds looks exactly like a
+ * hang, and a timeout that gave up would turn a working library into a broken
+ * one the first time somebody opened a part they had not used on this machine.
+ *
+ * So it waits as long as it takes and tells the window what it is waiting for.
+ */
+async function readMaybeSlowly(file) {
+  const slow = setTimeout(() => {
+    try {
+      win?.webContents.send('doc:slowRead', { path: file });
+    } catch {
+      /* the window may be gone, and the read carries on regardless */
+    }
+  }, 1200);
+  try {
+    return await fs.readFile(file, 'utf8');
+  } finally {
+    clearTimeout(slow);
+    try {
+      win?.webContents.send('doc:slowRead', null);
+    } catch {
+      /* as above */
+    }
+  }
+}
+
+/**
+ * Open a document and take it as the one being worked on.
+ *
+ * One body for both ways in, because the difference between them is only
+ * whether a dialog picked the file, and everything after that has to be the
+ * same: the same lock, the same version, the same entry in recents.
+ */
+async function openDocument(file) {
+  try {
+    const text = await readMaybeSlowly(file);
+    const held = await foreignLock(file);
+    if (currentPath && currentPath !== file) await dropLock(currentPath);
+    currentPath = file;
+    lastWrittenAt = await modifiedAt(file);
+    await takeLock(file);
+    beatLock();
+    setTitle();
+    const data = JSON.parse(text);
+    // What was on disk when this was read, which is what a later save has to
+    // check it is still writing on top of.
+    loadedVersion = Number(data?.version) || 0;
+    rememberOpened(file, data);
+    await noteInIndex(file, data);
+    return { ok: true, path: file, name: libraryNameFor(file), data, held };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 ipcMain.handle('doc:open', async () => {
   const res = await dialog.showOpenDialog(win, {
     title: 'Open Model',
@@ -302,19 +364,7 @@ ipcMain.handle('doc:open', async () => {
   });
   if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
   const file = res.filePaths[0];
-  try {
-    const text = await fs.readFile(file, 'utf8');
-    const held = await foreignLock(file);
-    if (currentPath && currentPath !== file) await dropLock(currentPath);
-    currentPath = file;
-    lastWrittenAt = await modifiedAt(file);
-    await takeLock(file);
-    beatLock();
-    setTitle();
-    return { ok: true, path: file, data: JSON.parse(text), held };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  return openDocument(file);
 });
 
 /**
@@ -360,7 +410,7 @@ const DOC_EXT = /\.anvil$/i;
 const BAD_NAME = /[\\/:*?"<>|]/;
 
 /*
- * The library: one folder the user picks, and the reason a design can name
+ * The library: one folder a profile points at, and the reason a design can name
  * another design at all.
  *
  * A path is not a name. The same two files on a laptop and a desktop sit under
@@ -368,53 +418,104 @@ const BAD_NAME = /[\\/:*?"<>|]/;
  * machine. Recorded against the library root it is the same name everywhere,
  * and the root is the only thing each machine has to know for itself.
  *
- * The root is kept here rather than in the renderer because it is a fact about
+ * All of it lives here rather than in the renderer because it is a fact about
  * this installation, not about the document, and because resolving a name has
  * to happen where the files are.
  */
-let libraryRoot = null;
+const profileFile = () => path.join(app.getPath('userData'), 'profiles.json');
+const oldRootFile = () => path.join(app.getPath('userData'), 'library.json');
 
-const rootFile = () => path.join(app.getPath('userData'), 'library.json');
+let profiles = PROFILES.EMPTY;
 
-function loadLibraryRoot() {
+function saveProfiles() {
   try {
-    const got = JSON.parse(fsSync.readFileSync(rootFile(), 'utf8'));
-    if (got && typeof got.root === 'string') libraryRoot = got.root;
+    fsSync.writeFileSync(profileFile(), JSON.stringify(profiles, null, 2), 'utf8');
   } catch {
-    /* no library chosen yet, which is the ordinary first run */
+    /* a profile that cannot be written must not stop the work */
   }
 }
 
-/** The two library questions, asked against whichever root is set. */
-const libraryNameFor = (file) => LIB.libraryNameFor(libraryRoot, file);
-const libraryPathFor = (name) => LIB.libraryPathFor(libraryRoot, name);
-
-ipcMain.handle('library:get', async () => ({ root: libraryRoot }));
-
-ipcMain.handle('library:choose', async () => {
-  const res = await dialog.showOpenDialog(win, {
-    title: 'Choose the library folder',
-    properties: ['openDirectory', 'createDirectory']
-  });
-  if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
-  libraryRoot = res.filePaths[0];
+/**
+ * Read the profiles, or make the first one.
+ *
+ * The upgrade matters more than the first run. Somebody already has a library
+ * folder set from before profiles existed, and losing it would look exactly
+ * like losing the library: every derived link in every document would stop
+ * resolving by name on the next open. So the old single-folder file is read
+ * once and becomes the first profile's root.
+ */
+function loadProfiles() {
+  let store = null;
   try {
-    await fs.writeFile(rootFile(), JSON.stringify({ root: libraryRoot }, null, 2), 'utf8');
-  } catch (err) {
-    return { ok: false, error: err.message };
+    store = JSON.parse(fsSync.readFileSync(profileFile(), 'utf8'));
+  } catch {
+    /* nothing yet, which is either a first run or an upgrade */
   }
-  return { ok: true, root: libraryRoot };
-});
+  let inherited = null;
+  if (!store) {
+    try {
+      const old = JSON.parse(fsSync.readFileSync(oldRootFile(), 'utf8'));
+      if (old && typeof old.root === 'string') inherited = old.root;
+    } catch {
+      /* no old setting either */
+    }
+  }
+  const before = JSON.stringify(store);
+  profiles = PROFILES.firstRun(store, {
+    name: os.userInfo?.().username || 'Me',
+    root: inherited
+  });
+  if (JSON.stringify(profiles) !== before) saveProfiles();
+}
+
+const activeProfile = () => PROFILES.active(profiles);
+const libraryRoot = () => activeProfile()?.root || null;
+
+/** The two library questions, asked against whichever root is in use. */
+const libraryNameFor = (file) => LIB.libraryNameFor(libraryRoot(), file);
+const libraryPathFor = (name) => LIB.libraryPathFor(libraryRoot(), name);
+
+/* ---------------------------------------------------------------- */
+/* The index, which is a cache and never the truth                   */
+/* ---------------------------------------------------------------- */
+
+const indexPath = () => {
+  const root = libraryRoot();
+  return root ? path.join(root, LIB.INDEX_FILE) : null;
+};
+
+async function readIndex() {
+  const file = indexPath();
+  if (!file) return LIB.normaliseIndex(null);
+  try {
+    return LIB.normaliseIndex(JSON.parse(await fs.readFile(file, 'utf8')));
+  } catch {
+    // Missing, or written by a version that thought differently. Either way it
+    // is a cache, so the answer is to rebuild rather than to complain.
+    return LIB.normaliseIndex(null);
+  }
+}
+
+async function writeIndex(index) {
+  const file = indexPath();
+  if (!file) return;
+  try {
+    await writeAtomic(file, JSON.stringify(index, null, 2));
+  } catch {
+    /* an index that cannot be written is an index that gets rebuilt */
+  }
+}
 
 /**
- * Every document in the library, as names rather than paths.
+ * Every document under the library root, by walking.
  *
- * Walked rather than read from an index. An index would be a cache and the
- * files are the truth, and a library of a few hundred parts is a directory walk
- * nobody will notice.
+ * Walking and not reading. `readdir` and `stat` do not pull a synced file down,
+ * and opening one does, so a list of three hundred parts must never be the
+ * thing that downloads three hundred parts.
  */
-ipcMain.handle('library:list', async () => {
-  if (!libraryRoot) return { ok: false, error: 'No library folder has been chosen yet' };
+async function walkLibrary() {
+  const root = libraryRoot();
+  if (!root) return [];
   const out = [];
   const walk = async (dir, depth) => {
     if (depth > 8) return;
@@ -430,13 +531,225 @@ ipcMain.handle('library:list', async () => {
         if (entry.name.startsWith('.')) continue;
         await walk(full, depth + 1);
       } else if (DOC_EXT.test(entry.name)) {
-        out.push({ name: libraryNameFor(full), path: full, modified: await modifiedAt(full) });
+        const name = libraryNameFor(full);
+        if (!name) continue;
+        out.push({ name, path: full, modified: await modifiedAt(full), ...LIB.placeOf(name) });
       }
     }
   };
-  await walk(libraryRoot, 0);
-  out.sort((a, b) => a.name.localeCompare(b.name));
-  return { ok: true, root: libraryRoot, documents: out };
+  await walk(root, 0);
+  return out;
+}
+
+/** The library as it stands, with the index folded in and written back. */
+async function libraryState() {
+  const found = await walkLibrary();
+  const index = LIB.mergeIndex(await readIndex(), found);
+  await writeIndex(index);
+  const byName = new Map(found.map((f) => [f.name, f.path]));
+  return {
+    root: libraryRoot(),
+    documents: index.documents.map((d) => ({ ...d, path: byName.get(d.name) || null })),
+    index
+  };
+}
+
+/** Note what opening a document taught us, so a search need not open it again. */
+async function noteInIndex(file, doc) {
+  const name = libraryNameFor(file);
+  if (!name) return;
+  const index = LIB.noteDocument(await readIndex(), {
+    name,
+    ...LIB.placeOf(name),
+    modified: await modifiedAt(file),
+    title: doc?.name || LIB.titleFromName(name),
+    parameters: (doc?.parameters || []).map((p) => p.name).filter(Boolean)
+  });
+  await writeIndex(index);
+}
+
+/* ---------------------------------------------------------------- */
+/* Profiles, projects and recents, over the wire                     */
+/* ---------------------------------------------------------------- */
+
+ipcMain.handle('profiles:list', async () => ({
+  profiles: profiles.profiles.map((p) => ({ id: p.id, name: p.name, root: p.root })),
+  active: profiles.active,
+  // Asked once at startup, and only worth asking when there is a choice.
+  ask: profiles.profiles.length > 1
+}));
+
+ipcMain.handle('profiles:use', async (_e, id) => {
+  profiles = PROFILES.use(profiles, id);
+  saveProfiles();
+  return { ok: true, profile: activeProfile() };
+});
+
+ipcMain.handle('profiles:add', async (_e, name) => {
+  const res = PROFILES.add(profiles, { name });
+  if (res.error) return { ok: false, error: res.error };
+  profiles = res.store;
+  saveProfiles();
+  return { ok: true, profile: res.profile };
+});
+
+ipcMain.handle('profiles:remove', async (_e, id) => {
+  profiles = PROFILES.remove(profiles, id);
+  saveProfiles();
+  return { ok: true, active: activeProfile() };
+});
+
+ipcMain.handle('profiles:recents', async () => {
+  const p = activeProfile();
+  if (!p) return { ok: true, recents: [] };
+  // Checked against the disk before being shown. A recents list is a promise
+  // that a click will open something, and a file that has been moved or deleted
+  // breaks that promise every time it is offered.
+  const alive = [];
+  const gone = [];
+  for (const r of p.recents) {
+    const at = await modifiedAt(r.path);
+    if (at === null) gone.push(r.path);
+    else alive.push({ ...r, modified: at });
+  }
+  if (gone.length) {
+    profiles = PROFILES.forget(profiles, p.id, gone);
+    saveProfiles();
+  }
+  return { ok: true, recents: alive };
+});
+
+function rememberOpened(file, doc) {
+  const p = activeProfile();
+  if (!p || !file) return;
+  profiles = PROFILES.remember(profiles, p.id, {
+    path: file,
+    name: libraryNameFor(file),
+    title: doc?.name || null,
+    at: Date.now()
+  });
+  saveProfiles();
+}
+
+ipcMain.handle('library:get', async () => ({
+  root: libraryRoot(),
+  profile: activeProfile() ? { id: activeProfile().id, name: activeProfile().name } : null
+}));
+
+ipcMain.handle('library:choose', async () => {
+  const p = activeProfile();
+  if (!p) return { ok: false, error: 'There is no profile to set a library for' };
+  const res = await dialog.showOpenDialog(win, {
+    title: `Choose the library folder for ${p.name}`,
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+  profiles = PROFILES.update(profiles, p.id, { root: res.filePaths[0] });
+  saveProfiles();
+  return { ok: true, root: libraryRoot() };
+});
+
+ipcMain.handle('library:list', async () => {
+  if (!libraryRoot()) return { ok: false, error: 'No library folder has been chosen yet' };
+  const state = await libraryState();
+  return { ok: true, root: state.root, documents: state.documents };
+});
+
+ipcMain.handle('library:search', async (_e, query) => {
+  if (!libraryRoot()) return { ok: false, error: 'No library folder has been chosen yet' };
+  const state = await libraryState();
+  const byName = new Map(state.documents.map((d) => [d.name, d.path]));
+  return {
+    ok: true,
+    results: LIB.searchIndex(state.index, query).map((d) => ({ ...d, path: byName.get(d.name) || null }))
+  };
+});
+
+/**
+ * Make a project, which is a folder with a note in it saying it is one.
+ *
+ * The note is what survives being copied to another machine or being found in
+ * Explorer a year later. Anvil could infer a project from any folder under
+ * `projects/`, and does when the note is missing, but a folder that says what
+ * it is beats a convention nobody can see.
+ */
+ipcMain.handle('library:createProject', async (_e, name) => {
+  const root = libraryRoot();
+  if (!root) return { ok: false, error: 'No library folder has been chosen yet' };
+  const clean = String(name || '').trim();
+  if (!clean || BAD_NAME.test(clean)) {
+    return { ok: false, error: 'That name has characters a folder cannot have' };
+  }
+  const dir = path.join(root, 'projects', clean);
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const note = path.join(dir, 'project.json');
+    try {
+      await fs.access(note);
+    } catch {
+      await writeAtomic(
+        note,
+        JSON.stringify(
+          { name: clean, id: `pr${Date.now().toString(36)}`, created: new Date().toISOString() },
+          null,
+          2
+        )
+      );
+    }
+    return { ok: true, project: clean, path: dir };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+/** A folder inside a project, for when a project grows past one list. */
+ipcMain.handle('library:createFolder', async (_e, opts) => {
+  const root = libraryRoot();
+  if (!root) return { ok: false, error: 'No library folder has been chosen yet' };
+  const inside = libraryPathFor(String(opts?.within || 'projects'));
+  const clean = String(opts?.name || '').trim();
+  if (!inside) return { ok: false, error: 'That is not a place in the library' };
+  if (!clean || BAD_NAME.test(clean)) {
+    return { ok: false, error: 'That name has characters a folder cannot have' };
+  }
+  try {
+    const dir = path.join(inside, clean);
+    await fs.mkdir(dir, { recursive: true });
+    return { ok: true, path: dir, name: libraryNameFor(dir) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+/** Every project in the library, from the folders rather than from the index. */
+ipcMain.handle('library:projects', async () => {
+  const root = libraryRoot();
+  if (!root) return { ok: false, error: 'No library folder has been chosen yet' };
+  const dir = path.join(root, 'projects');
+  const out = [];
+  let entries = [];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return { ok: true, projects: [] };
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    let note = null;
+    try {
+      note = JSON.parse(await fs.readFile(path.join(dir, entry.name, 'project.json'), 'utf8'));
+    } catch {
+      /* a folder with no note is still a project, it just has less to say */
+    }
+    out.push({
+      name: entry.name,
+      title: note?.name || entry.name,
+      id: note?.id || null,
+      created: note?.created || null
+    });
+  }
+  out.sort((a, b) => a.title.localeCompare(b.title));
+  return { ok: true, projects: out };
 });
 
 ipcMain.handle('doc:readAnother', async (_e, file) => {
@@ -530,19 +843,7 @@ ipcMain.handle('import:binary', async (_e, kind) => {
 });
 
 ipcMain.handle('doc:openPath', async (_e, file) => {
-  try {
-    const text = await fs.readFile(file, 'utf8');
-    const held = await foreignLock(file);
-    if (currentPath && currentPath !== file) await dropLock(currentPath);
-    currentPath = file;
-    lastWrittenAt = await modifiedAt(file);
-    await takeLock(file);
-    beatLock();
-    setTitle();
-    return { ok: true, path: file, data: JSON.parse(text), held };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  return openDocument(file);
 });
 
 /* ------------------------------------------------------------------ */
@@ -561,6 +862,20 @@ ipcMain.handle('doc:openPath', async (_e, file) => {
  * never gets to clean up after itself and a lock nobody can clear is worse than
  * no lock at all.
  */
+/*
+ * The version this document was at when it was read.
+ *
+ * The third of the three things that make two computers work. A modified time
+ * catches most of it and trusts two machines' clocks to agree, which they do
+ * not: a file written on the desktop can arrive on the laptop stamped a minute
+ * in the past, and then a save here looks like the newer one and is not.
+ *
+ * A counter in the document has no such problem. It only ever goes up, and the
+ * machine that wrote it is written down beside it, so a refusal can say who to
+ * go and ask.
+ */
+let loadedVersion = 0;
+
 const LOCK_STALE_MS = 2 * 60 * 1000;
 const LOCK_BEAT_MS = 30 * 1000;
 let lockBeat = null;
@@ -572,6 +887,10 @@ function whoWeAre() {
   return {
     host: os.hostname(),
     user: os.userInfo?.().username || '',
+    // The profile as well as the machine, because "Kevin on DESKTOP has this
+    // open" is a sentence somebody can act on and a host name on its own is
+    // not.
+    profile: activeProfile()?.name || null,
     pid: process.pid
   };
 }
@@ -664,12 +983,40 @@ ipcMain.handle('doc:save', async (_e, { data, saveAs, sidecar }) => {
     if (res.canceled || !res.filePath) return { ok: false, canceled: true };
     file = res.filePath;
   }
+  /*
+   * Has somebody else written to this since we read it?
+   *
+   * Asked of the file rather than of the clock. The counter in the document
+   * only goes up, so a version on disk higher than the one we loaded means
+   * another machine has been here, whatever the timestamps say.
+   *
+   * Not asked on a Save As or a first save: writing a new file cannot overwrite
+   * anybody's work, and the version there belongs to whatever it was copied
+   * from rather than to the file being made.
+   */
+  const fresh = !currentPath || saveAs;
+  const clash = LIB.savingWouldClobber(fresh ? null : await versionOnDisk(file), loadedVersion, {
+    fresh
+  });
+  if (clash) return { ok: false, conflict: clash };
+
+  const stamped = {
+    ...data,
+    docId: data?.docId || `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    version: (fresh ? Number(data?.version) || 0 : loadedVersion) + 1,
+    writtenBy: whoWeAre().profile || whoWeAre().user || null,
+    writtenAt: new Date().toISOString()
+  };
+
   try {
-    await writeAtomic(file, JSON.stringify(data, null, 2));
+    await writeAtomic(file, JSON.stringify(stamped, null, 2));
     currentPath = file;
+    loadedVersion = stamped.version;
     lastWrittenAt = await modifiedAt(file);
     await takeLock(file);
     beatLock();
+    rememberOpened(file, stamped);
+    await noteInIndex(file, stamped);
 
     // A model beside the document that anything can open. The point of keeping
     // work in a synced folder is that a link to it is useful to someone else,
@@ -686,7 +1033,7 @@ ipcMain.handle('doc:save', async (_e, { data, saveAs, sidecar }) => {
     }
 
     setTitle();
-    return { ok: true, path: file, beside };
+    return { ok: true, path: file, name: libraryNameFor(file), beside, version: stamped.version, docId: stamped.docId };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -730,6 +1077,25 @@ async function writeAtomicBytes(file, buf) {
     await handle.close();
   }
   await fs.rename(temp, file);
+}
+
+/**
+ * The counter and the writer in the file as it stands, without loading it as a
+ * document.
+ *
+ * A parse of the whole file, because a `.anvil` is JSON and there is no cheaper
+ * honest way to read one field out of it. It happens once per save, which is
+ * nothing next to what the save itself does.
+ */
+async function versionOnDisk(file) {
+  try {
+    const got = JSON.parse(await fs.readFile(file, 'utf8'));
+    return { version: Number(got?.version) || 0, writtenBy: got?.writtenBy || null };
+  } catch {
+    // Not there, or not readable. Neither is a conflict: a save onto a file
+    // that is not there is just a save.
+    return null;
+  }
 }
 
 /** When a file last changed, or null if it is not there. */

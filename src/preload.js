@@ -13,6 +13,19 @@ contextBridge.exposeInMainWorld('anvil', {
   library: () => ipcRenderer.invoke('library:get'),
   chooseLibrary: () => ipcRenderer.invoke('library:choose'),
   listLibrary: () => ipcRenderer.invoke('library:list'),
+  searchLibrary: (query) => ipcRenderer.invoke('library:search', query),
+  projects: () => ipcRenderer.invoke('library:projects'),
+  createProject: (name) => ipcRenderer.invoke('library:createProject', name),
+  createFolder: (within, name) => ipcRenderer.invoke('library:createFolder', { within, name }),
+  profiles: () => ipcRenderer.invoke('profiles:list'),
+  useProfile: (id) => ipcRenderer.invoke('profiles:use', id),
+  addProfile: (name) => ipcRenderer.invoke('profiles:add', name),
+  removeProfile: (id) => ipcRenderer.invoke('profiles:remove', id),
+  recents: () => ipcRenderer.invoke('profiles:recents'),
+  // A file that is only a placeholder until something touches it reads slowly
+  // rather than failing, so the window is told to say so instead of looking
+  // like it has hung.
+  onSlowRead: (fn) => ipcRenderer.on('doc:slowRead', (_e, what) => fn(what)),
   save: (data, saveAs, sidecar) =>
     ipcRenderer.invoke('doc:save', { data, saveAs, sidecar }),
   currentPath: () => ipcRenderer.invoke('doc:currentPath'),

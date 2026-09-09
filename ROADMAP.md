@@ -8,8 +8,8 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.70.0**. 583 tests in the window, plus the library naming
-checked in plain node.
+Current version: **2.71.0**. 583 tests in the window, plus 55 checks of the
+library, profiles and the version counter in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
 Animation, Simulation and Generative Design. **Batches 22 to 25 have now shipped
@@ -25,9 +25,10 @@ too**, which closes out Category 1 and Category 2 of the Fusion inventory:
 - **25, the two algorithms.** Split Face by closest point, and a blend at the
   foot of a rib.
 
-What is left is in `FUSION-FEATURES.md`, item by item, each with the reason it
-is not built. The largest remaining piece of *planned* work is the rest of the
-library below: profiles, the index, and recents.
+**The library below is now built too**, in v2.71.0: profiles, projects, folders,
+the index, recents, search, the version counter, where you left off, and the
+placeholder handling. What is left is in `FUSION-FEATURES.md`, item by item,
+each with the reason it is not built.
 
 The sections after that are kept as the record of what was built and, more
 usefully, of what was learned building it.
@@ -41,7 +42,7 @@ whole thing rests on one decision: the library lives in a folder the user picks,
 and if that folder happens to be OneDrive or Drive then syncing is the cloud
 client's job, not Anvil's. Everything below follows from that.
 
-### Profiles
+### Profiles — built, v2.71.0
 
 A profile is a name and a library folder. It is not an account: no password, no
 server, nothing to reset. Anvil starts by asking which profile, or goes straight
@@ -50,6 +51,12 @@ in when there is only one.
 A profile holds the library location, recents, and preferences. Saves and lock
 files are stamped with the profile name and the machine name, so a message can
 say who has a part open and where.
+
+The upgrade mattered more than the first run: somebody already had a library
+folder set from before profiles existed, and losing it would have looked exactly
+like losing the library, since every derived link in every document would have
+stopped resolving by name on the next open. The old single-folder setting is read
+once and becomes the first profile's root.
 
 ### Library layout
 
@@ -61,15 +68,22 @@ say who has a part open and where.
             <part>.anvil
 
 Plain folders, legible in Explorer, and the library survives Anvil being
-uninstalled. `library.json` at the root is an index of projects, folders,
-thumbnails, names and modified times. **The index is a cache and never the
-truth.** The files are. It can be thrown away and rebuilt by scanning, and it
-exists so that search and a recents list do not have to open every document.
+uninstalled. `library.json` at the root is an index of names, projects, titles
+and parameter names. **The index is a cache and never the truth.** The files are.
+It can be thrown away and rebuilt by scanning, and it exists so that search and a
+recents list do not have to open every document.
 
-The library folder, the naming, and the four commands that use it landed in
-v2.70.0 with external references. Profiles, the index and the recents list have
-not: the part that had to exist for a design to name another design is the root
-and the relative name, and that is what was built.
+**Built, v2.71.0**, along with projects, folders, recents and search over the
+index. One thing turned out to matter more than expected: the index must never
+be the reason a file is *read*. On a synced folder those files can be
+placeholders that have never been downloaded, and opening each one to learn its
+title would pull an entire library down because somebody opened a list. So the
+walk is the truth, `readdir` and `stat` do not hydrate anything, and an entry
+carries the file name as its title until the document is opened for its own
+sake. Search still finds a document that has never been opened, on what is known
+of it.
+
+The library folder and the naming landed in v2.70.0 with external references.
 
 ### The three things that make two computers work
 
@@ -86,24 +100,43 @@ and the relative name, and that is what was built.
    save refuses and offers to write a new version instead. Locks reduce the
    two-at-once case; this is what actually prevents losing work.
 
-Atomic saves and lock files are built. The third is built as far as the file's
-modified time: a save onto a file that has changed since it was opened stops and
-offers a copy. It is not yet a counter carried in the document, which would also
-catch the case where two machines' clocks disagree.
+**All three are built.** The counter arrived in v2.71.0 and replaces the
+modified-time check as the thing that decides: a document carries an id, a
+counter and the name of whoever last wrote it, and a save onto a file whose
+counter has moved past the one this window read refuses and offers a copy.
 
-### Where you left off
+The counter rather than the clock, because the two machines' clocks do not agree
+and nothing can make them: a file written on the desktop can arrive on the
+laptop stamped a minute in the past, and a save here then looks like the newer
+one and is not. A counter only ever goes up. Saving anyway is not offered, since
+the counter is the one signal that cannot be argued with.
 
-Camera, active tab, timeline rollback position and selection are stored in the
-document, written on save, and **not counted as a change for the dirty flag** so
-that looking at a part does not mark it edited. Open it on the other machine and
-the view is where you left it.
+### Where you left off — built, v2.71.0
 
-### Known hazards
+Camera, active tab and selection are stored in the document, written on save,
+and **not counted as a change for the dirty flag** so that looking at a part does
+not mark it edited. Open it on the other machine and the view is where you left
+it.
+
+Written at save time only, which is what keeps it from counting as a change:
+there is no moment where looking at a part makes it dirty. The timeline position
+is not in here and never was, because `doc.rollback` is already part of the
+document: where the timeline is rolled back to changes what the part *is*, not
+merely what you can see of it.
+
+### Known hazards — handled, v2.71.0
 
 OneDrive's Files On-Demand leaves files as placeholders until touched, so the
 first open can block on a download. Google Drive's desktop client handles this
 worse than OneDrive does. Anvil has to treat a file that is not there yet as a
 slow read rather than a missing one.
+
+Two things follow from that and both are built. A read that has taken more than a
+moment tells the window, which says what it is waiting for: saying nothing for
+thirty seconds looks exactly like a hang, and somebody who thinks the
+application has hung kills it partway through a read. And nothing times out or
+gives up, because a timeout would turn a working library into a broken one the
+first time somebody opened a part they had not used on this machine.
 
 ### Deliberately not built
 

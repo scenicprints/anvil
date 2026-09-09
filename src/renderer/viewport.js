@@ -670,6 +670,47 @@ export class Viewport {
     return new THREE.Vector3(...screenUpFor(phi, theta));
   }
 
+  /**
+   * Where the camera is, as numbers a document can hold.
+   *
+   * The angles and the distance rather than a matrix, because that is what the
+   * viewport actually steers by: handing back a matrix would mean decomposing
+   * it again on the way in, and any rounding in that shows up as a view that is
+   * a degree off the one that was saved.
+   */
+  cameraState() {
+    return {
+      target: this.target.toArray(),
+      radius: this.spherical.radius,
+      phi: this.spherical.phi,
+      theta: this.spherical.theta,
+      perspective: !!this.usePerspective,
+      zoom: this.orthoZoom
+    };
+  }
+
+  /** Put it back, ignoring anything that is not a number. */
+  setCameraState(got) {
+    if (!got) return false;
+    const num = (v, fallback) => (Number.isFinite(v) ? v : fallback);
+    if (Array.isArray(got.target) && got.target.every((v) => Number.isFinite(v))) {
+      this.target.fromArray(got.target);
+    }
+    this.spherical.radius = Math.max(1e-3, num(got.radius, this.spherical.radius));
+    // Clamped off the poles, the same as a drag is. A phi of exactly zero
+    // leaves the view with no up direction to speak of.
+    this.spherical.phi = Math.min(Math.PI - 1e-3, Math.max(1e-3, num(got.phi, this.spherical.phi)));
+    this.spherical.theta = num(got.theta, this.spherical.theta);
+    this.orthoZoom = Math.max(1e-3, num(got.zoom, this.orthoZoom));
+    if (typeof got.perspective === 'boolean') {
+      this.usePerspective = got.perspective;
+      this.camera = this.usePerspective ? this.perspective : this.ortho;
+    }
+    this._syncCamera();
+    this.invalidate();
+    return true;
+  }
+
   _syncCamera() {
     const offset = new THREE.Vector3().setFromSpherical(this.spherical);
     // Spherical is Y-up internally; swap so the model space stays Z-up.

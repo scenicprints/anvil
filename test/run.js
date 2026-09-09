@@ -22,6 +22,7 @@ const electron = require(path.join(root, 'node_modules', 'electron'));
  */
 try {
   require('./library.test.js');
+  require('./profiles.test.js');
 } catch (err) {
   process.stderr.write(`${err.message}
 `);

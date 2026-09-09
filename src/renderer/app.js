@@ -1303,6 +1303,26 @@ function wireUI() {
 
   $('#cmdopen')?.addEventListener('click', () => openCommandSearch());
 
+  /*
+   * A file that is only a placeholder until something touches it reads slowly
+   * rather than failing, and the touch is what downloads it.
+   *
+   * Saying nothing for thirty seconds looks exactly like a hang, and somebody
+   * who thinks the application has hung kills it partway through a read. So the
+   * window says what it is waiting for.
+   */
+  window.anvil.onSlowRead?.((what) => {
+    if (!what) return;
+    setStatus(
+      `Fetching ${String(what.path).split(/[\\/]/).pop()} from the cloud. ` +
+        'It is there, it is just not on this machine yet.'
+    );
+  });
+
+  // Which profile, asked once and only when there is more than one to choose
+  // between. A single profile is the ordinary case and must not cost a click.
+  askWhichProfile();
+
   document.querySelectorAll('[data-menu]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1890,6 +1910,24 @@ async function runCommand(cmd) {
       break;
     case 'chooseLibrary':
       cmdChooseLibrary();
+      break;
+    case 'openRecent':
+      cmdOpenRecent();
+      break;
+    case 'searchLibrary':
+      cmdSearchLibrary();
+      break;
+    case 'newProject':
+      cmdNewProject();
+      break;
+    case 'newFolder':
+      cmdNewFolder();
+      break;
+    case 'switchProfile':
+      cmdSwitchProfile();
+      break;
+    case 'addProfile':
+      cmdAddProfile();
       break;
     case 'openFromLibrary':
       cmdOpenFromLibrary();
@@ -2489,6 +2527,7 @@ async function cmdOpen() {
   state.hiddenBodies.clear();
   state.dirty = false;
   state.docPath = res.path;
+  state.docVersion = Number(res.data?.version) || 0;
   el.docname.textContent = res.path.split(/[\\/]/).pop();
 
   // A folder that syncs cannot tell two machines about each other, so a lock
@@ -2507,7 +2546,7 @@ async function cmdOpen() {
     });
   }
   rebuildAll();
-  state.vp.fit();
+  if (!goBackToWhereWeWere(state.doc.view)) state.vp.fit();
   setStatus(`Opened ${el.docname.textContent}`);
 }
 
@@ -2518,6 +2557,240 @@ async function cmdOpen() {
  * a synced folder then keeping two machines in step is that client's job, which
  * is the whole design here rather than a shortcut.
  */
+/**
+ * Where you left off: the camera, the tab, how far the timeline is rolled back,
+ * and what was picked.
+ *
+ * In the document rather than beside it, so that opening the same file on the
+ * other machine puts you back where you were. It is written at save time only,
+ * which is what keeps it from counting as a change: there is no moment where
+ * looking at a part makes it dirty.
+ */
+function whereWeAre() {
+  return {
+    camera: state.vp?.cameraState?.() || state.doc.view?.camera || null,
+    // Read off the ribbon rather than kept alongside it. The active tab is a
+    // class on a button, and a second copy of it would be a second thing that
+    // can be wrong.
+    tab: document.querySelector('.tab.active')?.dataset.tab || null,
+    // Not the timeline position. `doc.rollback` is already part of the
+    // document, because where the timeline is rolled back to changes what the
+    // part is, not merely what you can see of it.
+    selection: {
+      bodies: [...(state.selection?.bodies || [])]
+    },
+    at: new Date().toISOString()
+  };
+}
+
+/**
+ * Put the view back the way it was left.
+ *
+ * Everything here is allowed to fail quietly. A camera from a document written
+ * by an older version, a tab that has been renamed, a body that no longer
+ * exists: none of those are worth a message, because none of them are about the
+ * part. What matters is that the part opens.
+ */
+function goBackToWhereWeWere(view) {
+  if (!view) return false;
+  let put = false;
+  try {
+    if (view.camera && state.vp?.setCameraState) {
+      state.vp.setCameraState(view.camera);
+      put = true;
+    }
+  } catch {
+    /* an older camera shape, and the default view is no disaster */
+  }
+  try {
+    if (view.tab) setTab(view.tab);
+  } catch {
+    /* a tab that no longer exists */
+  }
+  try {
+    for (const id of view.selection?.bodies || []) {
+      if ((state.result?.bodies || []).some((b) => b.id === id)) state.selection.bodies.add(id);
+    }
+  } catch {
+    /* a selection of things that have gone */
+  }
+  return put;
+}
+
+/**
+ * Which profile is in use, asked once at startup and only when there is a
+ * choice to make.
+ *
+ * A profile is a name and a library folder. It is not an account: there is
+ * nothing to log into, nothing to reset, and no way to be locked out of your
+ * own parts. What it is for is that one machine can hold more than one body of
+ * work, and that a lock file can say who has a part open in a word somebody
+ * recognises.
+ */
+async function askWhichProfile() {
+  const got = await window.anvil.profiles?.();
+  if (!got) return;
+  if (!got.ask) {
+    showProfileName(got.profiles.find((p) => p.id === got.active) || got.profiles[0]);
+    return;
+  }
+  return new Promise((resolve) => {
+    promptChoice(
+      'Which profile',
+      got.profiles.map((p) => [p.id, p.root ? `${p.name} — ${p.root}` : `${p.name} — no library yet`]),
+      async (id) => {
+        if (id) await window.anvil.useProfile?.(id);
+        const now = await window.anvil.library?.();
+        showProfileName(now?.profile);
+        resolve();
+      }
+    );
+  });
+}
+
+/**
+ * The profile's name, where the window can say whose work this is.
+ *
+ * Shown only when there is more than one to be. On the ordinary machine it is a
+ * word that never changes and would be one more thing in the way; it earns its
+ * place the moment there is a second profile and a wrong one to be in.
+ */
+async function showProfileName(profile) {
+  state.profile = profile || null;
+  const el2 = document.getElementById('profilename');
+  if (!el2) return;
+  const got = await window.anvil.profiles?.();
+  el2.textContent = (got?.profiles?.length || 0) > 1 ? profile?.name || '' : '';
+}
+
+/** Make another profile, and go and work in it. */
+function cmdAddProfile() {
+  promptText('Name the new profile', '', async (name) => {
+    if (!name) return;
+    const res = await window.anvil.addProfile?.(name);
+    if (!res?.ok) {
+      setStatus(res?.error || 'That profile could not be made.');
+      return;
+    }
+    showProfileName(res.profile);
+    setStatus(`Now working as ${res.profile.name}. Choose a library folder for it.`);
+    cmdChooseLibrary();
+  });
+}
+
+/** Switch to another profile, which means switching libraries. */
+async function cmdSwitchProfile() {
+  const got = await window.anvil.profiles?.();
+  if (!got || got.profiles.length < 2) {
+    setStatus('There is only one profile. Add another from the Library menu.');
+    return;
+  }
+  promptChoice(
+    'Work as',
+    got.profiles.map((p) => [p.id, p.root ? `${p.name} — ${p.root}` : `${p.name} — no library yet`]),
+    async (id) => {
+      if (!id) return;
+      await window.anvil.useProfile?.(id);
+      const now = await window.anvil.library?.();
+      showProfileName(now?.profile);
+      setStatus(`Working as ${now?.profile?.name}. The library is ${now?.root || 'not set yet'}.`);
+    }
+  );
+}
+
+/** Open something opened lately, without going and finding it again. */
+async function cmdOpenRecent() {
+  const got = await window.anvil.recents?.();
+  if (!got?.recents?.length) {
+    setStatus('Nothing has been opened yet in this profile.');
+    return;
+  }
+  promptChoice(
+    'Open recent',
+    got.recents.map((r) => [r.path, r.name ? `${r.title}  ·  ${r.name}` : r.title]),
+    (file) => file && openDocumentAt(file)
+  );
+}
+
+/**
+ * Search the library by what a part is called, where it is, or what it is
+ * measured in.
+ *
+ * Over the index rather than over the files, which is the whole reason there is
+ * an index: three hundred parts is three hundred documents to parse before a
+ * search box could show its first result.
+ */
+function cmdSearchLibrary() {
+  promptText('Search the library', '', async (query) => {
+    if (!query) return;
+    const got = await window.anvil.searchLibrary?.(query);
+    if (!got?.ok) {
+      setStatus(got?.error || 'The library could not be searched.');
+      return;
+    }
+    if (!got.results.length) {
+      setStatus(`Nothing in the library matches ${query}.`);
+      return;
+    }
+    promptChoice(
+      `${got.results.length} match${got.results.length === 1 ? '' : 'es'} for ${query}`,
+      got.results.map((r) => [r.path || r.name, r.project ? `${r.title}  ·  ${r.project}` : r.title]),
+      (file) => file && openDocumentAt(file)
+    );
+  });
+}
+
+/** A project, which is a folder in the library with a note saying it is one. */
+function cmdNewProject() {
+  promptText('Name the project', '', async (name) => {
+    if (!name) return;
+    const res = await window.anvil.createProject?.(name);
+    if (!res?.ok) {
+      setStatus(res?.error || 'That project could not be made.');
+      return;
+    }
+    setStatus(`Project ${res.project} is ready. Save a part into it.`);
+  });
+}
+
+/** A folder inside a project, for when one list is no longer enough. */
+async function cmdNewFolder() {
+  const got = await window.anvil.projects?.();
+  if (!got?.ok) {
+    setStatus(got?.error || 'No library folder has been chosen yet.');
+    return;
+  }
+  if (!got.projects.length) {
+    setStatus('Make a project first, and the folder goes inside it.');
+    return;
+  }
+  promptChoice(
+    'Which project',
+    got.projects.map((pr) => [pr.name, pr.title]),
+    (project) => {
+      if (!project) return;
+      promptText(`Name the folder in ${project}`, '', async (name) => {
+        if (!name) return;
+        const res = await window.anvil.createFolder?.(`projects/${project}`, name);
+        setStatus(res?.ok ? `${res.name} is ready.` : res?.error || 'That folder could not be made.');
+      });
+    }
+  );
+}
+
+/** Open a document by path, from anywhere that already knows the path. */
+async function openDocumentAt(file) {
+  const opened = await window.anvil.openPath?.(file);
+  if (!opened?.ok) {
+    setStatus(opened?.error || 'That document could not be opened.');
+    return;
+  }
+  adoptOpenedDocument(opened);
+  state.docPath = opened.path;
+  state.docVersion = Number(opened.data?.version) || 0;
+  setStatus(`Opened ${el.docname.textContent}`);
+}
+
 async function cmdChooseLibrary() {
   const res = await window.anvil.chooseLibrary?.();
   if (!res?.ok) {
@@ -2611,13 +2884,45 @@ async function cmdSave(saveAs) {
     if (choice?.response === 1) saveAs = true;
   }
 
+  // Where you left off goes in now rather than as it changes, so that looking
+  // at a part never marks it edited. A camera move is not a change to the
+  // model, and a dirty flag that says otherwise trains people to save things
+  // they did not mean to write.
+  state.doc.view = whereWeAre();
+
   const res = await window.anvil.save(state.doc, saveAs, sidecarMesh());
+  if (res.conflict) {
+    /*
+     * Somebody else wrote to this file after we read it, and the counter in the
+     * document says so whatever the two machines' clocks think.
+     *
+     * Saving anyway is not offered. The counter is the one signal that cannot
+     * be argued with, and the honest choices are to put this work somewhere
+     * safe or to go and look at theirs first.
+     */
+    const who = res.conflict.by ? ` by ${res.conflict.by}` : '';
+    const choice = await window.anvil.message({
+      type: 'warning',
+      title: 'Someone else has saved this',
+      message: `This document is at version ${res.conflict.version} on disk${who}, and this window has version ${res.conflict.mine}.`,
+      detail:
+        'Writing over it would lose their work. Save this as a copy and the two ' +
+        'can be compared, or reopen the file to take theirs.',
+      buttons: ['Save a copy', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1
+    });
+    if (choice?.response !== 0) return false;
+    await cmdSaveCopy();
+    return false;
+  }
   if (!res.ok) {
     if (res.error) setStatus(`Could not save: ${res.error}`);
     return false;
   }
   state.dirty = false;
   state.docPath = res.path;
+  state.docVersion = res.version ?? state.docVersion;
   el.docname.textContent = res.path.split(/[\\/]/).pop();
   setStatus(
     res.beside
@@ -6481,10 +6786,16 @@ const RIBBON_MENUS = {
    * out, and because they only make sense once there is a folder to be in.
    */
   library: [
+    ['openRecent', 'Open recent'],
     ['openFromLibrary', 'Open from the library'],
-    ['chooseLibrary', 'Choose the library folder'],
+    ['searchLibrary', 'Search the library'],
+    ['newProject', 'New project'],
+    ['newFolder', 'New folder in a project'],
     ['renameDesign', 'Rename this design'],
-    ['saveCopy', 'Save a copy elsewhere']
+    ['saveCopy', 'Save a copy elsewhere'],
+    ['chooseLibrary', 'Choose the library folder'],
+    ['switchProfile', 'Work as another profile'],
+    ['addProfile', 'Add a profile']
   ],
   rectangle: [
     ['tool:rectangle', 'Two Point Rectangle'],
@@ -10504,9 +10815,12 @@ function adoptOpenedDocument(res) {
   state.selection.bodies.clear();
   state.hiddenBodies.clear();
   state.dirty = false;
+  state.docVersion = Number(res.data?.version) || 0;
   el.docname.textContent = String(res.path).split(/[\\/]/).pop();
   rebuildAll();
-  state.vp.fit();
+  // Fit only when there is nothing better. A document that was left looking at
+  // one corner of a part should open looking at that corner.
+  if (!goBackToWhereWeWere(state.doc.view)) state.vp.fit();
 }
 
 /** The way back, shown only while there is one. */

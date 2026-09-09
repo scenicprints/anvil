@@ -1449,3 +1449,18 @@ table.params .starbtn:hover {
 .checkrow input {
   margin: 0;
 }
+
+/*
+ * Whose work this is, beside what it is called.
+ *
+ * Quiet, because on a machine with one profile it is a word that never changes
+ * and should never be the thing the eye goes to. It earns its place on the
+ * machine with two.
+ */
+#profilename {
+  opacity: 0.55;
+  padding-right: 10px;
+}
+#profilename:empty {
+  display: none;
+}

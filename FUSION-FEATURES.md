@@ -1215,10 +1215,19 @@ Two things in here have a local meaning and are worth stealing:
   them. Anvil has a command search; it has no search over saved documents.
 - **Track project activity**, which locally is "what did I change and when".
 
-The three Data Panel actions that do have a local meaning arrived in v2.70.0 with
-the library: open by name from the library, rename a design, and save a copy
-elsewhere while carrying on in this one. The rest of the panel is the cloud
-layer, which is the part Anvil deliberately is not.
+The Data Panel actions that do have a local meaning are built. Open by name from
+the library, rename a design and save a copy arrived in v2.70.0; projects,
+folders, recents and **search across every document in the library** arrived in
+v2.71.0. The rest of the panel is the cloud layer, which is the part Anvil
+deliberately is not.
+
+Search runs over an index at the library root rather than over the files, and the
+index is a cache that is never the truth. It also never causes a file to be read:
+on a synced folder the documents can be placeholders that have never been
+downloaded, and opening each one to learn its title would pull a whole library
+down because somebody opened a list. An entry carries the file name until the
+document is opened for its own sake, and a document that has never been opened is
+still findable on what is known of it.
   Anvil keeps versions inside a document already, so a per-file history view is
   a short step.
 
