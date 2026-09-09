@@ -12318,6 +12318,80 @@ async function run() {
     near(two.hi - two.lo, 50, 0.05, 'so much each way is the two added up');
   });
 
+  test('sheet metal: a flange can run to a face instead of a stated height', () => {
+    // Fusion's To Object. A flange that lands on the part beside it should stay
+    // there when that part moves, instead of being a number that was right
+    // once.
+    const bracket = (extra) => {
+      const doc = newDocument();
+      doc.sheetMetalRules = [
+        { ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2', bendRadius: '2' }
+      ];
+      doc.sheetMetalRule = 'Thin';
+
+      const sk = newSketch('XY', 'Plate');
+      sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] }
+      ];
+      let out = rebuild(doc);
+      const topo = buildTopology(K.meshData(out.bodies[0].solid));
+      const edge = topo.edges.find(
+        (e) => e.kind === 'line' && e.convex && Math.abs(e.refPoint[0] - 60) < 0.01 &&
+          Math.abs(e.refPoint[2] - 2) < 0.01
+      );
+      assert(edge, 'found the edge to flange off');
+      const ref = edgeReference(edge, topo);
+      out.dispose();
+
+      doc.features.push({
+        id: uid('f'),
+        type: 'flange',
+        bodies: 'all',
+        edges: [ref],
+        angle: '90',
+        height: '20',
+        ...extra
+      });
+      out = rebuild(doc);
+      return out;
+    };
+
+    // Up to a plane thirty above the sketch. The flange runs straight up from
+    // the bend, so its top has to land exactly there.
+    const run = bracket({ extent: 'object', toObject: { plane: { base: 'XY', offset: '30' } } });
+    assert(run.errors.length === 0, run.errors.map((e) => e.message).join('; '));
+    near(K.boundingBox(run.bodies[0].solid).max[2], 30, 0.05, 'it stops on the plane');
+    run.dispose();
+
+    // And short of it by the offset.
+    const shy = bracket({
+      extent: 'object',
+      toObject: { plane: { base: 'XY', offset: '30' } },
+      toOffset: '-5'
+    });
+    near(K.boundingBox(shy.bodies[0].solid).max[2], 25, 0.05, 'stopping short by the offset');
+    shy.dispose();
+
+    // A face behind the bend has no length in it, and is refused with the
+    // reason rather than built as a sliver or as nothing.
+    const behind = bracket({ extent: 'object', toObject: { plane: 'XY' } });
+    assert(
+      behind.errors.some((e) => /behind the bend/.test(e.message)),
+      `expected a refusal, got ${JSON.stringify(behind.errors)}`
+    );
+    behind.dispose();
+  });
+
   test('sheet metal: the height datum decides what the height is measured from', () => {
     // A flange panel begins where the bend arc ends, so a height handed to the
     // panel tree is measured from the bend tangent. A bracket is dimensioned to

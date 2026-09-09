@@ -15418,6 +15418,9 @@ function cmdFlange() {
     width: '',
     widthOffset: '0',
     heightDatum: 'tangent',
+    extent: 'distance',
+    toObject: null,
+    toOffset: '0',
     bendPosition: 'inside',
     relief: true
   };
@@ -15817,11 +15820,46 @@ function flangeFields() {
       type: 'expr',
       showIf: (f) => ['twoSides', 'offsets'].includes(f.widthType)
     },
-    { key: 'height', label: 'Height', type: 'expr' },
+    {
+      // Fusion's Extent Type. To Object is how a flange lands on a face of the
+      // part beside it and stays there when that part moves, instead of being
+      // a number that was right once.
+      key: 'extent',
+      label: 'Extent',
+      type: 'select',
+      options: [
+        ['distance', 'A stated height'],
+        ['object', 'To a face or a plane']
+      ]
+    },
+    {
+      key: '__toObject',
+      label: 'Run it to',
+      type: 'pick',
+      pick: 'toObject',
+      showIf: (f) => f.extent === 'object',
+      summary: (f) => objectRefText(f.toObject),
+      clear: (f) => {
+        f.toObject = null;
+      }
+    },
+    {
+      key: 'toOffset',
+      label: 'Stopping short by',
+      type: 'expr',
+      showIf: (f) => f.extent === 'object'
+    },
+    {
+      key: 'height',
+      label: 'Height',
+      type: 'expr',
+      showIf: (f) => f.extent !== 'object'
+    },
     {
       // Where that height is measured from. A bracket is dimensioned to its
       // outside, not to a tangent point nobody can put a rule on.
       key: 'heightDatum',
+      showIf: (f) => f.extent !== 'object',
       label: 'Measured from',
       type: 'select',
       options: [

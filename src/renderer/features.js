@@ -7458,10 +7458,72 @@ export function rebuild(doc, options = {}) {
           }
         }
 
+        /*
+         * Fusion's To Object extent. The height is not a number here but
+         * whatever reaches the thing picked, which is how a flange lands on a
+         * face of the part beside it and stays there when that part moves.
+         *
+         * Worked out by asking rather than by geometry: the panel is added to a
+         * throwaway copy at a height of one, the frames are resolved, and the
+         * child's own frame says where the flange starts and which way it runs.
+         * The height then falls out of where that ray meets the plane. Doing it
+         * from the bend arithmetic instead would mean keeping a second copy of
+         * that arithmetic in step with the first.
+         */
+        let reach = height;
+        if (feature.extent === 'object' && feature.toObject) {
+          const target = objectPlane(feature.toObject, scope);
+          if (!target) {
+            errs.push({
+              feature: feature.id,
+              message: 'Flange has lost the face it was running to'
+            });
+            continue;
+          }
+          const probe = SM.clonePart(part);
+          const trial = SM.addFlangePanel(probe, found.panel.id, shifted, {
+            angle,
+            radius,
+            height: 1,
+            v0,
+            v1,
+            panelId: 'probe:p',
+            bendId: 'probe:b',
+            relief: false
+          });
+          const frame = trial && SM.resolveFrames(probe, rule.thickness, rule.kFactor, {})
+            .get(trial.panel.id);
+          if (!frame) {
+            errs.push({ feature: feature.id, message: 'That flange cannot be measured to an object' });
+            continue;
+          }
+          const denom =
+            frame.x[0] * target.n[0] + frame.x[1] * target.n[1] + frame.x[2] * target.n[2];
+          if (Math.abs(denom) < 1e-6) {
+            errs.push({
+              feature: feature.id,
+              message: 'That flange runs along the face it was told to stop at, so it never meets it'
+            });
+            continue;
+          }
+          const gap =
+            (target.origin[0] - frame.origin[0]) * target.n[0] +
+            (target.origin[1] - frame.origin[1]) * target.n[1] +
+            (target.origin[2] - frame.origin[2]) * target.n[2];
+          reach = gap / denom + safeEval(feature.toOffset, scope, 0);
+          if (!(reach > 1e-6)) {
+            errs.push({
+              feature: feature.id,
+              message: 'That face is behind the bend, so the flange would have no length'
+            });
+            continue;
+          }
+        }
+
         const res = SM.addFlangePanel(part, found.panel.id, shifted, {
           angle,
           radius,
-          height,
+          height: reach,
           v0,
           v1,
           panelId: `${feature.id}:p${n}`,

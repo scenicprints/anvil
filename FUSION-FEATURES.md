@@ -823,7 +823,7 @@ every row carries its own settings.
 | Selection box, per-row settings | several flanges in one feature | **missing** — one at a time |
 | Edges / Profiles | | has |
 | Flange Width Type (edge) | Full Edge, Symmetric, Two Sides, Two Offsets | has, v2.55.0. The offsets are given as distances rather than picked against reference faces |
-| Extent Type (edge) | Distance, **To Object** with an offset | partial — distance |
+| Extent Type (edge) | Distance, To Object with an offset | has, v2.61.0 |
 | Angle (edge) | | has |
 | Height Datum (edge) | Inner Faces, Outer Faces, Tangent To Bend | has, v2.59.0 |
 | Bend Position (edge) | Inside, Outside, Adjacent, Tangent | has |
@@ -834,6 +834,14 @@ every row carries its own settings.
 | Direction (contour) | One Side, Two Sides, Symmetric | has, v2.59.0 |
 | Sheet Metal Rule | pick the rule when the first body is made | partial |
 | Override Rules | per-flange overrides of bend radius, bend relief, and 2- and 3-bend corner relief | has, v2.47.0 |
+
+To Object is worked out by asking rather than by arithmetic. The panel is added
+to a throwaway copy of the part at a height of one, the frames are resolved, and
+the child's own frame says where the flange starts and which way it runs; the
+height then falls out of where that ray meets the plane. Deriving it from the
+bend geometry instead would mean keeping a second copy of that arithmetic in
+step with the first, and the first is already the only thing that knows how a
+bend is laid out.
 
 The height datum is worth a word because it is the one that gets a bracket
 made wrong. A flange panel begins where the bend arc ends, so a height handed
