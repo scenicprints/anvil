@@ -1922,6 +1922,71 @@ async function run() {
     stopped.dispose();
   });
 
+  test('rib: in plane, the curve is the top of a gusset that lands on the part', () => {
+    // Fusion's rib: "extruded in a direction parallel to the sketch plane" and
+    // "to the nearest faces on a solid body". The curve is drawn edge on, the
+    // thickness goes across the plane, and the wall hangs from the curve until
+    // it lands. That is the triangular gusset between a wall and a floor.
+    const doc = newDocument();
+    // A floor 40 by 40 by 5, and a wall standing on the back of it.
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '40', depth: '40', height: '5', x: '0', y: '0', z: '0', centered: false },
+      op: 'new'
+    });
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '5', depth: '40', height: '30', x: '0', y: '0', z: '0', centered: false },
+      op: 'join'
+    });
+
+    // A diagonal drawn on a plane through the middle of the bracket, from the
+    // top of the wall out to the floor. The gusset is the triangle under it.
+    // The plane has to cut through the part rather than sit on its face: a
+    // rib straddles its own plane, so one drawn on the outside face would hang
+    // half of itself in the air beside the part and never be cut free of it.
+    const sk = openSketch({ base: 'XZ', offset: '-20' }, [[5, 25], [25, 5]], 'Gusset');
+    doc.sketches[sk.id] = sk;
+    doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+    doc.features.push({
+      id: uid('f'),
+      type: 'rib',
+      sketch: sk.id,
+      ribDirection: 'inPlane',
+      thickness: '4',
+      extent: 'toNext',
+      op: 'join',
+      targets: 'all'
+    });
+
+    const res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+    assert(res.bodies.length === 1, `joined to the bracket, got ${res.bodies.length}`);
+
+    const bb = K.boundingBox(res.bodies[0].solid);
+    // The thickness straddles the sketch plane, which lies at y = 0, so the
+    // gusset reaches two either side of it. That is the direction that was
+    // wrong before: a rib built the old way would have been four thick along x
+    // and forty deep along y instead.
+    // The rib is inside the bracket, not hanging off it, so the part is no
+    // bigger than it was. A rib built the old way would have run forty deep
+    // along the plane normal and changed this.
+    near(bb.min[1], 0, 0.05, 'the bracket still starts where it did');
+    near(bb.max[1], 40, 0.05, 'and ends where it did');
+
+    // And it added a wedge rather than a slab. The triangle under the diagonal
+    // is 20 by 20 over 2, times 4 thick, less the corner of it already inside
+    // the wall and the floor.
+    const bracket = 40 * 40 * 5 + 5 * 40 * 25;
+    const added = K.properties(res.bodies[0].solid).volume - bracket;
+    assert(added > 100 && added < 20 * 20 / 2 * 4 + 1, `a gusset, not a slab: ${added.toFixed(1)}`);
+    res.dispose();
+  });
+
   test('rib: a draft angle leans the wall in as it goes', () => {
     const wall = (taper) => {
       const doc = newDocument();
@@ -3645,6 +3710,25 @@ async function run() {
     // Saying nothing is still the mitre, so nothing already built moves.
     const old = box([{ edges: [], all: true, radius: '5', chamferType: 'equal', cornerType: undefined }]);
     near(old.volume, mitred.volume, 1e-6, 'an absent corner type is the mitre');
+
+    // Blend rounds where the chamfered corner puts a flat, so it leaves more
+    // than the facet and less than the point. That ordering is the whole of
+    // what the three types are, and it is what tells a real blend from a
+    // chamfer with the label changed.
+    const blended = box([
+      { edges: [], all: true, radius: '5', chamferType: 'equal', cornerType: 'blend' }
+    ]);
+    assert(
+      blended.volume > cornered.volume && blended.volume < mitred.volume,
+      `a blend sits between the two: ${blended.volume.toFixed(1)} against ` +
+        `${cornered.volume.toFixed(1)} and ${mitred.volume.toFixed(1)}`
+    );
+    // Round, so the corner is not one flat face: it arrives as several
+    // triangles that do not meet smoothly enough to group into one.
+    assert(
+      blended.faces > cornered.faces,
+      `a rounded corner is not a single facet: ${blended.faces} against ${cornered.faces}`
+    );
   });
 
   test('chamfer: an angle of forty five is the same as equal distances', () => {

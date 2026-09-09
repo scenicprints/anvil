@@ -153,7 +153,27 @@ that is the thing that makes a loft between two rectangles not twist.
 | Flip Direction | | has |
 | Draft Angle + Draft Pull Direction + flip | | partial — angle and flip, v2.51.0. The pull direction is the sketch normal and is not separately settable |
 | Fillet Radius | a fillet at the foot of the rib | **missing** — Anvil has this on Boss, not Rib. Boss builds its fillet into a revolved section, which a rib of any shape cannot use, so this wants the concave edges of the join found by provenance |
-| Start | Bottom, Top | **missing**, and *pending* a read of what Fusion means by it. Anvil's Start is which side of the curve the thickness sits, which is a different question and is already there |
+| Start | Bottom, Top | **missing**, and still *pending*: it is not in the tooltip and I have not seen the dropdown flipped. Anvil's own Start is which side of the curve the thickness sits, which is a different question and is already there |
+| Direction of the wall | parallel to the sketch plane | has, v2.56.0, as a setting. **See the note below: Fusion's rib is not what this built first** |
+
+**The direction was wrong, and it took reading the tooltip to see it.** Fusion's
+Rib "is extruded in a direction parallel to the sketch plane" and "to the
+nearest faces on a solid body". The curve is drawn edge on, standing in the
+plane of the rib: the thickness goes across the plane and the wall hangs from
+the curve until it lands on the part. That is the triangular gusset between a
+wall and a floor, which is what anybody means by a rib.
+
+What Anvil built instead thickens the curve within the plane and extrudes along
+the normal: a wall standing on a footprint drawn from above. That is a real and
+useful thing, and it is what Fusion calls a Web, which is also what this file
+said Anvil's Web was. Both commands were building the same shape in the same
+direction; only their extent settings differed.
+
+So Rib takes a direction as of v2.56.0 rather than being corrected outright.
+Out of the plane stays the default, because changing it would move every rib
+already built. Along the plane is Fusion's, and the note in the dialog says the
+plane has to cut through the part rather than sit on a face of it, since the
+wall straddles its own plane.
 
 Presets were a Fusion-wide idea Anvil had nowhere, and shipped in v2.40.0 on
 every dialog that has anything to save. Rib is where the reference documents
@@ -361,7 +381,7 @@ broken.
 | Edges/Faces/Features | | partial — edges only |
 | Distance, Angle | | has |
 | Tangent Chain | | has, v2.35.0 |
-| Corner Type | Chamfer, Miter, **Blend** | partial — Miter and Chamfer, v2.54.0. Blend is *pending*: Fusion's page gives a sentence for the Chamfer type and none I could reach for Blend, and naming a setting after a Fusion option without matching it is worse than leaving it out |
+| Corner Type | Chamfer, Miter, Blend | has, v2.56.0. Fusion's wording for Blend is "blends beveled edges into adjacent edges", so it is the chamfered corner with a sphere put back into it: round where the facet is flat, passing exactly through the same three tangent points so the bevels run into it without a step |
 
 ### Draft — partial
 

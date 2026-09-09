@@ -375,11 +375,19 @@ a milled part, a stress raiser on a printed one, and a shape no tool can cut on
 a moulded one. **Draft** tapers one side of the neutral plane
 or both, which is the shape a moulded part has about its parting line.
 
-**Rib** thickens an open sketch curve into a wall. Its depth can be a number or
-**to the next body it meets**, which is what a rib is usually for: the depth
-that reaches the base is a number nobody should have to work out and one that
-goes stale the moment anything above it moves. A draft angle leans the wall in
-as it goes, for the same reason a moulded wall has one.
+**Rib** goes two ways, and they are different features rather than settings of
+one. **Along the sketch plane** is Fusion's: the curve is drawn edge on, the
+thickness goes across the plane, and the wall hangs from the curve down to
+whatever it lands on, which is the triangular gusset between a wall and a floor.
+The plane has to cut through the part rather than sit on a face of it, because
+the wall straddles its own plane. **Out of the sketch plane** thickens the curve
+within the plane and extrudes along the normal, which is a wall standing on a
+footprint drawn from above. That is the default, and its depth can be a number
+or
+**to the next body it meets**: the depth that reaches the base is a number
+nobody should have to work out and one that goes stale the moment anything above
+it moves. A draft angle leans that wall in as it goes, for the same reason a
+moulded wall has one.
 
 **Hole** has a type, an extent of distance, to an object, or all, a drill point
 angle, a counterbore or countersink, and can be **tapped**, which cuts a real

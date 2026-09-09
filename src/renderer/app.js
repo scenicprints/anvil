@@ -3758,7 +3758,8 @@ function blendFields(kind) {
             type: 'select',
             options: [
               ['miter', 'Miter, the faces run to a point'],
-              ['chamfer', 'Chamfer, a facet across the corner']
+              ['chamfer', 'Chamfer, a facet across the corner'],
+              ['blend', 'Blend, rounded into the edges either side']
             ]
           });
           out.push({
@@ -4261,7 +4262,7 @@ function webFields(feature) {
       key: 'start',
       label: 'Which side',
       type: 'select',
-      showIf: (f) => f.direction === 'one',
+      showIf: (f) => f.direction === 'one' && f.ribDirection !== 'inPlane',
       options: [
         ['bottom', 'One way'],
         ['top', 'The other']
@@ -6605,6 +6606,7 @@ function startRib() {
     sketch: paths[paths.length - 1].id,
     thickness: '2',
     direction: 'symmetric',
+    ribDirection: 'normal',
     start: 'bottom',
     extent: 'depth',
     depth: '10',
@@ -6626,10 +6628,26 @@ function ribFields() {
       type: 'select',
       options: paths.map((sk) => [sk.id, sk.name])
     },
+    {
+      // Fusion's rib is extruded parallel to its sketch plane, to the nearest
+      // faces: the curve is drawn edge on and the wall hangs from it, which is
+      // the triangular gusset between a wall and a floor. What this built
+      // first is the other one, a wall standing on a footprint drawn from
+      // above, and Fusion has that too under the name Web. Out of the plane
+      // stays the default so nothing already built moves.
+      key: 'ribDirection',
+      label: 'The wall runs',
+      type: 'select',
+      options: [
+        ['normal', 'Out of the sketch plane, from a footprint'],
+        ['inPlane', 'Along the sketch plane, hanging from the curve']
+      ]
+    },
     { key: 'thickness', label: 'Thickness', type: 'expr' },
     {
       key: 'direction',
       label: 'Thickness sits',
+      showIf: (f) => f.ribDirection !== 'inPlane',
       type: 'select',
       options: [
         ['symmetric', 'Half each side of the curve'],
@@ -6654,12 +6672,18 @@ function ribFields() {
       key: 'extent',
       label: 'Extent',
       type: 'select',
+      showIf: (f) => f.ribDirection !== 'inPlane',
       options: [
         ['depth', 'A stated depth'],
         ['toNext', 'To the next body it meets']
       ]
     },
-    { key: 'depth', label: 'Depth', type: 'expr', showIf: (f) => f.extent !== 'toNext' },
+    {
+      key: 'depth',
+      label: 'Depth',
+      type: 'expr',
+      showIf: (f) => f.ribDirection !== 'inPlane' && f.extent !== 'toNext'
+    },
     {
       // Not offered with To Next. A tapered wall run out to a length it does
       // not know shrinks to nothing before it arrives, so the two settings
@@ -6667,9 +6691,21 @@ function ribFields() {
       key: 'taper',
       label: 'Draft angle (deg)',
       type: 'expr',
-      showIf: (f) => f.extent !== 'toNext'
+      showIf: (f) => f.ribDirection !== 'inPlane' && f.extent !== 'toNext'
     },
-    { key: 'flip', label: 'Flip direction', type: 'bool' },
+    {
+      key: 'flip',
+      label: (f) =>
+        f.ribDirection === 'inPlane' ? 'Hang it the other way' : 'Flip direction',
+      type: 'bool'
+    },
+    {
+      key: '__ribNote',
+      label: '',
+      type: 'note',
+      showIf: (f) => f.ribDirection === 'inPlane',
+      text: 'The wall straddles its own sketch plane and hangs from the curve to the nearest faces, so the plane has to cut through the part rather than sit on a face of it. Thickness is across the plane; there is no depth to give.'
+    },
     { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS },
     TARGETS_FIELD
   ];

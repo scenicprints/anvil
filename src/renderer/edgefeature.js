@@ -494,7 +494,7 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
    * own.
    */
   const cornerCuts = [];
-  if (kind === 'chamfer' && opts.cornerType === 'chamfer') {
+  if (kind === 'chamfer' && ['chamfer', 'blend'].includes(opts.cornerType)) {
     for (const [v, legs] of vertexLegs) {
       if (legs.length < 3) continue;
       const at = vertexAt.get(v);
@@ -532,7 +532,41 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
       const big = Math.max(...legs.map((l) => l.size));
       const reach = big * 8 + 1;
       const near = K.translate(K.sphere(big * 2.5, circleSegments(big * 2.5), scope), at, scope);
-      cornerCuts.push(K.intersection(halfSpaceAt(pts[0], n, reach, scope), near, scope));
+      let cut = K.intersection(halfSpaceAt(pts[0], n, reach, scope), near, scope);
+
+      /*
+       * Blend, which Fusion describes as blending the bevelled edges into the
+       * adjacent edges. Same cut as the chamfered corner, with a sphere put
+       * back into it, so what is left where the point was is round rather than
+       * flat and it runs into the bevels instead of meeting them at an edge.
+       *
+       * The sphere passes exactly through the three tangent points, so the
+       * blend starts where the bevels do and there is no step. Its centre sits
+       * one circumradius inside along the corner's own diagonal, which puts its
+       * surface a shade over four tenths of that radius proud of the flat
+       * facet: more material than the chamfered corner leaves and less than the
+       * mitre, which is where a blend belongs between the two.
+       */
+      if (opts.cornerType === 'blend') {
+        const mid = [
+          (pts[0][0] + pts[1][0] + pts[2][0]) / 3,
+          (pts[0][1] + pts[1][1] + pts[2][1]) / 3,
+          (pts[0][2] + pts[1][2] + pts[2][2]) / 3
+        ];
+        // Equidistant from all three by symmetry of the corner; the mean is
+        // the circumcentre for the symmetric case and near enough for the rest,
+        // and the radius is taken as the furthest of the three so the sphere
+        // reaches every one of them.
+        const rad = Math.max(...pts.map((p) => len(sub(p, mid))));
+        if (rad > 1e-9) {
+          const c = [mid[0] - n[0] * rad, mid[1] - n[1] * rad, mid[2] - n[2] * rad];
+          const R = Math.sqrt(2) * rad;
+          const ball = K.translate(K.sphere(R, circleSegments(R), scope), c, scope);
+          cut = K.difference(cut, ball, scope);
+        }
+      }
+
+      cornerCuts.push(cut);
     }
   }
 

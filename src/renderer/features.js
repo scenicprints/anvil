@@ -2636,29 +2636,49 @@ export function rebuild(doc, options = {}) {
      * far side, which is not. They are told apart by which one still touches
      * the plane the sketch was drawn on.
      */
-    const trimToNext = (wall) => {
+    const trimToNext = (wall, chain) => {
       if (!blockers.length) return wall;
       let cut = wall;
       for (const b of blockers) cut = K.difference(cut, b.solid, ks);
       if (K.isEmpty(cut)) return null;
       const parts = cut.decompose();
       if (parts.length < 2) return cut;
+      // An in plane rib lies in the sketch plane rather than standing off it,
+      // so touching the plane tells the pieces apart from nothing. The curve
+      // does: the piece worth keeping is the one still hanging from it.
+      const anchor = chain
+        ? (() => {
+            const w = chain.points.map((p) => sketchToWorld(plane, p.x, p.y, 0));
+            return { world: w };
+          })()
+        : null;
+
       let kept = null;
       for (const part of parts) {
         ks.track(part);
         const bb = K.boundingBox(part);
-        // How near this piece comes to the sketch plane, measured along the
-        // plane's own normal over the corners of its box.
         let near = Infinity;
-        for (const c of [bb.min, bb.max]) {
-          near = Math.min(
-            near,
-            Math.abs(
-              (c[0] - plane.origin[0]) * plane.n[0] +
-                (c[1] - plane.origin[1]) * plane.n[1] +
-                (c[2] - plane.origin[2]) * plane.n[2]
-            )
-          );
+        if (anchor) {
+          // Near any point of the curve, measured against the piece's box.
+          for (const p of anchor.world) {
+            const dx = Math.max(bb.min[0] - p.x, 0, p.x - bb.max[0]);
+            const dy = Math.max(bb.min[1] - p.y, 0, p.y - bb.max[1]);
+            const dz = Math.max(bb.min[2] - p.z, 0, p.z - bb.max[2]);
+            near = Math.min(near, Math.hypot(dx, dy, dz));
+          }
+        } else {
+          // How near this piece comes to the sketch plane, measured along the
+          // plane's own normal over the corners of its box.
+          for (const c of [bb.min, bb.max]) {
+            near = Math.min(
+              near,
+              Math.abs(
+                (c[0] - plane.origin[0]) * plane.n[0] +
+                  (c[1] - plane.origin[1]) * plane.n[1] +
+                  (c[2] - plane.origin[2]) * plane.n[2]
+              )
+            );
+          }
         }
         if (near < 1e-3) kept = kept ? K.union(kept, part, ks) : part;
       }
@@ -2691,23 +2711,63 @@ export function rebuild(doc, options = {}) {
     }
     if (!chains.length) throw new Error('Rib needs an open sketch curve');
 
+    /*
+     * Fusion's rib, which is a different animal from the one this built.
+     *
+     * Its help says the rib "is extruded in a direction parallel to the sketch
+     * plane" and "to the nearest faces on a solid body". So the curve is drawn
+     * edge on, standing in the plane of the rib: the thickness goes across the
+     * plane and the wall hangs down from the curve until it lands on the part.
+     * That is the triangular gusset between a wall and a floor, which is what
+     * anybody means by a rib.
+     *
+     * What this built instead thickens the curve within the plane and extrudes
+     * along the normal, which is the other one: a wall standing on a footprint
+     * drawn from above. Both are useful and Fusion has both, calling the second
+     * a Web, so this is a setting rather than a correction. Out Of The Plane
+     * stays the default so that nothing already built moves.
+     */
+    const inPlane = feature.ribDirection === 'inPlane';
+
+    /** The curve given a skirt hanging off it, in the sketch plane's own axes. */
+    const skirt = (points) => {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const p of points) {
+        lo = Math.min(lo, p.y);
+        hi = Math.max(hi, p.y);
+      }
+      // Far enough to be sure of reaching the part; the trim decides where it
+      // actually stops.
+      const drop = feature.flip ? hi + depth : lo - depth;
+      const along = points.map((p) => [p.x, p.y]);
+      const back = [...along].reverse().map(([x]) => [x, drop]);
+      return [[...along, ...back]];
+    };
+
     let solid = null;
     for (const chain of chains) {
-      const contours = thickenPolyline(chain.points, ribWidth(feature, thickness), chain.closed);
+      const contours = inPlane
+        ? skirt(chain.points)
+        : thickenPolyline(chain.points, ribWidth(feature, thickness), chain.closed);
       if (!contours) continue;
-      let wall = K.extrudeContours(
-        contours,
-        { height: depth, center: false, taperDeg: toNext ? 0 : taper },
-        ks
-      );
+      let wall = inPlane
+        ? K.extrudeContours(contours, { height: thickness, center: true }, ks)
+        : K.extrudeContours(
+            contours,
+            { height: depth, center: false, taperDeg: toNext ? 0 : taper },
+            ks
+          );
       // The wall grows away from the sketch plane; flipped, it grows the other
-      // way, which is what you want when the sketch sits above the part.
-      if (feature.flip) {
+      // way, which is what you want when the sketch sits above the part. An in
+      // plane rib straddles the sketch plane instead, and its flip has already
+      // been spent on which way the skirt hangs.
+      if (feature.flip && !inPlane) {
         wall = K.transform(wall, new THREE.Matrix4().makeScale(1, 1, -1).elements, ks);
       }
       let placed = K.transform(wall, planeMatrix(plane).elements, ks);
-      if (toNext) {
-        placed = trimToNext(placed);
+      if (toNext || inPlane) {
+        placed = trimToNext(placed, inPlane ? chain : null);
         if (!placed) continue;
       }
       solid = solid ? K.union(solid, placed, ks) : placed;
