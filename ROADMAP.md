@@ -8,14 +8,81 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.65.0**. 573 tests.
+Current version: **2.66.0**. 574 tests.
 
-**Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
-workspaces in Batch 21: Render, Animation, Simulation and Generative Design.
+Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
+Animation, Simulation and Generative Design. Category 1 and Category 2 of the
+Fusion inventory are closed out bar the four batches named below.
 
-What is left is not on this list: it is whatever the next thing turns out to be.
-The sections below are kept as the record of what was built and, more usefully,
-of what was learned building it.
+The sections after those are kept as the record of what was built and, more
+usefully, of what was learned building it.
+
+---
+
+## What is left, and why it is grouped this way
+
+Four batches. Each one is a batch rather than a loose end because everything in
+it needs the same missing thing, and doing any one item alone would mean
+building that thing badly and then building it again.
+
+`FUSION-FEATURES.md` is the inventory these come from. Anything not listed here
+is either built or recorded there with the reason it is not.
+
+### Batch 22: surface edges
+
+**Fillet and chamfer on the edges of a surface body.**
+
+The edge tools build a cutting solid and boolean it against the part. A sheet
+has no inside for a boolean to work on, so the same tools cannot be pointed at
+it. What this needs is the blend built as surface geometry: the two sheets
+trimmed back to the tangent lines and a ruled or swept strip stitched between
+them.
+
+That is one piece of machinery and it is the only thing missing. It is a batch
+of its own because the same machinery is what a surface-to-surface blend wants
+later, and building it for one edge case first would mean building it twice.
+
+### Batch 23: direct manipulation in Form
+
+**Tangent handles, vertex snapping to model geometry, and control points and
+surface points as separate things to grab.**
+
+All three are the same want: a cage that can be edited by dragging what you can
+see rather than by typing into a dialog. The Form workspace has the cage, the
+subdivision, and every command that changes its shape. What it does not have is
+the on-screen handles.
+
+One batch because they share the handle machinery and the hit testing, and
+because two of the three are meaningless without the third: a tangent handle
+you cannot tell apart from a control point is a worse tool than no handle.
+
+### Batch 24: external components
+
+**Edit In Place, Break Link, Update Components, Derived Design Features, and
+the Data Panel's rename, copy and update.**
+
+Every one of these is a document referring to another document. Anvil has no
+such reference: Insert Component reads the other file's geometry in and keeps
+nothing pointing back at it.
+
+This is the batch that overlaps the library work below, and it should be done
+with it rather than before it. A reference has to name something, and until
+there is a library there is nothing stable to name: a path on one machine is
+not a name on another.
+
+### Batch 25: the two algorithms
+
+**Split Face by closest point**, and **a fillet at the foot of a rib**.
+
+Neither is a setting. Closest point projects every point of the tool along its
+own nearest direction to the face, which is a different projection from the one
+Along Vector does rather than another vector to hand it. A rib's foot fillet
+needs the concave edges the rib made where it met the part, found by provenance
+rather than by picking, and then blended.
+
+They are together because both are a day of geometry apiece with nothing else
+depending on them, which makes them the right thing to do when the batches
+above are blocked on something else.
 
 ---
 

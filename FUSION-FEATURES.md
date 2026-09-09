@@ -86,8 +86,8 @@ thin extrude.
 
 | Option | Values | Anvil |
 |---|---|---|
-| Type | Single Path, Path + Guide Rail, Path + Guide Surface, Solid Sweep | partial — first two |
-| Profile / Body | profile or planar face; a solid for Solid Sweep | partial |
+| Type | Single Path, Path + Guide Rail, Path + Guide Surface, Solid Sweep | has, v2.66.0 |
+| Profile / Body | profile or planar face; a solid for Solid Sweep | has, v2.66.0 |
 | Path | | has |
 | Guide Rail | scales and orients the profile along the path | has |
 | Chain Selection | pick tangentially connected geometry as one | has, v2.41.0, on the path; on by a tick box |
@@ -95,7 +95,7 @@ thin extrude.
 | Taper Angle, Twist Angle | | has |
 | Extent | Perpendicular To Path, Full Extents | has, v2.53.0, on Path + Guide Rail where Fusion has it |
 | Profile Scaling | Scale, Stretch, None | has |
-| Orientation | Perpendicular, Parallel, Aligned | partial — the first two. Aligned belongs to Solid Sweep, which Anvil does not have |
+| Orientation | Perpendicular, Parallel, Aligned | partial — the first two. Aligned belongs to Solid Sweep, where the body carries its own orientation from the start of the path, which is what this does |
 | Operation / Objects To Cut | as Extrude | partial |
 | Analysis tab | None, Zebra, Curvature Map, Isocurve | **missing** here (Anvil has zebra elsewhere) |
 

@@ -307,10 +307,11 @@ genuinely all you want. Then
 
 | | |
 |---|---|
-| Type | Single path, or **path and guide rail** |
+| Type | Single path, **path and guide rail**, **path and guide surface**, or a **solid sweep** |
 | Profile scaling | With a rail: **Scale**, **Stretch**, or None |
 | Extent | With a rail: the full path, or stopping where the guide rail ends |
 | Distance | How far along the path to travel, as a fraction of it |
+| Solid sweep | A whole body carried along the path, put down at a spacing you set and joined |
 | Taper | The angle the section opens out by along the way |
 | Twist | Degrees turned end to end |
 | Orientation | **Perpendicular** stays square to the path, **Parallel** keeps the profile facing the way it started |

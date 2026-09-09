@@ -2544,6 +2544,10 @@ export function rebuild(doc, options = {}) {
    */
   function doSweep(feature, doc, scope, ks, regionsById, apply, errs) {
     normalizeSweep(feature);
+    if (feature.sweepType === 'solid') {
+      doSolidSweep(feature, doc, scope, ks, apply, errs);
+      return;
+    }
 
     const { contours, plane: profilePlane } = extrudeProfiles(feature, doc, scope, regionsById);
     if (!contours.length) {
@@ -2588,6 +2592,76 @@ export function rebuild(doc, options = {}) {
       twistDegrees: twist
     });
     if (frames.length < 2) throw new Error('The sweep path is too short');
+
+    /*
+     * Fusion's Path + Guide Surface. The profile is turned so that one of its
+     * axes follows the surface rather than being carried along by the path
+     * alone, which is what keeps a section square to a face it is running
+     * across: a rib swept along a curved wall stays upright against the wall
+     * instead of rolling with the curve of the path.
+     *
+     * The frames the path gives are already square to it. What the surface
+     * changes is only which way round they sit, so the frame is spun about its
+     * own tangent until its y axis lies in the surface.
+     */
+    if (feature.sweepType === 'surface' && feature.guideSurface) {
+      const guide = bodies.find((b) => b.id === feature.guideSurface && isSheet(b));
+      if (!guide) {
+        throw new Error('Sweep has lost the surface it was being guided by');
+      }
+      const pts = SH.sheetPoints(guide.sheet);
+      const tris = SH.sheetTris(guide.sheet);
+      if (!pts.length || !tris.length) throw new Error('That guide surface has nothing on it');
+
+      // The surface normal nearest a point, taken from the triangle whose
+      // middle is closest to it. Near enough for orienting a section, and it
+      // does not need the surface to be any particular shape.
+      const normalNear = (p) => {
+        let best = null;
+        let near = Infinity;
+        for (let t = 0; t < tris.length; t += 3) {
+          const a = pts[tris[t]];
+          const b = pts[tris[t + 1]];
+          const c = pts[tris[t + 2]];
+          const mx = (a[0] + b[0] + c[0]) / 3;
+          const my = (a[1] + b[1] + c[1]) / 3;
+          const mz = (a[2] + b[2] + c[2]) / 3;
+          const d = (mx - p[0]) ** 2 + (my - p[1]) ** 2 + (mz - p[2]) ** 2;
+          if (d >= near) continue;
+          const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+          const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+          const n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0]
+          ];
+          const l = Math.hypot(n[0], n[1], n[2]);
+          if (l < 1e-12) continue;
+          near = d;
+          best = [n[0] / l, n[1] / l, n[2] / l];
+        }
+        return best;
+      };
+
+      frames = frames.map((f, i) => {
+        const n = normalNear(world[Math.min(i, world.length - 1)]);
+        if (!n) return f;
+        // The part of the surface normal square to the path is the frame's new
+        // x; y follows from it and the tangent, so the frame stays right
+        // handed and still square to the path.
+        const along = n[0] * f.z[0] + n[1] * f.z[1] + n[2] * f.z[2];
+        const flat = [n[0] - f.z[0] * along, n[1] - f.z[1] * along, n[2] - f.z[2] * along];
+        const l = Math.hypot(flat[0], flat[1], flat[2]);
+        if (l < 1e-9) return f;
+        const x = [flat[0] / l, flat[1] / l, flat[2] / l];
+        const y = [
+          f.z[1] * x[2] - f.z[2] * x[1],
+          f.z[2] * x[0] - f.z[0] * x[2],
+          f.z[0] * x[1] - f.z[1] * x[0]
+        ];
+        return { ...f, x, y };
+      });
+    }
 
     // Parallel keeps every section facing the way the first one does, rather
     // than turning to stay square to the path.
@@ -2701,6 +2775,101 @@ export function rebuild(doc, options = {}) {
       }
     }
     return at / total;
+  }
+
+  /**
+   * Fusion's Solid Sweep: a whole body carried along a path rather than a
+   * profile swept into one.
+   *
+   * The body is put down along the path at close intervals and the copies
+   * unioned, which is what a swept solid is: everywhere the body has been. Not
+   * an exact surface, and it says so in the dialog rather than pretending: the
+   * accuracy is how close together the copies are put, and the honest answer
+   * for a tool cutting a slot is to make that interval small enough that the
+   * scallops between copies are under the tolerance the part is made to.
+   *
+   * The alternative is a swept envelope, which for an arbitrary body against
+   * an arbitrary path is a hard surface problem and not one a mesh kernel is
+   * going to do better than this.
+   */
+  function doSolidSweep(feature, doc, scope, ks, apply, errs) {
+    const tool = bodies.find((b) => b.id === feature.tool && b.solid);
+    if (!tool) throw new Error('Solid sweep needs a body to carry along the path');
+
+    let world = curvePoints(feature.path, doc, scope);
+    if (!world || world.length < 2) throw new Error('Solid sweep has no path');
+
+    const frac = Math.max(0.001, Math.min(1, safeEval(feature.distance, scope, 1)));
+    if (frac < 0.999) {
+      world = trimPolyline(world, frac);
+      if (world.length < 2) throw new Error('The sweep distance is too short');
+    }
+
+    let length = 0;
+    for (let i = 1; i < world.length; i++) {
+      length += Math.hypot(
+        world[i][0] - world[i - 1][0],
+        world[i][1] - world[i - 1][1],
+        world[i][2] - world[i - 1][2]
+      );
+    }
+    if (!(length > 1e-6)) throw new Error('That path has no length to sweep along');
+
+    // How close together the copies go. Given as a step so it can be reasoned
+    // about in millimetres rather than as a count, and clamped so a small step
+    // on a long path cannot ask for ten thousand booleans.
+    const step = Math.max(0.05, safeEval(feature.step, scope, 1));
+    const count = Math.max(2, Math.min(400, Math.ceil(length / step) + 1));
+    if (length / step > 400) {
+      errs.push({
+        feature: feature.id,
+        message: `That step would need ${Math.ceil(length / step)} copies. It has been held at 400, so the surface is coarser than asked for.`
+      });
+    }
+
+    const frames = pathFrames(world, { closed: false });
+    if (frames.length < 2) throw new Error('The sweep path is too short');
+
+    const start = frames[0];
+    const basis0 = new THREE.Matrix4().set(
+      start.x[0], start.y[0], start.z[0], start.origin[0],
+      start.x[1], start.y[1], start.z[1], start.origin[1],
+      start.x[2], start.y[2], start.z[2], start.origin[2],
+      0, 0, 0, 1
+    );
+    const intoStart = basis0.clone().invert();
+
+    let solid = null;
+    for (let i = 0; i < count; i++) {
+      const t = i / (count - 1);
+      // The place is taken along the path itself and the axes from the nearest
+      // frame. A straight path arrives as two points, so stepping frame by
+      // frame would put the body down twice however small the step was: the
+      // first version did exactly that and swept two cubes forty apart.
+      const origin = guidePointAt(world, t) || world[0];
+      const f = frames[Math.min(frames.length - 1, Math.round(t * (frames.length - 1)))];
+      const there = new THREE.Matrix4().set(
+        f.x[0], f.y[0], f.z[0], origin[0],
+        f.x[1], f.y[1], f.z[1], origin[1],
+        f.x[2], f.y[2], f.z[2], origin[2],
+        0, 0, 0, 1
+      );
+      // Where the body sits relative to the start of the path, carried to
+      // where that frame has got to. A body drawn off to one side of the path
+      // stays off to that side all the way along, which is what makes this a
+      // sweep rather than a smear through the origin.
+      const m = there.multiply(intoStart);
+      const copy = K.transform(tool.solid, m.elements, ks);
+      solid = solid ? K.union(solid, copy, ks) : copy;
+    }
+    if (!solid) throw new Error('Solid sweep produced nothing');
+
+    // The tool goes, the way a combine's tools go, unless it is asked to stay.
+    if (!feature.keepTool) {
+      const at = bodies.indexOf(tool);
+      if (at >= 0) bodies.splice(at, 1);
+    }
+    apply(feature, solid, feature.op || 'new');
   }
 
   /**

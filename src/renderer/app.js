@@ -5183,8 +5183,56 @@ function sweepFields() {
       type: 'select',
       options: [
         ['path', 'Single path'],
-        ['rail', 'Path and guide rail']
+        ['rail', 'Path and guide rail'],
+        ['surface', 'Path and guide surface'],
+        ['solid', 'Solid sweep']
       ]
+    },
+    {
+      // A whole body carried along the path rather than a profile swept into
+      // one, which is how a cutter's shape is turned into the slot it cuts.
+      key: '__tool',
+      label: 'Body to carry',
+      type: 'pick',
+      pick: 'combineTarget',
+      showIf: (f) => f.sweepType === 'solid',
+      summary: (f) =>
+        f.tool
+          ? (state.result?.bodies || []).find((b) => b.id === f.tool)?.name || 'a body'
+          : 'Nothing yet',
+      clear: (f) => {
+        f.tool = null;
+      }
+    },
+    {
+      key: 'step',
+      label: `Accuracy: how far apart the copies go (${unitLabel()})`,
+      type: 'expr',
+      showIf: (f) => f.sweepType === 'solid'
+    },
+    { key: 'keepTool', label: 'Keep the body it was carried from', type: 'bool', showIf: (f) => f.sweepType === 'solid' },
+    {
+      key: '__solidNote',
+      label: '',
+      type: 'note',
+      showIf: (f) => f.sweepType === 'solid',
+      text: 'The body is put down along the path at that spacing and the copies joined, which is what a swept solid is: everywhere the body has been. Closer spacing is a smoother surface and more work, so set it against the tolerance the part is made to.'
+    },
+    {
+      key: '__guideSurface',
+      label: 'Guide surface',
+      type: 'select',
+      showIf: (f) => f.sweepType === 'surface',
+      options: () => [
+        ['', 'Pick one'],
+        ...(state.result?.bodies || [])
+          .filter((b) => !b.solid && b.sheet)
+          .map((b) => [b.id, b.name])
+      ],
+      get: (f) => f.guideSurface || '',
+      set: (f, v) => {
+        f.guideSurface = v || null;
+      }
     },
     {
       key: '__profiles',
@@ -6850,6 +6898,10 @@ function startSweep() {
     type: 'sweep',
     sweepType: 'path',
     extent: 'full',
+    tool: null,
+    step: '1',
+    keepTool: false,
+    guideSurface: null,
     path: paths.length ? { sketch: paths[0][0] } : null,
     rail: null,
     profileScaling: 'scale',

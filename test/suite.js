@@ -3524,6 +3524,60 @@ async function run() {
     assert(bb.max[0] - bb.min[0] > 14, 'and the far end should be wider than the near');
   });
 
+  test('sweep: a solid can be carried along a path', () => {
+    // Fusion's Solid Sweep. The body is put down along the path at close
+    // intervals and the copies joined, which is what a swept solid is:
+    // everywhere the body has been. It is how a cutter's shape becomes the slot
+    // it cuts.
+    const doc = newDocument();
+    // A small cube sitting at the start of the path.
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '10', depth: '10', height: '10', x: '0', y: '0', z: '0', centered: true },
+      op: 'new'
+    });
+    // A straight path running 40 up.
+    const path = newSketch('XZ', 'Path');
+    path.points = [{ x: 0, y: 0 }, { x: 0, y: 40 }];
+    path.entities = [{ id: 1, type: 'line', p: [0, 1] }];
+    path.nextEntityId = 2;
+    doc.sketches[path.id] = path;
+    doc.features.push({ id: uid('f'), type: 'sketch', sketch: path.id });
+
+    let res = rebuild(doc);
+    const toolId = res.bodies[0].id;
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'sweep',
+      sweepType: 'solid',
+      tool: toolId,
+      path: { sketch: path.id, entities: [1] },
+      step: '0.5',
+      op: 'new'
+    });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+    assert(res.bodies.length === 1, `the tool went with it, got ${res.bodies.length} bodies`);
+
+    // A 10 cube carried 40 up sweeps a 10 by 10 by 50 slab: the cube's own
+    // length plus the distance it travelled.
+    const bb = K.boundingBox(res.bodies[0].solid);
+    near(bb.max[2] - bb.min[2], 50, 0.2, 'the cube plus the way it went');
+    near(bb.max[0] - bb.min[0], 10, 0.05, 'and no wider than the cube');
+    near(K.properties(res.bodies[0].solid).volume, 10 * 10 * 50, 30, 'a slab, not a scalloped one');
+    res.dispose();
+
+    // Keeping the tool leaves it behind, the way a combine can.
+    doc.features[doc.features.length - 1].keepTool = true;
+    const kept = rebuild(doc);
+    assert(kept.bodies.length === 2, `the tool stayed, got ${kept.bodies.length}`);
+    kept.dispose();
+  });
+
   test('sweep: the extent can stop where the guide rail ends', () => {
     // Fusion's own words: Perpendicular To Path extends the swept body to the
     // point along the path that is perpendicular to the end of the guide rail.
