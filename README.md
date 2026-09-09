@@ -336,8 +336,12 @@ part" with an empty list, because it was the only way to say it, and they are
 given the flag that means it on load so they still come back rounded. Fillet and
 Chamfer hold several edge sets, each with its own size, so a part can be
 blended at three radii in one feature; a chamfer set is equal, two distances, or
-a distance and the angle it leans at. A fillet set is asked for in one of five
-ways. **Constant** and **variable radius** are the plain ones. **Asymmetric**
+a distance and the angle it leans at. A fillet set is asked for in one of six
+ways. **Rule** takes every edge of the part at once, filtered to the outside
+corners, the inside ones, or both: in the trade an outside corner is a round
+and an inside one is a fillet, and softening the outside corners while leaving
+the inside ones sharp is usually what a printed part wants. The other five are
+picked edge by edge. **Constant** and **variable radius** are the plain ones. **Asymmetric**
 takes a radius on each face, so the blend runs out further one way than the
 other. **Chord length**
 asks how wide the blend reads across and lets the radius fall out of the angle

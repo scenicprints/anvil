@@ -308,6 +308,9 @@ export function normalizeBlend(f) {
     if (!set.filletType) set.filletType = set.endRadius ? 'variable' : 'constant';
     if (set.chord === undefined) set.chord = set.radius;
     if (!set.holdEdges) set.holdEdges = [];
+    // Which edges "every edge" means. Every set written before this took the
+    // convex ones, so that is what an absent value has to keep meaning.
+    if (!set.ruleKind) set.ruleKind = 'rounds';
     // A blend made in this session always writes both, so an absent one is an
     // old document, and an old document was circular and G1.
     if (set.radius2 === undefined) set.radius2 = set.radius;
@@ -4136,8 +4139,19 @@ export function rebuild(doc, options = {}) {
         // single edge had been clicked, which on a shelled box is a shape
         // nobody asked for and a rebuild to undo. `all` is the deliberate ask
         // for every convex edge, and old documents are given it on load.
+        // Fusion's Rule Fillet with the rule "All Edges" is its named way to
+        // round a whole part. Anvil had the same thing hidden behind a flag on
+        // the set. Which edges count is the filter Fusion calls Round/Fillets:
+        // in its language a round is a convex edge and a fillet is a concave
+        // one, so "rounds only" takes the outside corners and leaves the inside
+        // ones sharp, which on a printed part is usually exactly what is meant.
+        const kinds = {
+          rounds: (e) => e.convex,
+          fillets: (e) => !e.convex,
+          both: () => true
+        };
         const edges = set.all
-          ? topo.edges.filter((e) => e.convex)
+          ? topo.edges.filter(kinds[set.ruleKind || 'rounds'] || kinds.rounds)
           : resolveEdgeRefs(topo, set.edges || []);
         if (!edges.length) continue;
 

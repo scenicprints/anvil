@@ -3600,17 +3600,29 @@ function blendFields(kind) {
           label: `Set ${n} edges`,
           type: 'pick',
           pick: `set:${i}`,
+          showIf: (f) => kind !== 'fillet' || !f.sets[i]?.all,
           summary: (f) => {
             const set = f.sets[i];
             const c = set?.edges?.length || 0;
             // An empty list used to mean the whole part. It means nothing
             // picked yet, and `all` is the deliberate ask, so the summary says
             // which of the two this set is rather than the old answer.
+            if (set?.all) {
+              return {
+                rounds: 'Every outside corner',
+                fillets: 'Every inside corner',
+                both: 'Every edge'
+              }[set.ruleKind || 'rounds'];
+            }
             if (c) return `${c} edge${c === 1 ? '' : 's'}`;
-            return set?.all ? 'Every convex edge' : 'none yet';
+            return 'none yet';
           },
           clear: (f) => {
             f.sets[i].edges = [];
+            // Clearing is how a set that means "every edge" gets back to
+            // meaning "nothing picked yet". A chamfer has no type dropdown to
+            // do it with, so without this an old one is stuck that way.
+            f.sets[i].all = false;
           }
         });
         out.push({
@@ -3619,6 +3631,7 @@ function blendFields(kind) {
           key: `sets.${i}.tangentChain`,
           label: `Set ${n} follows tangent edges`,
           type: 'bool',
+          showIf: (f) => !f.sets[i]?.all,
           get: (f) => f.sets[i]?.tangentChain !== false,
           set: (f, v) => {
             f.sets[i].tangentChain = !!v;
@@ -3635,8 +3648,32 @@ function blendFields(kind) {
               ['variable', 'Variable radius'],
               ['asymmetric', 'Asymmetric'],
               ['chord', 'Chord length'],
-              ['hold', 'Hold line']
-            ]
+              ['hold', 'Hold line'],
+              ['rule', 'Rule: every edge of the part']
+            ],
+            // The type and the rule flag are two views of one thing, so
+            // choosing either has to move the other. Without this, picking
+            // Rule would leave a set that still says it is waiting for edges.
+            get: (f) => (f.sets[i]?.all ? 'rule' : f.sets[i]?.filletType || 'constant'),
+            set: (f, v) => {
+              f.sets[i].all = v === 'rule';
+              if (v !== 'rule') f.sets[i].filletType = v;
+            }
+          });
+          out.push({
+            // Fusion's Round/Fillets filter. In its language a round is a
+            // convex edge and a fillet is a concave one, so rounds only takes
+            // the outside corners and leaves the inside ones sharp, which on a
+            // printed part is usually what is meant.
+            key: `sets.${i}.ruleKind`,
+            label: `Set ${n} applies to`,
+            type: 'select',
+            options: [
+              ['rounds', 'Rounds only, the outside corners'],
+              ['fillets', 'Fillets only, the inside corners'],
+              ['both', 'Rounds and fillets']
+            ],
+            showIf: (f) => !!f.sets[i]?.all
           });
           out.push({
             key: `sets.${i}.radius`,

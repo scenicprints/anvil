@@ -3768,6 +3768,75 @@ async function run() {
     res.dispose();
   });
 
+  test('fillet: the rule can take the outside corners, the inside ones, or both', () => {
+    // Fusion calls a convex edge a round and a concave one a fillet, and its
+    // Rule Fillet filters on exactly that. On a printed part "rounds only" is
+    // usually what is meant: soften the outside corners and leave the inside
+    // ones alone.
+    //
+    // An L, so there is one concave edge to tell the three apart. Two boxes
+    // joined, which leaves a step with an inside corner running along it.
+    const ell = (sets) => {
+      const doc = newDocument();
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '40', depth: '20', height: '10', centered: false },
+        op: 'new'
+      });
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '10', depth: '20', height: '30', x: '0', y: '0', z: '0', centered: false },
+        op: 'join'
+      });
+      doc.features.push({ id: uid('f'), type: 'fillet', bodies: 'all', edges: [], sets });
+      const res = rebuild(doc);
+      // A rule fillet takes every edge of the part, and on an L some of them
+      // are too short or too tight to carry the radius. Being told which were
+      // left sharp is the right answer, not a failure, so that one message is
+      // allowed and anything else is not.
+      const unexpected = res.errors.filter((e) => !/left sharp/.test(e.message));
+      assert(!unexpected.length, JSON.stringify(unexpected));
+      return res.bodies[0].solid.volume();
+    };
+
+    const plain = (() => {
+      const doc = newDocument();
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '40', depth: '20', height: '10', centered: false },
+        op: 'new'
+      });
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '10', depth: '20', height: '30', x: '0', y: '0', z: '0', centered: false },
+        op: 'join'
+      });
+      return rebuild(doc).bodies[0].solid.volume();
+    })();
+
+    const rounds = ell([{ edges: [], all: true, ruleKind: 'rounds', radius: '2' }]);
+    const fillets = ell([{ edges: [], all: true, ruleKind: 'fillets', radius: '2' }]);
+    const both = ell([{ edges: [], all: true, ruleKind: 'both', radius: '2' }]);
+
+    // Rounding outside corners takes material off; rounding inside ones puts it
+    // on, which is what a fillet in Fusion's sense of the word does.
+    assert(rounds < plain, `rounds only should remove material: ${rounds} against ${plain}`);
+    assert(fillets > plain, `fillets only should add it: ${fillets} against ${plain}`);
+    // Both is the two together, so it sits between them and matches neither.
+    assert(
+      both > rounds && both < fillets,
+      `both is the two at once: ${both} against ${rounds} and ${fillets}`
+    );
+  });
+
   test('fillet: an old document that meant every edge still means it', () => {
     // Before there were sets, one empty list was the only way to say "the whole
     // part". Those documents have to come back rounded, not untouched, so the

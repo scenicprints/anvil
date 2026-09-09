@@ -256,7 +256,7 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 
 | Option | Values | Anvil |
 |---|---|---|
-| Type | Fillet, **Rule Fillet**, **Full Round Fillet** | partial — first only |
+| Type | Fillet, Rule Fillet, **Full Round Fillet** | partial — rule fillet added v2.48.0, full round still missing |
 | Selection sets | several, each with its own radius and settings | has |
 | Radius Type | Constant, Chord Length, Variable, Asymmetric | has, v2.37.0, plus a hold-line type Fusion does not have |
 | Continuity | Tangent (G1), Curvature (G2) | has, v2.37.0 |
@@ -264,8 +264,8 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 | Tangency Weight | | has, v2.37.0. How hard the G2 curve is pulled toward the corner |
 | Radius Points | radius and position along one edge (variable only) | has |
 | Corner Type | Rolling Ball, Setback | **missing** |
-| Rule | All Edges, Between Faces/Features (rule fillet) | **missing** |
-| Round/Fillets | Rounds and Fillets, Rounds Only, Fillets Only (rule fillet) | **missing** |
+| Rule | All Edges, **Between Faces/Features** (rule fillet) | partial — All Edges, v2.48.0 |
+| Round/Fillets | Rounds and Fillets, Rounds Only, Fillets Only (rule fillet) | has, v2.48.0 |
 | Center Faces / Side 1 / Side 2 | full round fillet | **missing** |
 
 Asymmetric and G2 both shipped in v2.37.0 and both live in the same place, the
@@ -287,10 +287,18 @@ blend is not a ball at all and a curvature continuous one has no single radius
 to give it, so a ball there would stand proud of the sweeps it is meant to
 join.
 
-Note: **Rule Fillet with the rule "All Edges" is Fusion's named way to round a
-whole part.** That is exactly what Anvil used to do silently when nothing was
-picked, and what it now hides behind the `all` flag on a set. It wants to be a
-type in the dropdown.
+Rule Fillet with the rule "All Edges" is Fusion's named way to round a whole
+part. That was exactly what Anvil used to do silently when nothing was picked,
+and then what it hid behind an `all` flag on the set that nothing in the dialog
+could reach. It is a type in the dropdown as of v2.48.0, alongside the filter
+Fusion calls Round/Fillets.
+
+That filter is worth knowing the language of: in Fusion a **round** is a convex
+edge and a **fillet** is a concave one. So "rounds only" softens the outside
+corners and leaves the inside ones sharp, which on a printed part is usually
+what is meant, and "fillets only" does the opposite and adds material rather
+than taking it away. The test pins that difference by sign: on an L, rounds
+only comes out smaller than the plain part and fillets only comes out bigger.
 
 ### Move/Copy — partial
 
