@@ -93,11 +93,18 @@ thin extrude.
 | Chain Selection | pick tangentially connected geometry as one | has, v2.41.0, on the path; on by a tick box |
 | Distance | fraction of the path, 0 to 1 | has |
 | Taper Angle, Twist Angle | | has |
-| Extent | Perpendicular To Path, Full Extents | **missing** |
+| Extent | Perpendicular To Path, Full Extents | has, v2.53.0, on Path + Guide Rail where Fusion has it |
 | Profile Scaling | Scale, Stretch, None | has |
 | Orientation | Perpendicular, Parallel, Aligned | partial — the first two. Aligned belongs to Solid Sweep, which Anvil does not have |
 | Operation / Objects To Cut | as Extrude | partial |
 | Analysis tab | None, Zebra, Curvature Map, Isocurve | **missing** here (Anvil has zebra elsewhere) |
+
+Extent was worth reading Fusion's own words for rather than guessing at, and
+they are not what the name suggests: "Perpendicular To Path extends the swept
+body to the point along the path that is perpendicular to the end of the guide
+rail." It is not about how the ends are cut. It is about where a guided sweep
+stops when the rail runs out before the path does, which is why Fusion puts it
+under Path + Guide Rail and nowhere else, and why Anvil now does too.
 
 ### Loft — partial
 
@@ -354,7 +361,7 @@ broken.
 | Edges/Faces/Features | | partial — edges only |
 | Distance, Angle | | has |
 | Tangent Chain | | has, v2.35.0 |
-| Corner Type | Chamfer, Miter, Blend | **missing** |
+| Corner Type | Chamfer, Miter, Blend | **missing**. Anvil's corner is what three chamfer planes meeting make, which reads as Fusion's Miter. Fusion's Chamfer type "creates a chamfer to join beveled edges at the corner", so it adds a facet; the exact construction of that and of Blend is *pending* a proper read, and naming a setting after a Fusion option without matching it is worse than leaving it out |
 
 ### Draft — partial
 

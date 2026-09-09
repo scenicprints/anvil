@@ -2231,7 +2231,27 @@ export function rebuild(doc, options = {}) {
     const closedPath = !!feature.path?.closed;
 
     // How far along to travel, as a fraction of the whole path.
-    const frac = Math.max(0.001, Math.min(1, safeEval(feature.distance, scope, 1)));
+    let frac = Math.max(0.001, Math.min(1, safeEval(feature.distance, scope, 1)));
+
+    // Extent, which belongs to a guided sweep and to nothing else. Fusion:
+    // "Perpendicular To Path extends the swept body to the point along the
+    // path that is perpendicular to the end of the guide rail." So a rail that
+    // runs out before the path does stops the sweep there, rather than the
+    // sweep carrying on to the end of the path with nothing guiding it.
+    if (feature.sweepType === 'rail' && feature.extent === 'perpendicular') {
+      const rail = curvePoints(feature.rail, doc, scope);
+      if (rail && rail.length > 1) {
+        // Both ends, and the one that reaches further along the path wins.
+        // Which end of a rail is "the end" depends on the order the curve was
+        // drawn in, and a rail drawn the other way round would otherwise stop
+        // the sweep at nothing.
+        const ends = [rail[0], rail[rail.length - 1]]
+          .map((p) => fractionNearest(world, p))
+          .filter((v) => v !== null);
+        if (ends.length) frac = Math.min(frac, Math.max(0.001, Math.max(...ends)));
+      }
+    }
+
     if (frac < 0.999) {
       world = trimPolyline(world, frac);
       if (world.length < 2) throw new Error('The sweep distance is too short');
@@ -2307,6 +2327,56 @@ export function rebuild(doc, options = {}) {
     if (!solid) throw new Error('Sweep produced nothing');
 
     apply(feature, solid, feature.op || 'new');
+  }
+
+  /**
+   * How far along a polyline the point nearest a given place sits, as a
+   * fraction of its whole length.
+   *
+   * The foot of the perpendicular from the rail's end onto the path, which is
+   * what Fusion's Perpendicular To Path extent measures to. Nearest by straight
+   * line distance, because on a path that does not double back the nearest
+   * point and the foot of the perpendicular are the same one.
+   */
+  function fractionNearest(points, target) {
+    if (!points || points.length < 2) return null;
+    let total = 0;
+    const runs = [0];
+    for (let i = 1; i < points.length; i++) {
+      total += Math.hypot(
+        points[i][0] - points[i - 1][0],
+        points[i][1] - points[i - 1][1],
+        points[i][2] - points[i - 1][2]
+      );
+      runs.push(total);
+    }
+    if (!(total > 0)) return null;
+
+    // Along each segment, not just at the corners. A straight path arrives here
+    // as two points, and the nearest of two endpoints is not the foot of a
+    // perpendicular: on a rail ending level with the middle of the path both
+    // ends are equally far, and the answer comes out as whichever was checked
+    // first.
+    let best = Infinity;
+    let at = 0;
+    for (let i = 1; i < points.length; i++) {
+      const a0 = points[i - 1];
+      const a1 = points[i];
+      const seg = [a1[0] - a0[0], a1[1] - a0[1], a1[2] - a0[2]];
+      const len2 = seg[0] * seg[0] + seg[1] * seg[1] + seg[2] * seg[2];
+      if (len2 < 1e-18) continue;
+      const to = [target[0] - a0[0], target[1] - a0[1], target[2] - a0[2]];
+      // Clamped, so a rail that ends off the end of a segment lands on its end
+      // rather than somewhere off the path.
+      const t = Math.max(0, Math.min(1, (to[0] * seg[0] + to[1] * seg[1] + to[2] * seg[2]) / len2));
+      const foot = [a0[0] + seg[0] * t, a0[1] + seg[1] * t, a0[2] + seg[2] * t];
+      const d = Math.hypot(foot[0] - target[0], foot[1] - target[1], foot[2] - target[2]);
+      if (d < best) {
+        best = d;
+        at = runs[i - 1] + Math.sqrt(len2) * t;
+      }
+    }
+    return at / total;
   }
 
   /**

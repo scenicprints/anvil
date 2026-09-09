@@ -5075,6 +5075,20 @@ function sweepFields() {
     },
     ...CURVE_PICK_FIELDS('rail', 'Guide rail', railed),
     {
+      // Fusion puts Extent under Path and Guide Rail and nowhere else, and its
+      // own words say why: Perpendicular To Path extends the swept body to the
+      // point along the path that is perpendicular to the end of the guide
+      // rail. With no rail there is nothing for it to measure to.
+      key: 'extent',
+      label: 'Extent',
+      type: 'select',
+      showIf: railed,
+      options: [
+        ['full', 'Full extents of the path'],
+        ['perpendicular', 'Stop where the guide rail ends']
+      ]
+    },
+    {
       key: 'profileScaling',
       label: 'Profile scaling',
       type: 'select',
@@ -6548,6 +6562,7 @@ function startSweep() {
     ...newExtrudeFeature(),
     type: 'sweep',
     sweepType: 'path',
+    extent: 'full',
     path: paths.length ? { sketch: paths[0][0] } : null,
     rail: null,
     profileScaling: 'scale',

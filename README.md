@@ -298,6 +298,7 @@ genuinely all you want. Then
 |---|---|
 | Type | Single path, or **path and guide rail** |
 | Profile scaling | With a rail: **Scale**, **Stretch**, or None |
+| Extent | With a rail: the full path, or stopping where the guide rail ends |
 | Distance | How far along the path to travel, as a fraction of it |
 | Taper | The angle the section opens out by along the way |
 | Twist | Degrees turned end to end |

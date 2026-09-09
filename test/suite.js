@@ -3384,6 +3384,39 @@ async function run() {
     assert(bb.max[0] - bb.min[0] > 14, 'and the far end should be wider than the near');
   });
 
+  test('sweep: the extent can stop where the guide rail ends', () => {
+    // Fusion's own words: Perpendicular To Path extends the swept body to the
+    // point along the path that is perpendicular to the end of the guide rail.
+    // So a rail that runs out halfway stops the sweep halfway, rather than the
+    // sweep carrying on to the end of the path with nothing guiding it.
+    const withRail = (extra) => {
+      const built = sweepDoc({ sweepType: 'rail', profileScaling: 'scale', ...extra });
+      const rail = newSketch('XZ', 'Rail');
+      // The path runs 40 up. This rail stops at 20, halfway along it.
+      rail.points = [{ x: 8, y: 0 }, { x: 16, y: 20 }];
+      rail.entities = [{ id: 1, type: 'line', p: [0, 1] }];
+      rail.nextEntityId = 2;
+      built.doc.sketches[rail.id] = rail;
+      built.doc.features.splice(2, 0, { id: uid('f'), type: 'sketch', sketch: rail.id });
+      built.f.rail = { sketch: rail.id, entities: [1] };
+      const res = rebuild(built.doc);
+      assert(res.bodies.length === 1, JSON.stringify(res.errors));
+      const bb = res.bodies[0].solid.boundingBox();
+      res.dispose();
+      return bb.max[2] - bb.min[2];
+    };
+
+    const full = withRail({ extent: 'full' });
+    const stopped = withRail({ extent: 'perpendicular' });
+
+    near(full, 40, 1, 'full extents runs the whole path');
+    near(stopped, 20, 1.5, 'and perpendicular stops where the rail does');
+
+    // An absent setting is the full path, which is what every sweep before
+    // this did.
+    near(withRail({}), full, 0.01, 'saying nothing is still full extents');
+  });
+
   /** Two squares on parallel planes, ready to loft between. */
   const loftDoc = (topSide, extra) => {
     const doc = newDocument();
