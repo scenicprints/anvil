@@ -6390,7 +6390,19 @@ export function rebuild(doc, options = {}) {
     // fold and not about the part as a whole.
     const byConfig = CF.overridesFor(doc.configurations, config, 'rule').get('');
     const wanted = feature?.rule || byConfig || doc.sheetMetalRule;
-    const r = { ...SM.DEFAULT_RULE, ...SM.ruleByName(doc.sheetMetalRules, wanted) };
+    // The departures one feature makes from the rule it follows. This is the
+    // reason a rule library exists: a rule sets what a part is made to and any
+    // one bend can depart from it without changing the rule and every other
+    // bend with it.
+    //
+    // Thickness is deliberately not on the list. A part is one thickness
+    // throughout, and a feature that could change it would produce something no
+    // brake can make and no flat pattern can describe.
+    const r = {
+      ...SM.DEFAULT_RULE,
+      ...SM.ruleByName(doc.sheetMetalRules, wanted),
+      ...sheetOverrides(feature)
+    };
     const num = (v, d) => (v === '' || v === null || v === undefined ? d : safeEval(v, scope, d));
     return {
       name: r.name,
@@ -6404,6 +6416,30 @@ export function rebuild(doc, options = {}) {
       cornerShape: r.cornerShape || 'round',
       cornerSize: num(r.cornerSize, 0)
     };
+  }
+
+  /**
+   * The fields a feature overrides, with the empty ones left out.
+   *
+   * An empty string is how these rows say "use the rule", so they have to be
+   * dropped rather than merged: merging one would set the rule's own value to
+   * nothing and fall back to the built-in default instead of to the rule.
+   */
+  function sheetOverrides(feature) {
+    if (!feature?.override) return {};
+    const out = {};
+    for (const key of [
+      'bendRadius',
+      'reliefShape',
+      'reliefWidth',
+      'reliefDepth',
+      'cornerShape',
+      'cornerSize'
+    ]) {
+      const v = feature[`o_${key}`];
+      if (v !== undefined && v !== null && v !== '') out[key] = v;
+    }
+    return out;
   }
 
   /**

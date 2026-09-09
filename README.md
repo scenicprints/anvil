@@ -1018,6 +1018,15 @@ else, because a relief notch in the middle of a hem cuts the fold in half.
 Folded to nothing the metal cracks, so the inner radius never goes below a
 thousandth and defaults to one thickness.
 
+Every sheet metal dialog that names a rule also offers the **departures** from
+it: bend radius, bend relief shape, width and depth, corner relief shape and
+size. That is the reason to have a rule library at all. A rule says what the
+part is made to, and one bend that needs a bigger radius says so on itself
+rather than by editing the rule and moving every other bend in the part. A row
+left blank takes the rule value. Thickness is not on the list on purpose: a part
+is one thickness throughout, and a feature that changed it would make something
+no brake can bend.
+
 A **base flange** takes the metal to one side of the sketch plane, the other
 side, or straddling it, which is the same question a rib's start side answers
 and matters for the same reason: the plane you drew on is usually a face of

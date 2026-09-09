@@ -706,7 +706,7 @@ plane is taken away, which is the mouth.
 | Unfold / Refold | has |
 | Flat pattern | has, with DXF out |
 | Corner seams and relief cuts | has (mitre corners, relief cuts) |
-| **Sheet metal rules**: create, edit, **override per feature**, configure | partial — Anvil has a rule library, override is *pending* |
+| **Sheet metal rules**: create, edit, override per feature, configure | has, v2.47.0 |
 
 ### Flange (base, edge, contour) — partial
 
@@ -729,11 +729,23 @@ every row carries its own settings.
 | Operation (base, contour) | New Body, New Component | has, v2.46.0, on base |
 | Direction (contour) | One Side, Two Sides, Symmetric | **missing** |
 | Sheet Metal Rule | pick the rule when the first body is made | partial |
-| **Override Rules** | per-flange overrides of bend radius, bend relief, and 2- and 3-bend corner relief | **missing** |
+| Override Rules | per-flange overrides of bend radius, bend relief, and 2- and 3-bend corner relief | has, v2.47.0 |
 
-The overrides are the substantial gap, and they are the reason the rules system
-exists: a rule sets the defaults for a component and any one feature can depart
-from it without changing the rule. Anvil has the rules and not the departures.
+The overrides were the substantial gap and they shipped in v2.47.0. They are
+the reason the rules system exists: a rule sets what a part is made to, and any
+one feature departs from it without changing the rule and every other feature
+with it. Every sheet metal dialog that names a rule now offers the departures
+beside it: bend radius, bend relief shape, width and depth, and corner relief
+shape and size.
+
+A row left blank takes the rule value, which is not the same as merging an
+empty string: doing that would set the rule's own value to nothing and fall
+back to the built-in default rather than to the rule. The empty ones are
+dropped before the merge, and the test pins it.
+
+Thickness is deliberately not on the list. A part is one thickness throughout,
+and a feature that could change it would produce something no brake can bend
+and no flat pattern can describe.
 
 Anvil's sheet metal is closer to parity than any other workspace bar the sketcher
 and Form. The lofted flange and hem references are *pending*.

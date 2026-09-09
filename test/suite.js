@@ -11637,6 +11637,85 @@ async function run() {
     assert(centred[0] === -1 && centred[1] === 1, `centred straddles it, got ${centred}`);
   });
 
+  test('sheet metal: one flange can depart from the rule without moving it', () => {
+    // The reason a rule library exists. A rule says what the part is made to;
+    // any one bend departs from it without changing the rule and every other
+    // bend with it.
+    const bracket = (extra) => {
+      const doc = newDocument();
+      doc.sheetMetalRules = [
+        { ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2', bendRadius: '2' }
+      ];
+      doc.sheetMetalRule = 'Thin';
+
+      const sk = newSketch('XY', 'Plate');
+      sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      doc.sketches[sk.id] = sk;
+
+      const baseId = uid('f');
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: baseId, type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] }
+      ];
+      let out = rebuild(doc);
+      const topo = buildTopology(K.meshData(out.bodies[0].solid));
+      const edge = topo.edges.find(
+        (e) => e.kind === 'line' && e.convex && Math.abs(e.refPoint[0] - 60) < 0.01 &&
+          Math.abs(e.refPoint[2] - 2) < 0.01
+      );
+      assert(edge, 'found the top edge to flange off');
+      const ref = edgeReference(edge, topo);
+      out.dispose();
+
+      doc.features.push({
+        id: uid('f'),
+        type: 'flange',
+        bodies: 'all',
+        edges: [ref],
+        angle: '90',
+        height: '20',
+        ...extra
+      });
+      out = rebuild(doc);
+      assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+      return out;
+    };
+
+    // A bigger bend radius puts the flange further out: the bend centre sits a
+    // radius up and the flange starts a radius and a thickness past the plate.
+    const asRuled = bracket({});
+    const reachRuled = asRuled.bodies[0].solid.boundingBox().max[0];
+    asRuled.dispose();
+
+    const departed = bracket({ override: true, o_bendRadius: '6' });
+    const reachDeparted = departed.bodies[0].solid.boundingBox().max[0];
+    departed.dispose();
+
+    assert(
+      reachDeparted > reachRuled + 3,
+      `a bigger radius reaches further, got ${reachDeparted.toFixed(2)} against ${reachRuled.toFixed(2)}`
+    );
+
+    // Ticked on but left blank takes the rule value, so a row nobody touched
+    // changes nothing. Merging an empty string would have set the radius to
+    // zero and fallen back to the built-in default instead of to the rule.
+    const blank = bracket({ override: true, o_bendRadius: '' });
+    near(
+      blank.bodies[0].solid.boundingBox().max[0],
+      reachRuled,
+      0.01,
+      'a blank row is the rule value'
+    );
+    blank.dispose();
+  });
+
   test('sheet metal: reading a solid as sheet needs it to be that thick', () => {
     const doc = newDocument();
     doc.features = [prim('box', { width: '60', depth: '40', height: '2', centered: true })];

@@ -14921,6 +14921,103 @@ function sheetRuleField() {
   };
 }
 
+/**
+ * The departures one feature makes from the rule it follows.
+ *
+ * The reason a rule library exists: a rule says what a part is made to, and any
+ * one bend can depart from it without changing the rule and every other bend
+ * with it. Blank means take the rule's value, so a row left alone changes
+ * nothing.
+ *
+ * Thickness is deliberately absent. A part is one thickness throughout, and a
+ * feature that could change it would produce something no brake can make and no
+ * flat pattern can describe.
+ */
+function sheetOverrideFields() {
+  const on = (f) => !!f.override;
+  return [
+    { key: 'override', label: 'Depart from the rule', type: 'bool' },
+    {
+      key: 'o_bendRadius',
+      label: `Bend radius (${unitLabel()})`,
+      type: 'expr',
+      showIf: on,
+      get: (f) => f.o_bendRadius ?? '',
+      set: (f, v) => {
+        f.o_bendRadius = v;
+      }
+    },
+    {
+      key: 'o_reliefShape',
+      label: 'Bend relief shape',
+      type: 'select',
+      showIf: on,
+      options: [
+        ['', 'As the rule says'],
+        ['round', 'Round'],
+        ['square', 'Square'],
+        ['tear', 'Tear']
+      ],
+      get: (f) => f.o_reliefShape ?? '',
+      set: (f, v) => {
+        f.o_reliefShape = v;
+      }
+    },
+    {
+      key: 'o_reliefWidth',
+      label: `Bend relief width (${unitLabel()})`,
+      type: 'expr',
+      showIf: on,
+      get: (f) => f.o_reliefWidth ?? '',
+      set: (f, v) => {
+        f.o_reliefWidth = v;
+      }
+    },
+    {
+      key: 'o_reliefDepth',
+      label: `Bend relief depth (${unitLabel()})`,
+      type: 'expr',
+      showIf: on,
+      get: (f) => f.o_reliefDepth ?? '',
+      set: (f, v) => {
+        f.o_reliefDepth = v;
+      }
+    },
+    {
+      key: 'o_cornerShape',
+      label: 'Corner relief shape',
+      type: 'select',
+      showIf: on,
+      options: [
+        ['', 'As the rule says'],
+        ['round', 'Round'],
+        ['square', 'Square']
+      ],
+      get: (f) => f.o_cornerShape ?? '',
+      set: (f, v) => {
+        f.o_cornerShape = v;
+      }
+    },
+    {
+      key: 'o_cornerSize',
+      label: `Corner relief size (${unitLabel()})`,
+      type: 'expr',
+      showIf: on,
+      get: (f) => f.o_cornerSize ?? '',
+      set: (f, v) => {
+        f.o_cornerSize = v;
+      }
+    },
+    {
+      key: '__overrideNote',
+      label: '',
+      type: 'note',
+      showIf: on,
+      text: 'A row left blank takes the rule value. Thickness is not here on purpose: a part is one thickness throughout, and a feature that changed it would make something no brake can bend.'
+    }
+  ];
+}
+
 /** Close the corner where two flanges run into each other. */
 function cmdMiter() {
   if (state.sketcher.active) finishSketch();
@@ -14952,6 +15049,7 @@ function miterFields() {
     },
     { key: 'gap', label: 'Gap', type: 'expr' },
     sheetRuleField(),
+    ...sheetOverrideFields(),
     {
       key: '__note',
       label: '',
@@ -15118,6 +15216,7 @@ function cmdCornerRelief() {
       }
     },
     sheetRuleField(),
+    ...sheetOverrideFields(),
     {
       key: '__note',
       label: '',
@@ -15310,6 +15409,7 @@ function baseFlangeFields() {
       }
     },
     sheetRuleField(),
+    ...sheetOverrideFields(),
     {
       // Which side of the sketch plane the metal goes. Fusion's Orientation,
       // and the same question a rib's start side answers.
@@ -15374,6 +15474,7 @@ function flangeFields() {
     { key: 'angle', label: 'Angle', type: 'expr' },
     { key: 'radius', label: 'Bend radius', type: 'expr' },
     sheetRuleField(),
+    ...sheetOverrideFields(),
     {
       key: 'bendPosition',
       label: 'Bend position',
@@ -15395,6 +15496,7 @@ function contourFlangeFields() {
     { key: 'width', label: 'Width', type: 'expr' },
     { key: 'radius', label: 'Bend radius', type: 'expr' },
     sheetRuleField(),
+    ...sheetOverrideFields(),
     {
       key: '__note',
       label: '',
@@ -15459,6 +15561,7 @@ function ripFields() {
     },
     { key: 'gap', label: 'Gap', type: 'expr' },
     sheetRuleField(),
+    ...sheetOverrideFields(),
     {
       key: '__note',
       label: '',
