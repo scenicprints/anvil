@@ -1027,6 +1027,12 @@ than one in roughly the right place with a mark against it. Notes are not
 geometry and are not in the timeline: rolling back past a remark would be a
 strange thing for it to do.
 
+**Duplicate with joints** copies a component: the features that build it, the
+sketches they read, and the joints that hold it on. The joints are the point; a
+copy without them is a second part sitting in space that has to be jointed up
+again by hand. Everything is cloned rather than shared, so editing the copy
+leaves the original alone.
+
 ## Inserting
 
 **Insert Component** takes the bodies out of another Anvil document and puts

@@ -948,8 +948,8 @@ source rather than against my own earlier note.
 | Drive Joints | has |
 | Motion Link | has |
 | Joint Motion Limits | has |
-| **Assembly Constraints** (the older constraint system alongside joints) | **missing** |
-| **Duplicate With Joints** | **missing** |
+| Assembly Constraints (the older constraint system alongside joints) | has. This row was wrong: mate, flush, offset and concentric are built and have six tests of their own |
+| Duplicate With Joints | has, v2.63.0 |
 | Edit joints | has |
 
 Anvil's known limit stands: joints are open chains only, and a closed loop is
@@ -960,7 +960,7 @@ reported rather than solved.
 | Fusion | Anvil |
 |---|---|
 | New Component | has |
-| Ground to parent | **missing** |
+| Ground to parent | **missing**, and it needs nesting rather than effort: components here are a flat list with joints between them, so there is no parent to ground to. Grounding itself is there |
 | **Edit In Place** (edit an external component inside the assembly) | **missing** |
 | **Update components in an assembly** | **missing** |
 | **Derived design features** (reference geometry from another design) | **missing** |

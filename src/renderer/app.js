@@ -1998,6 +1998,12 @@ async function runCommand(cmd) {
     case 'createSelectionSet':
       createSelectionSet();
       break;
+    case 'duplicateComponent': {
+      const c = activeComponentObject();
+      if (!c) setStatus('Click a component in the browser first, then duplicate it.');
+      else duplicateComponent(c);
+      break;
+    }
     case 'selectBySize':
       cmdSelectBySize();
       break;
@@ -5342,8 +5348,125 @@ function newRevolveFeature() {
 
 /** A new extrude, set up from whatever happens to be selected. */
 /** A component of its own for a feature whose operation asks for one. */
+/**
+ * Copy a component: the features that build it, the sketches they read, and
+ * the joints that hold it on.
+ *
+ * Fusion calls it Duplicate With Joints, and the joints are the point. A copy
+ * without them is a second part sitting in space that has to be jointed up
+ * again by hand, which for a bracket that took four joints is most of the work
+ * done twice.
+ *
+ * Everything is cloned rather than shared, so editing the copy leaves the
+ * original alone. That means new ids throughout and every reference to an old
+ * one rewritten: a body is named after the feature that made it, so a feature
+ * id turns up inside strings elsewhere in the document as well as on the
+ * feature itself.
+ */
+function duplicateComponent(source) {
+  const doc = state.doc;
+  const mine = doc.features.filter((f) => (f.component || null) === source.id);
+  if (!mine.length) {
+    setStatus(`${source.name} has no features of its own to copy.`);
+    return;
+  }
+
+  const comp = newComponent(`${source.name} copy`);
+  // Never grounded. Two parts grounded in the same place cannot be told apart
+  // or moved, and the copy is the one meant to be put somewhere.
+  comp.grounded = false;
+  comp.transform = JSON.parse(
+    JSON.stringify(source.transform || { p: [0, 0, 0], q: [0, 0, 0, 1] })
+  );
+
+  const map = new Map();
+  for (const f of mine) map.set(f.id, uid('f'));
+  const sketchIds = new Set();
+  for (const f of mine) if (f.sketch && doc.sketches[f.sketch]) sketchIds.add(f.sketch);
+  for (const id of sketchIds) map.set(id, `sk${Math.random().toString(36).slice(2, 9)}`);
+
+  /**
+   * Rewrite every id that moved, wherever it appears.
+   *
+   * Strings are checked for a prefix as well as for a whole match, because a
+   * body is called `<feature id>:0` and those names are what a later feature's
+   * target list holds.
+   */
+  const remap = (value) => {
+    if (typeof value === 'string') {
+      if (map.has(value)) return map.get(value);
+      const at = value.indexOf(':');
+      if (at > 0 && map.has(value.slice(0, at))) {
+        return map.get(value.slice(0, at)) + value.slice(at);
+      }
+      return value;
+    }
+    if (Array.isArray(value)) return value.map(remap);
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) out[k] = remap(v);
+      return out;
+    }
+    return value;
+  };
+
+  pushUndo('duplicate component');
+
+  for (const id of sketchIds) {
+    const copy = remap(JSON.parse(JSON.stringify(doc.sketches[id])));
+    copy.id = map.get(id);
+    copy.name = `${doc.sketches[id].name || 'Sketch'} copy`;
+    doc.sketches[copy.id] = copy;
+  }
+
+  // Straight after the last of the originals, so the copy's own history reads
+  // in the order it was built.
+  const at = doc.features.lastIndexOf(mine[mine.length - 1]) + 1;
+  const clones = mine.map((f) => {
+    const copy = remap(JSON.parse(JSON.stringify(f)));
+    copy.id = map.get(f.id);
+    copy.component = comp.id;
+    return copy;
+  });
+  doc.features.splice(at, 0, ...clones);
+  doc.components.push(comp);
+
+  // And the joints that held it on. Only the ones that touch this component: a
+  // joint between two others has nothing to do with the copy.
+  let joints = 0;
+  for (const j of [...(doc.joints || [])]) {
+    if (j.parent !== source.id && j.child !== source.id) continue;
+    const copy = remap(JSON.parse(JSON.stringify(j)));
+    copy.id = uid('j');
+    if (j.parent === source.id) copy.parent = comp.id;
+    if (j.child === source.id) copy.child = comp.id;
+    // A joint that held the original to itself would hold the copy to itself,
+    // which is a joint that says nothing.
+    if (copy.parent === copy.child) continue;
+    doc.joints.push(copy);
+    joints++;
+  }
+
+  state.dirty = true;
+  renderTree();
+  rebuildAll();
+  setStatus(
+    `${comp.name}: ${clones.length} feature${clones.length === 1 ? '' : 's'}` +
+      `${joints ? ` and ${joints} joint${joints === 1 ? '' : 's'}` : ' and no joints'} copied.`
+  );
+}
+
+/** The component the browser has active, for the commands that act on one. */
+function activeComponentObject() {
+  return (state.doc.components || []).find((c) => c.id === state.activeComponent) || null;
+}
+
 function ensureFeatureComponent(feature) {
   const id = `${feature.id}:c`;
+  // The feature belongs to the component it creates. Without this only the
+  // body carried the name, so nothing could tell which feature built a
+  // component, and a copy of one came out empty.
+  feature.component = id;
   if (state.doc.components.some((c) => c.id === id)) return id;
   const c = newComponent(`Component ${state.doc.components.length + 1}`);
   c.id = id;
@@ -6161,6 +6284,7 @@ const RIBBON_MENUS = {
     ['selectBySize', 'Select By Size'],
     ['selectByName', 'Select By Name'],
     ['createSelectionSet', 'Save As A Selection Set'],
+    ['duplicateComponent', 'Duplicate The Active Component With Its Joints'],
     ['isolate', 'Isolate'],
     ['unisolate', 'Show All Again']
   ],
@@ -12904,13 +13028,14 @@ function startPrimitive(shape) {
       key: 'op',
       label: 'Operation',
       type: 'select',
-      options: [
-        ['new', 'New body'],
-        ['join', 'Join'],
-        ['cut', 'Cut'],
-        ['intersect', 'Intersect']
-      ]
-    }
+      options: EXTRUDE_OP_OPTIONS,
+      get: (f) => f.op || 'new',
+      set: (f, v) => {
+        f.op = v;
+        if (v === 'component') ensureFeatureComponent(f);
+      }
+    },
+    TARGETS_FIELD
   ];
 
   const shapeFields = {
@@ -19702,7 +19827,21 @@ function describeFeature(feature) {
           { key: 'params.y', label: 'Position Y', type: 'expr' },
           { key: 'params.z', label: 'Position Z', type: 'expr' },
           { key: 'params.centered', label: 'Centre on origin', type: 'bool' },
-          { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS }
+          // The same operation row the create dialog offers. It was a second
+          // copy of the list, so a primitive gained New Component when it was
+          // made and lost it again the moment it was reopened.
+          {
+            key: 'op',
+            label: 'Operation',
+            type: 'select',
+            options: EXTRUDE_OP_OPTIONS,
+            get: (f) => f.op || 'new',
+            set: (f, v) => {
+              f.op = v;
+              if (v === 'component') ensureFeatureComponent(f);
+            }
+          },
+          TARGETS_FIELD
         ]
       };
     }

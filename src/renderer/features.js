@@ -9292,7 +9292,27 @@ export function rebuild(doc, options = {}) {
         : (b) => !!b.solid;
     const pool = bodies.filter(kind);
     if (!feature.bodies || feature.bodies === 'all') return pool;
-    return pool.filter((b) => feature.bodies.includes(b.id));
+    const exact = pool.filter((b) => feature.bodies.includes(b.id));
+    if (exact.length) return exact;
+
+    /*
+     * Failing that, whichever body the named feature made.
+     *
+     * A body is called `<feature id>:<n>` where n counts every body in the
+     * document at the moment it was made, not the ones that feature made. So
+     * the same feature in a different document, or after something was
+     * inserted ahead of it, names its body differently and every reference to
+     * it goes stale. A copied component hit this at once: the copy's own
+     * chamfer pointed at a body id that would never exist.
+     *
+     * The feature id in the name is the stable half, so it is what is fallen
+     * back to. Only when nothing matched exactly, so a live reference is never
+     * quietly widened.
+     */
+    const wanted = new Set(
+      feature.bodies.map((id) => String(id).split(':')[0]).filter(Boolean)
+    );
+    return pool.filter((b) => wanted.has(String(b.createdBy || '')));
   }
 }
 
