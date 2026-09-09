@@ -406,7 +406,15 @@ the parting line of a moulded part. The silhouette has to be flat to split a
 solid at, which is Fusion's own rule, and it is fitted and checked rather than
 assumed.
 
-**Move** translates, turns about a stated axis through a stated point, takes a
+**Move** works on whole bodies or on chosen **faces**. A face is swept into a
+prism along the move and the prism is added to or taken from the body, and the
+sweep leans the way the move goes, so a wall pushed up and over comes out
+slanted rather than stepped. Faces move in a straight line only: turning one
+about a point is a different construction and is refused in the dialog rather
+than after you press OK, and so is a move square to the face's own normal,
+which would slide it along inside its own plane and change nothing.
+
+On bodies it translates, turns about a stated axis through a stated point, takes a
 place on the model to another place, or goes one distance along a direction
 picked off the model: an edge lies along its own line, a flat face gives the way
 it faces. The pivot a rotate turns about is clicked rather than typed, snapping

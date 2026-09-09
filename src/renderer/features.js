@@ -389,6 +389,9 @@ export function normalizeMove(f) {
   // absent one is an old document, and an old document always moved the body
   // itself.
   if (f.copy === undefined) f.copy = false;
+  // What is being moved. Fusion's Move Object; a move made in this session
+  // always writes it, and everything written before this moved whole bodies.
+  if (!f.moveObject) f.moveObject = 'bodies';
   return f;
 }
 
@@ -1055,7 +1058,7 @@ export function rebuild(doc, options = {}) {
           break;
 
         case 'move':
-          bodies = doMove(feature, bodies, scope, scopeObj);
+          bodies = doMove(feature, bodies, scope, scopeObj, errors);
           break;
 
         case 'scale':
@@ -3898,10 +3901,11 @@ export function rebuild(doc, options = {}) {
     return out;
   }
 
-  function doMove(feature, bodies, scope, ks) {
+  function doMove(feature, bodies, scope, ks, errs) {
     normalizeMove(feature);
     const targets = pickBodies(feature, bodies);
     if (!targets.length) return bodies;
+    if (feature.moveObject === 'faces') return moveFaces(feature, bodies, targets, scope, ks, errs);
     const m = moveMatrix(feature, scope, targets);
 
     const out = bodies.slice();
@@ -3922,6 +3926,80 @@ export function rebuild(doc, options = {}) {
     }
     for (const b of targets) {
       out[out.indexOf(b)] = { ...b, solid: K.transform(b.solid, m.elements, ks) };
+    }
+    return out;
+  }
+
+  /**
+   * Push chosen faces along, letting the walls behind them follow.
+   *
+   * The face is swept into a prism along the move and the prism is added to or
+   * taken from the body, which is the same construction Press Pull uses. The
+   * difference is that the sweep leans the way the move goes rather than
+   * standing square to the face, so a wall pushed sideways comes out slanted
+   * instead of stepped.
+   *
+   * Only a straight move. Turning a face about a point is a different
+   * construction and pretending otherwise would silently do the wrong thing, so
+   * it is refused and said.
+   */
+  function moveFaces(feature, bodies, targets, scope, ks, errs) {
+    if (feature.moveType === 'rotate') {
+      errs.push({
+        feature: feature.id,
+        message: 'Turning faces is not built. Move them along a direction instead.'
+      });
+      return bodies;
+    }
+    if (feature.copy) {
+      errs.push({
+        feature: feature.id,
+        message: 'A copy of a face is not a body. Move the whole body to copy it.'
+      });
+      return bodies;
+    }
+
+    const m = moveMatrix(feature, scope, targets);
+    const v = [m.elements[12], m.elements[13], m.elements[14]];
+    const dist = Math.hypot(v[0], v[1], v[2]);
+    if (dist < 1e-9) return bodies;
+    const unit = [v[0] / dist, v[1] / dist, v[2] / dist];
+
+    const out = bodies.slice();
+    for (const b of targets) {
+      const mesh = K.meshData(b.solid);
+      const topo = buildTopology(mesh);
+      const faces = resolveFaceRefs(topo, feature.faces || []);
+      if (!faces.length) {
+        errs.push({
+          feature: feature.id,
+          message: (feature.faces || []).length
+            ? 'The faces this move was applied to are no longer on the model'
+            : 'Pick the faces to move'
+        });
+        continue;
+      }
+
+      let solid = b.solid;
+      let moved = 0;
+      for (const face of faces) {
+        // Which side of the face the move goes. A move square to the normal
+        // slides the face along inside its own plane, which changes nothing
+        // about the solid and would build a prism of no thickness.
+        const along = face.normal[0] * unit[0] + face.normal[1] * unit[1] + face.normal[2] * unit[2];
+        if (Math.abs(along) < 1e-6) {
+          errs.push({
+            feature: feature.id,
+            message: 'A face cannot be slid along inside its own plane'
+          });
+          continue;
+        }
+        const prism = buildFacePrism(mesh, face, along > 0 ? dist : -dist, ks, unit);
+        if (!prism || K.isEmpty(prism)) continue;
+        solid = along > 0 ? K.union(solid, prism, ks) : K.difference(solid, prism, ks);
+        moved++;
+      }
+      if (moved) out[out.indexOf(b)] = { ...b, solid };
     }
     return out;
   }

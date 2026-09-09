@@ -3787,18 +3787,45 @@ function pointField(key, label, showIf) {
 /** Move: shift it, turn it about something, or take it from here to there. */
 function moveFields() {
   const isType = (t) => (f) => (f.moveType || 'translate') === t;
+  const onFaces = (f) => f.moveObject === 'faces';
   return [
+    {
+      // Fusion's Move Object. Faces are the useful other one: a wall pushed out
+      // by two millimetres without going back to the sketch that made it.
+      key: 'moveObject',
+      label: 'Move',
+      type: 'select',
+      options: [
+        ['bodies', 'Bodies'],
+        ['faces', 'Faces']
+      ]
+    },
     {
       key: '__bodies',
       label: 'Bodies',
       type: 'pick',
       pick: 'moveBodies',
+      showIf: (f) => !onFaces(f),
       summary: (f) =>
         !f.bodies || f.bodies === 'all'
           ? 'Every body'
           : `${f.bodies.length} body${f.bodies.length === 1 ? '' : 's'}`,
       clear: (f) => {
         f.bodies = 'all';
+      }
+    },
+    {
+      key: '__faces',
+      label: 'Faces',
+      type: 'pick',
+      pick: 'moveFaces',
+      showIf: onFaces,
+      summary: (f) => {
+        const n = (f.faces || []).length;
+        return n ? `${n} face${n === 1 ? '' : 's'}` : 'Nothing yet';
+      },
+      clear: (f) => {
+        f.faces = [];
       }
     },
     {
@@ -3813,11 +3840,22 @@ function moveFields() {
       ]
     },
     {
+      // Said in the dialog rather than found out after pressing OK. Turning a
+      // face about a point is a different construction and is not built.
+      key: '__facesNote',
+      label: '',
+      type: 'note',
+      showIf: (f) => onFaces(f) && (f.moveType === 'rotate' || f.copy),
+      text:
+        'Faces move in a straight line only, and a copy of a face is not a body. Use Translate, Point to point, or Along a direction, without the copy.'
+    },
+    {
       // Fusion has this on every move type, and it is the difference between
       // laying a part out twice and building it twice.
       key: 'copy',
       label: 'Create a copy',
-      type: 'bool'
+      type: 'bool',
+      showIf: (f) => !onFaces(f)
     },
     { key: 'dx', label: 'Move X', type: 'expr', showIf: isType('translate') },
     { key: 'dy', label: 'Move Y', type: 'expr', showIf: isType('translate') },
@@ -5418,6 +5456,8 @@ function startFeatureDialog(type) {
       ry: '0',
       rz: '0',
       copy: false,
+      moveObject: 'bodies',
+      faces: [],
       direction: null,
       directionLabel: null,
       alongDistance: '10'
@@ -12332,6 +12372,7 @@ const PICK_PROMPTS = {
   movePointFrom: 'Click where to measure from.',
   movePointTo: 'Click where to measure to.',
   movePivot: 'Click the point to turn about.',
+  moveFaces: 'Click the faces to move.',
   moveDirection: 'Click an edge, a flat face, or an origin plane.',
   startTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
   endTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
@@ -12365,6 +12406,7 @@ function pickCountText(armed, f) {
     targets: Array.isArray(f.targets) ? f.targets : null,
     openFaces: f.openFaces,
     draftFaces: f.faces,
+    moveFaces: f.faces,
     splitFace: f.tools,
     combineTools: f.tools,
     moveBodies: f.bodies
@@ -13349,6 +13391,20 @@ function pickIntoEdit(hit) {
         if (!f[key].some((x) => sameFaceRef(x, r))) f[key].push(r);
       }
     }
+    if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
+  } else if (ed.pickInto === 'moveFaces') {
+    // Any face at all, curved included: a round boss pushed along its own axis
+    // is an ordinary thing to want, and the builder decides for itself whether
+    // the move has anything to bite on.
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = record?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    f.faces = f.faces || [];
+    const ref = faceReference(face);
+    const at = f.faces.findIndex((x) => sameFaceRef(x, ref));
+    if (at >= 0) f.faces.splice(at, 1);
+    else f.faces.push(ref);
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (ed.pickInto === 'groupFaces') {
     // Any face at all, curved included: a face group is whatever was pointed

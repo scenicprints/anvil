@@ -296,7 +296,7 @@ type in the dropdown.
 
 | Option | Values | Anvil |
 |---|---|---|
-| Move Object | Components, Bodies, **Faces**, **Sketch Objects** | partial — bodies |
+| Move Object | Components, Bodies, Faces, **Sketch Objects** | partial — bodies and faces, v2.42.0 |
 | Move Type | **Free Move**, Translate, Rotate, Point to Point, **Point to Position** | partial — three of five |
 | Direction | Component XYZ, Design XYZ, Pick Direction (along an edge or axis) | has, v2.36.0. An edge, a flat face or an origin plane, plus one distance, and a row to flip it |
 | Set Pivot | centre of rotation within the selection | has, v2.36.0. Clicked in the canvas, snapping to corners and hole centres the same way point to point does; typing three numbers is still there |
@@ -305,6 +305,19 @@ type in the dropdown.
 
 Free Move is explicitly not captured parametrically in Fusion, which is worth
 knowing before matching it.
+
+Moving faces is a straight move only, and says so in the dialog rather than
+after OK. The face is swept into a prism along the move and the prism is added
+to or taken from the body, which is the same construction Press Pull uses; the
+difference is that the sweep leans the way the move goes rather than standing
+square to the face, so a wall pushed up and over comes out slanted instead of
+stepped. Turning a face about a point is a different construction and is
+refused, and so is copying one, because a copy of a face is not a body.
+
+A move square to the face's own normal is refused too. Sliding a face along
+inside its own plane changes nothing about the solid, so it is not a small
+move, it is no move at all, and saying so beats building nothing and looking
+broken.
 
 ### Chamfer — partial
 

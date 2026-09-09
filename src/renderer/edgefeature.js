@@ -454,13 +454,16 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
  * Built directly as triangles because the face is whatever shape it is, holes
  * and all, and re-deriving its outline as a polygon would only throw that away.
  */
-export function buildFacePrism(mesh, face, distance, scope) {
+export function buildFacePrism(mesh, face, distance, scope, along) {
   if (Math.abs(distance) < 1e-9) return null;
 
   const stride = mesh.numProp;
   const pos = mesh.vertProperties;
   const tris = mesh.triVerts;
-  const n = face.normal;
+  // Along the face's own normal unless told otherwise. Moving a face sideways
+  // wants the prism to lean the way the move goes, or the walls it leaves
+  // behind stand square to the face rather than following it.
+  const n = along || face.normal;
   const offset = [n[0] * distance, n[1] * distance, n[2] * distance];
 
   // Renumber only the vertices this face uses.

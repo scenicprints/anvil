@@ -1317,6 +1317,114 @@ async function run() {
     res.dispose();
   });
 
+  test('move faces: a wall pushed out takes the walls behind it with it', () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '30', height: '20' })];
+    let res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = topo.faces.find((f) => f.normal[2] > 0.99);
+    const ref = faceReference(top);
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'move',
+      bodies: 'all',
+      moveObject: 'faces',
+      faces: [ref],
+      moveType: 'translate',
+      dx: '0',
+      dy: '0',
+      dz: '5'
+    });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, `errors: ${JSON.stringify(res.errors)}`);
+    near(K.properties(res.bodies[0].solid).volume, 40 * 30 * 25, 1e-3, 'taller by five');
+    near(K.boundingBox(res.bodies[0].solid).max[2], 15, 1e-4, 'and it is the top that moved');
+    res.dispose();
+  });
+
+  test('move faces: a face moved sideways leans, and one moved flat is refused', () => {
+    const mk = (extra) => {
+      const doc = newDocument();
+      doc.features = [prim('box', { width: '40', depth: '30', height: '20' })];
+      const first = rebuild(doc);
+      const topo = buildTopology(K.meshData(first.bodies[0].solid));
+      const top = topo.faces.find((f) => f.normal[2] > 0.99);
+      const ref = faceReference(top);
+      first.dispose();
+      doc.features.push({
+        id: uid('f'),
+        type: 'move',
+        bodies: 'all',
+        moveObject: 'faces',
+        faces: [ref],
+        moveType: 'translate',
+        dx: '0',
+        dy: '0',
+        dz: '0',
+        ...extra
+      });
+      return rebuild(doc);
+    };
+
+    // Up and over. The wall left behind leans the way the move went rather than
+    // standing square to the face, so the part reaches further in x than it did
+    // and the added volume is a slanted slab rather than an upright one.
+    const leaned = mk({ dx: '10', dz: '5' });
+    assert(leaned.errors.length === 0, `errors: ${JSON.stringify(leaned.errors)}`);
+    const bb = K.boundingBox(leaned.bodies[0].solid);
+    near(bb.max[0], 30, 0.01, 'the top overhangs the side it moved towards');
+    near(bb.max[2], 15, 0.01, 'and it went up by five');
+    leaned.dispose();
+
+    // Straight across the face. Nothing about the solid changes, so this is not
+    // a small move, it is no move at all, and saying so beats building nothing
+    // and looking broken.
+    const flat = mk({ dx: '10' });
+    assert(
+      flat.errors.some((e) => /inside its own plane/.test(e.message)),
+      `expected a word about the plane, got ${JSON.stringify(flat.errors)}`
+    );
+    flat.dispose();
+  });
+
+  test('move faces: turning them, and copying them, are refused rather than faked', () => {
+    const mk = (extra) => {
+      const doc = newDocument();
+      doc.features = [prim('box', { width: '40', depth: '30', height: '20' })];
+      const first = rebuild(doc);
+      const topo = buildTopology(K.meshData(first.bodies[0].solid));
+      const ref = faceReference(topo.faces.find((f) => f.normal[2] > 0.99));
+      first.dispose();
+      doc.features.push({
+        id: uid('f'),
+        type: 'move',
+        bodies: 'all',
+        moveObject: 'faces',
+        faces: [ref],
+        ...extra
+      });
+      return rebuild(doc);
+    };
+
+    const turned = mk({ moveType: 'rotate', rotAxis: [1, 0, 0], rotAngle: '15' });
+    assert(
+      turned.errors.some((e) => /Turning faces/.test(e.message)),
+      `expected a refusal, got ${JSON.stringify(turned.errors)}`
+    );
+    near(K.properties(turned.bodies[0].solid).volume, 40 * 30 * 20, 1e-3, 'and nothing happened');
+    turned.dispose();
+
+    const copied = mk({ moveType: 'translate', dx: '0', dy: '0', dz: '5', copy: true });
+    assert(
+      copied.errors.some((e) => /not a body/.test(e.message)),
+      `expected a refusal, got ${JSON.stringify(copied.errors)}`
+    );
+    assert(copied.bodies.length === 1, 'and no second body appeared');
+    copied.dispose();
+  });
+
   test('press pull: a negative offset pushes the face in', () => {
     const doc = newDocument();
     doc.features = [prim('box', { width: '20', depth: '20', height: '20' })];
