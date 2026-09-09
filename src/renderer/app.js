@@ -1321,7 +1321,10 @@ function wireUI() {
 
   // Which profile, asked once and only when there is more than one to choose
   // between. A single profile is the ordinary case and must not cost a click.
-  askWhichProfile();
+  // Then anything a previous session did not get to save, which is a question
+  // that only appears when something actually went wrong.
+  askWhichProfile().then(() => offerRecovery());
+  startRecovery();
 
   document.querySelectorAll('[data-menu]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
@@ -2637,7 +2640,7 @@ async function askWhichProfile() {
   const got = await window.anvil.profiles?.();
   if (!got) return;
   if (!got.ask) {
-    showProfileName(got.profiles.find((p) => p.id === got.active) || got.profiles[0]);
+    await showProfileName(got.profiles.find((p) => p.id === got.active) || got.profiles[0]);
     return;
   }
   return new Promise((resolve) => {
@@ -2675,9 +2678,17 @@ async function showProfileName(profile) {
   // The picture stands on its own. Somebody who has set one has said which
   // face is theirs, and repeating the name beside it is the caption on a
   // photograph of the person reading it.
-  if (mine.picture) el2.appendChild(profileFace(mine, 22));
-  else if (several) el2.appendChild(document.createTextNode(mine.name || ''));
-  el2.title = mine.name || '';
+  if (mine.picture) {
+    const face = profileFace(mine, 22);
+    face.classList.add('clickable');
+    face.addEventListener('click', () => cmdProfilePicture(mine.id));
+    el2.appendChild(face);
+  } else if (several) {
+    el2.appendChild(document.createTextNode(mine.name || ''));
+  }
+  el2.title = mine.picture
+    ? `${mine.name} — click to change the picture`
+    : mine.name || '';
 }
 
 /**
@@ -2691,9 +2702,9 @@ async function showProfileName(profile) {
  * Cropped from the middle to a square, because the shape it is shown in is a
  * square and squeezing a portrait into one makes everybody look wrong.
  */
-async function cmdProfilePicture() {
+async function cmdProfilePicture(who) {
   const lib = await window.anvil.library?.();
-  const id = lib?.profile?.id;
+  const id = who || lib?.profile?.id;
   if (!id) {
     setStatus('There is no profile to set a picture for.');
     return;
@@ -2723,8 +2734,11 @@ async function cmdProfilePicture() {
     setStatus(done?.error || 'That picture could not be saved.');
     return;
   }
-  showProfileName({ ...lib.profile, picture: done.picture });
-  setStatus(`Picture set for ${lib.profile.name}.`);
+  // Only redraw the header when it was the profile in use. Setting a picture
+  // for another one from the picker must not change whose work this is.
+  if (id === lib?.profile?.id) showProfileName({ ...lib.profile, picture: done.picture });
+  setStatus('Picture set.');
+  return done.picture;
 }
 
 /** Take the picture off again. */
@@ -2896,6 +2910,101 @@ async function openDocumentAt(file) {
   state.docPath = opened.path;
   state.docVersion = Number(opened.data?.version) || 0;
   setStatus(`Opened ${el.docname.textContent}`);
+}
+
+/* ------------------------------------------------------------------ */
+/* Crash recovery                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Keep a copy of unsaved work where a crash cannot reach it.
+ *
+ * On a timer, and only while there is something to lose. It is not a save: the
+ * document on disk is untouched, the dirty flag is untouched, and nothing in
+ * the window changes, because an autosave that announced itself would be an
+ * interruption every twenty seconds for the sake of an event that happens
+ * twice a year.
+ *
+ * The cost is one JSON serialise of a document that is already JSON. On a part
+ * big enough for that to be felt, the alternative is losing it.
+ */
+function startRecovery() {
+  if (state.recoveryTimer) clearInterval(state.recoveryTimer);
+  state.recoveryTimer = setInterval(async () => {
+    if (!state.dirty) return;
+    // While a drag is in flight the document is mid-change, and a copy taken
+    // then is a copy of a half-finished move. The next tick will catch it.
+    if (state.editForm?.drag || state.sketcher?.active) return;
+    try {
+      await window.anvil.autosave?.({ ...state.doc, view: whereWeAre() });
+    } catch {
+      /* insurance that interrupts is worse than none */
+    }
+  }, 20000);
+}
+
+/**
+ * Offer back anything a previous session did not get to save.
+ *
+ * Asked once at startup, and only ever when there is something: a recovery file
+ * is removed on a clean exit, so one that is still there means an exit that
+ * never got that far. That is what makes the offer worth reading rather than
+ * something to dismiss.
+ *
+ * Taking it does not save it. It opens as unsaved work under the name it had,
+ * which leaves the decision where it belongs: the file on disk is still exactly
+ * what was last chosen, and this is the argument for changing it.
+ */
+async function offerRecovery() {
+  let got = null;
+  try {
+    got = await window.anvil.recoverable?.();
+  } catch {
+    return;
+  }
+  if (!got?.found?.length) return;
+
+  const first = got.found[0];
+  const when = new Date(first.at).toLocaleString();
+  const more = got.found.length - 1;
+  const choice = await window.anvil.message({
+    type: 'warning',
+    title: 'Anvil closed without saving',
+    message: `There is unsaved work on ${first.title} from ${when}.`,
+    detail:
+      (first.path
+        ? `The file itself is untouched: this is what had not been written to it yet.`
+        : 'It was never saved to a file, so this copy is all there is.') +
+      (more ? ` ${more} more recovered session${more === 1 ? '' : 's'} will be offered after this one.` : ''),
+    buttons: ['Recover it', 'Throw it away'],
+    defaultId: 0,
+    cancelId: 0
+  });
+
+  if (choice?.response === 1) {
+    await window.anvil.discardRecovery?.(first.session);
+    setStatus(`Recovered work on ${first.title} thrown away.`);
+    // The next one, if there is a next one. One question at a time.
+    if (more) offerRecovery();
+    return;
+  }
+
+  const res = await window.anvil.recover?.(first.session);
+  if (!res?.ok) {
+    setStatus(res?.error || 'That could not be recovered.');
+    return;
+  }
+  adoptOpenedDocument({ path: res.path || 'Recovered model.anvil', data: res.data });
+  state.docPath = res.path || null;
+  // Dirty on purpose. It has not been written anywhere, and the whole point is
+  // that the person decides whether it should be.
+  state.dirty = true;
+  await window.anvil.discardRecovery?.(first.session);
+  setStatus(
+    res.path
+      ? `Recovered. This is newer than ${String(res.path).split(/[\\/]/).pop()} on disk, and not saved yet.`
+      : 'Recovered, and never saved to a file. Save it somewhere.'
+  );
 }
 
 async function cmdChooseLibrary() {
@@ -21942,10 +22051,31 @@ function promptProfiles(title, profiles, cb) {
   let picked = profiles.find((p) => p.active)?.id || profiles[0]?.id || null;
   const rows = [];
   for (const p of profiles) {
-    const row = document.createElement('button');
+    const row = document.createElement('div');
     row.className = 'profilerow';
-    row.type = 'button';
-    row.appendChild(profileFace(p, 40));
+
+    /*
+     * The face is the button for changing the face.
+     *
+     * It is where anybody would try first, and it is the only place a picture
+     * can be set for a profile that is not the one in use. The Library menu has
+     * the same command for the one in use, since a menu is where somebody looks
+     * when clicking the thing did not occur to them.
+     */
+    const face = profileFace(p, 40);
+    face.classList.add('clickable');
+    face.title = `Choose a picture for ${p.name}`;
+    face.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const picture = await cmdProfilePicture(p.id);
+      if (!picture) return;
+      const fresh = profileFace({ ...p, picture }, 40);
+      fresh.classList.add('clickable');
+      fresh.title = face.title;
+      fresh.addEventListener('click', face.onclick);
+      face.replaceWith(fresh);
+    });
+    row.appendChild(face);
 
     const words = document.createElement('div');
     words.className = 'profilewords';
@@ -22132,6 +22262,14 @@ window.anvilDev = {
   squareThumbnail,
   profileFace,
   showProfileName,
+  // Recovery is a timer and a startup question, neither of which a probe can
+  // wait for, so both are reachable directly.
+  offerRecovery,
+  whereWeAre,
+  // A document read off disk has to be brought up to the shape the app works
+  // in before anything touches it. A probe that assigns raw JSON straight into
+  // state gets a rebuild that fails on a field nobody wrote.
+  migrate,
   // The parameter file readers, so a probe can put a table out and read it back
   // without going through a save dialog it cannot answer.
   expr: { parametersToCsv, parametersFromCsv },

@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.72.0**. 583 tests in the window, plus 55 checks of the
+Current version: **2.73.0**. 583 tests in the window, plus 55 checks of the
 library, profiles and the version counter in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
@@ -32,9 +32,12 @@ placeholder handling. Profile pictures followed in v2.72.0.
 What is left is in `FUSION-FEATURES.md`, item by item, each with the reason it is
 not built. Reading it back after the library shipped, the honest summary is:
 
-- **Crash recovery is the one real gap.** Nothing is written between saves, so a
-  crash costs everything since the last one. Everything else on the list is
-  either a whole discipline that was deliberately left out, or a convenience.
+- **Crash recovery**, built in v2.73.0. Unsaved work is written aside every
+  twenty seconds and offered back at startup, and only ever when the previous
+  session did not exit cleanly: the file is removed on a clean exit, so one that
+  is still there means an exit that never got that far. An offer that appeared
+  on an ordinary morning would be dismissed without reading, and then it would
+  not be read on the morning it mattered.
 - **Deliberately not here**, and recorded as such in `README.md`: CAM and
   toolpaths, drawings, simulation study types, a photoreal renderer with real
   lights, and generative design's study and explore machinery.

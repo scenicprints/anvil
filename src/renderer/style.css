@@ -1487,6 +1487,13 @@ table.params .starbtn:hover {
   line-height: 1;
   user-select: none;
 }
+.profileface.clickable {
+  cursor: pointer;
+}
+.profileface.clickable:hover {
+  outline: 2px solid #d84b1e;
+  outline-offset: 1px;
+}
 .profileface img {
   width: 100%;
   height: 100%;

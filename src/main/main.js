@@ -191,9 +191,11 @@ async function runShot() {
     const image = await win.webContents.capturePage();
     await fs.writeFile(shotOut, image.toPNG());
     process.stdout.write(`Saved ${shotOut}\n`);
+    clearRecovery();
     app.exit(0);
   } catch (err) {
     process.stderr.write(`Screenshot failed: ${err.stack || err.message}\n`);
+    clearRecovery();
     app.exit(1);
   }
 }
@@ -258,6 +260,145 @@ async function confirmClose() {
   closing = true;
   win.close();
 }
+
+/* ------------------------------------------------------------------ */
+/* Crash recovery                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * What is written between saves, so that a crash costs minutes rather than an
+ * evening.
+ *
+ * It is not a save and must never behave like one. It does not touch the
+ * document, does not clear the dirty flag, does not bump the version counter
+ * and does not take a lock: the file on disk is exactly what the person last
+ * chose to write, and this sits beside it in the application's own folder
+ * saying "there was more".
+ *
+ * Kept per window rather than per document, because the case it exists for is
+ * the one where there is no document yet: an hour into a new part that has
+ * never been saved is the work that hurts most to lose, and it is the only work
+ * that nothing else in the system is holding on to.
+ *
+ * The file is removed on a clean exit. Anything left behind is therefore, by
+ * definition, an exit that was not clean, which is what makes the offer at
+ * startup trustworthy: it never appears when nothing went wrong.
+ */
+const RECOVERY_MS = 20 * 1000;
+const sessionId = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+const recoveryDir = () => path.join(app.getPath('userData'), 'recovery');
+const recoveryPath = (id) => path.join(recoveryDir(), `${String(id).replace(/[^A-Za-z0-9_-]/g, '')}.json`);
+
+async function writeRecovery(doc) {
+  try {
+    await fs.mkdir(recoveryDir(), { recursive: true });
+    await writeAtomic(
+      recoveryPath(sessionId),
+      JSON.stringify({
+        session: sessionId,
+        path: currentPath,
+        title: doc?.name || null,
+        profile: activeProfile()?.name || null,
+        at: Date.now(),
+        doc
+      })
+    );
+    return true;
+  } catch {
+    // A recovery file that cannot be written must never stop the work. It is
+    // insurance, and insurance that interrupts is worse than none.
+    return false;
+  }
+}
+
+function clearRecovery() {
+  try {
+    fsSync.unlinkSync(recoveryPath(sessionId));
+  } catch {
+    /* there was none, which is where we wanted to get to */
+  }
+}
+
+ipcMain.handle('doc:autosave', async (_e, doc) => ({ ok: await writeRecovery(doc) }));
+ipcMain.handle('doc:recoveryDone', async () => {
+  clearRecovery();
+  return { ok: true };
+});
+ipcMain.handle('doc:recoveryInterval', async () => RECOVERY_MS);
+
+/**
+ * Anything left over from a session that did not end tidily.
+ *
+ * Its own session is skipped, or this window would offer to recover the work it
+ * is doing right now. Anything older than a fortnight is thrown away rather
+ * than offered: a file that old is from a crash somebody has long since worked
+ * around, and being asked about it every morning is how a real offer starts
+ * being dismissed without reading.
+ */
+ipcMain.handle('doc:recoverable', async () => {
+  const out = [];
+  let entries = [];
+  try {
+    entries = await fs.readdir(recoveryDir(), { withFileTypes: true });
+  } catch {
+    return { ok: true, found: [] };
+  }
+  const fortnight = 14 * 24 * 60 * 60 * 1000;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const full = path.join(recoveryDir(), entry.name);
+    let got = null;
+    try {
+      got = JSON.parse(await fs.readFile(full, 'utf8'));
+    } catch {
+      // Unreadable, which most likely means it was being written when the
+      // power went. There is nothing here to offer.
+      try {
+        await fs.unlink(full);
+      } catch {
+        /* leave it */
+      }
+      continue;
+    }
+    if (!got || got.session === sessionId || !got.doc) continue;
+    if (Date.now() - (got.at || 0) > fortnight) {
+      try {
+        await fs.unlink(full);
+      } catch {
+        /* leave it */
+      }
+      continue;
+    }
+    out.push({
+      session: got.session,
+      path: got.path || null,
+      title: got.title || (got.path ? path.basename(got.path) : 'an unsaved model'),
+      profile: got.profile || null,
+      at: got.at || 0
+    });
+  }
+  out.sort((a, b) => b.at - a.at);
+  return { ok: true, found: out };
+});
+
+ipcMain.handle('doc:recover', async (_e, session) => {
+  try {
+    const got = JSON.parse(await fs.readFile(recoveryPath(session), 'utf8'));
+    if (!got?.doc) return { ok: false, error: 'There is nothing in that recovery file' };
+    return { ok: true, path: got.path || null, at: got.at || 0, data: got.doc };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('doc:discardRecovery', async (_e, session) => {
+  try {
+    await fs.unlink(recoveryPath(session));
+  } catch {
+    /* already gone */
+  }
+  return { ok: true };
+});
 
 function setTitle() {
   if (!win) return;
@@ -1031,6 +1172,9 @@ function beatLock() {
 
 app.on('before-quit', () => {
   if (lockBeat) clearInterval(lockBeat);
+  // This is what makes the offer at startup trustworthy: a recovery file only
+  // survives an exit that never got here.
+  clearRecovery();
   // Synchronous, because the process is on its way out and a promise will not
   // be waited for.
   try {
@@ -1113,6 +1257,9 @@ ipcMain.handle('doc:save', async (_e, { data, saveAs, sidecar }) => {
     }
 
     setTitle();
+    // Saved is saved: whatever was being held against a crash is now in the
+    // document, and leaving it behind would offer somebody their own work back.
+    clearRecovery();
     return { ok: true, path: file, name: libraryNameFor(file), beside, version: stamped.version, docId: stamped.docId };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -1384,6 +1531,7 @@ ipcMain.on('test:done', (_e, summary) => {
   }
   write('');
   write(`${summary.total - summary.failed}/${summary.total} passed`);
+  clearRecovery();
   app.exit(summary.failed ? 1 : 0);
 });
 
