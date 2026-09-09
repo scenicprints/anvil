@@ -1338,6 +1338,10 @@ export function rebuild(doc, options = {}) {
           doConvertMesh(feature, scope, scopeObj, errors);
           break;
 
+        case 'meshShell':
+          doMeshShell(feature, scope, scopeObj, errors);
+          break;
+
         case 'textureExtrude':
           doTextureExtrude(feature, scope, scopeObj, errors);
           break;
@@ -7868,6 +7872,106 @@ export function rebuild(doc, options = {}) {
   }
 
   /**
+   * Hollow a mesh body, leaving a wall of even thickness.
+   *
+   * The same erosion the solid Shell uses, because the answer is the same
+   * answer: a ball rolled around the inside is what gives an even wall around
+   * curves, and a mesh from a scan or a download is nothing but curves.
+   *
+   * A mesh has to be closed before it can be hollowed, for the same reason it
+   * has to be closed before it can be a solid: there is no inside to take away
+   * from otherwise. The check is not a formality. manifold will take a mesh
+   * with holes in it and hand back something that looks right and is not
+   * watertight, and by the time that shows up it is in a printed part.
+   */
+  function doMeshShell(feature, scope, ks, errs) {
+    const targets = pickMeshes(feature);
+    if (!targets.length) throw new Error('Shell works on a mesh body');
+
+    const thickness = safeEval(feature.thickness, scope, 2);
+    if (!(thickness > 0)) return;
+
+    for (const b of targets) {
+      let mesh = b.sheet;
+      if (feature.repair !== false) mesh = MT.repairMesh(mesh, { fillHoles: true });
+
+      const health = MT.meshHealth(mesh);
+      if (!health.closed) {
+        errs.push({
+          feature: feature.id,
+          message: `${b.name} is not closed, so there is no inside to hollow out: ${
+            health.openEdges
+          } open edge${health.openEdges === 1 ? '' : 's'}. Repair it first.`
+        });
+        continue;
+      }
+
+      let solid = null;
+      try {
+        solid = K.ofMesh(mesh.vertProperties, mesh.triVerts, ks);
+      } catch (err) {
+        errs.push({ feature: feature.id, message: `Shell: ${err.message}` });
+        continue;
+      }
+      if (!solid || K.isEmpty(solid)) {
+        errs.push({ feature: feature.id, message: `${b.name} closes but is not a solid.` });
+        continue;
+      }
+
+      // The expensive step, and the reason the solid Shell refuses past a
+      // count too. A mesh from a scan is routinely a hundred times bigger than
+      // anything modelled here, so the limit matters more, not less.
+      const props = K.properties(solid);
+      if (props.numTri > 4000) {
+        errs.push({
+          feature: feature.id,
+          message: `Shell skipped: ${b.name} has ${props.numTri} triangles, past what the hollowing step can do quickly. Reduce it first.`
+        });
+        continue;
+      }
+
+      const ball = K.sphere(thickness, feature.quality || 16, ks);
+      const inner = ks.track(solid.minkowskiDifference(ball));
+      if (K.isEmpty(inner)) {
+        errs.push({
+          feature: feature.id,
+          message: `Shell skipped: ${thickness} mm is thicker than ${b.name}`
+        });
+        continue;
+      }
+
+      let walls = K.difference(solid, inner, ks);
+
+      // Opening a face is what makes a hollowed part printable, and a mesh has
+      // no faces to name. A plane does the same job: everything on the far side
+      // of it is taken away, which is the open mouth.
+      if (feature.openWith) {
+        const plane = resolvePlane(feature.openWith, scope, builtConstruction);
+        const bb = K.boundingBox(solid);
+        const span =
+          Math.hypot(
+            bb.max[0] - bb.min[0],
+            bb.max[1] - bb.min[1],
+            bb.max[2] - bb.min[2]
+          ) + 20;
+        const cap = halfSpace(plane.origin, plane.n, span, ks);
+        const opened = K.difference(walls, K.intersection(cap, K.difference(solid, inner, ks), ks), ks);
+        // Taking the whole wall away leaves nothing, which is not an opening.
+        if (!K.isEmpty(opened)) walls = opened;
+        else {
+          errs.push({
+            feature: feature.id,
+            message: 'That plane takes the whole wall away rather than opening it'
+          });
+        }
+      }
+
+      const out = K.meshData(walls);
+      replaceBody(bodies, b, { sheet: SH.makeSheet(MT.meshPoints(out), MT.meshTris(out)) });
+    }
+  }
+
+  /**
    * Push a mesh's surface in and out by the brightness of an image.
    *
    * A texture that is really there, in the geometry, so it survives being
@@ -8223,6 +8327,7 @@ export const FEATURE_LABELS = {
   meshRemesh: 'Remesh',
   meshSmooth: 'Smooth',
   meshPlaneCut: 'Plane Cut',
+  meshShell: 'Shell Mesh',
   meshSeparate: 'Separate',
   meshMerge: 'Merge Bodies',
   meshErase: 'Erase And Fill',

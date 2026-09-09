@@ -7137,6 +7137,82 @@ async function run() {
     for (const s of solids) near(s.solid.volume(), 4000, 40, 'cut through the middle');
   });
 
+  test('mesh shell: a hollowed box is a wall of the thickness asked for', () => {
+    const shelled = (extra) => {
+      const scope = new K.Scope();
+      const box = K.meshData(K.box([20, 20, 20], true, scope));
+      scope.dispose();
+
+      const doc = newDocument();
+      doc.meshData.m1 = {
+        verts: Array.from(box.vertProperties),
+        tris: Array.from(box.triVerts)
+      };
+      doc.features = [
+        { id: uid('f'), type: 'insertMesh', data: 'm1', label: 'Box', scale: '1', at: [0, 0, 0] },
+        { id: uid('f'), type: 'meshShell', bodies: 'all', thickness: '2', ...extra }
+      ];
+      return rebuild(doc);
+    };
+
+    const res = shelled({});
+    assert(res.errors.length === 0, `errors: ${JSON.stringify(res.errors)}`);
+    assert(res.bodies.length === 1, `one body, got ${res.bodies.length}`);
+    const body = res.bodies[0];
+    assert(body.mesh, 'and it is still a mesh body');
+
+    // The wall is what is left between the box and the box eroded by two, so
+    // 20 cubed less 16 cubed. Measured through the kernel, because the point of
+    // the feature is that it comes back as real geometry and not a surface that
+    // happens to look hollow.
+    const scope = new K.Scope();
+    const solid = K.ofMesh(body.sheet.vertProperties, body.sheet.triVerts, scope);
+    near(K.properties(solid).volume, 20 ** 3 - 16 ** 3, 20, 'the wall between the two boxes');
+    // A closed shell has two surfaces, an outer and an inner, with no way
+    // between them. Two spheres worth of boundary gives an Euler characteristic
+    // of four, and genus is (2 - chi) / 2, so a sealed cavity reads as minus
+    // one. That is the signature being checked for: a wall that failed to close
+    // would come back as zero.
+    assert(solid.genus() === -1, `a sealed cavity reads as genus -1, got ${solid.genus()}`);
+    scope.dispose();
+    res.dispose();
+
+    // Thicker than the part is a refusal with a reason, not an empty body.
+    const tooThick = shelled({ thickness: '15' });
+    assert(
+      tooThick.errors.some((e) => /thicker than/.test(e.message)),
+      `expected a word about thickness, got ${JSON.stringify(tooThick.errors)}`
+    );
+    tooThick.dispose();
+  });
+
+  test('mesh shell: one with a hole in it is refused rather than quietly wrong', () => {
+    // manifold will take a mesh with holes and hand back something that looks
+    // right and is not watertight, and by the time that shows up it is in a
+    // printed part. There is no inside to hollow out of an open surface.
+    const scope = new K.Scope();
+    const box = K.meshData(K.box([20, 20, 20], true, scope));
+    scope.dispose();
+
+    const doc = newDocument();
+    // Two triangles short of closed, and repair switched off so it stays that
+    // way: with repair on this is a hole worth filling and it should be filled.
+    doc.meshData.m1 = {
+      verts: Array.from(box.vertProperties),
+      tris: Array.from(box.triVerts).slice(0, box.triVerts.length - 6)
+    };
+    doc.features = [
+      { id: uid('f'), type: 'insertMesh', data: 'm1', label: 'Open box', scale: '1', at: [0, 0, 0] },
+      { id: uid('f'), type: 'meshShell', bodies: 'all', thickness: '2', repair: false }
+    ];
+    const res = rebuild(doc);
+    assert(
+      res.errors.some((e) => /not closed/.test(e.message)),
+      `expected a refusal, got ${JSON.stringify(res.errors)}`
+    );
+    res.dispose();
+  });
+
   test('mesh scale: resized about its middle, or about the origin', () => {
     // A scanned mesh arrives in whatever units the scanner felt like, and a
     // printed one often wants a percent or two of shrink allowance. Scaling

@@ -89,7 +89,7 @@ report.toolsStartEmpty = (dev.state.editing?.feature?.tools || []).length === 0;
   report.toolsPicked = tools.map((t) => (t.plane ? String(t.plane) : 'a face'));
   report.tookThree = tools.length === 3;
   // The row stays armed, or picking the second would mean re-arming for it.
-  report.stillArmed = dev.state.editing?.pickInto === 'splitFace';
+  report.stillArmed = dev.state.editing?.pickInto === 'splitTools';
   report.summaryAfter = summaryOf('Split with');
   report.removeRowsAppeared = rows().filter((r) => r.textContent.includes('Remove')).length;
 }

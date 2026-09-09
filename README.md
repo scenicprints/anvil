@@ -1218,6 +1218,11 @@ takes the roughness out without taking the size out with it; shrinking is a
 setting rather than a side effect. **Plane Cut** trims, splits into two bodies,
 or splits the faces only, and caps what it opened. **Erase And Fill** removes
 faces and closes over where they were, which is how a lump of scan noise goes.
+**Shell** hollows a mesh out with an even wall, by the same erosion the solid
+Shell uses, because that is what gives an even wall through curves and a
+downloaded part is nothing but curves. It refuses an open mesh: there is no
+inside to take away from a surface. Where the solid Shell is told which faces
+to leave open, this takes a plane instead, since a mesh has no faces to name.
 **Separate** and **Merge** take a body apart and put it back. **Texture Extrude**
 pushes the surface in and out by the brightness of an image, so the texture is
 really there in the geometry and survives being sliced.

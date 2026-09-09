@@ -663,7 +663,7 @@ surface body, as opposed to a solid.
 | Remesh | has |
 | Reduce | has |
 | Plane Cut (trim or split with a plane) | has |
-| Shell | **missing** |
+| Shell | has, v2.43.0 |
 | Combine | has (merge) |
 | Smooth | has |
 | Reverse normal | has |
@@ -676,8 +676,16 @@ surface body, as opposed to a solid.
 | Mesh Selection Palette | **missing** |
 
 Anvil also has patch, repair, stitch and section, which are its own. The gaps
-are mesh shell, align to a plane, and the selection palette that governs how
-clicking picks mesh faces.
+left are align to a plane and the selection palette that governs how clicking
+picks mesh faces.
+
+Mesh Shell uses the same erosion the solid Shell does, because the answer is
+the same answer: a ball rolled around the inside is what gives an even wall
+through curves, and a downloaded or scanned part is nothing but curves. It
+refuses an open mesh, for the same reason Convert to Solid does. Where the
+solid Shell is told which faces to leave open, this is given a plane instead: a
+mesh has no faces to name, and everything of the wall on the far side of the
+plane is taken away, which is the mouth.
 
 ---
 

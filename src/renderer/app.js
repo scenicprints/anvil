@@ -535,7 +535,7 @@ function handleViewportDown(e) {
       const pl = state.vp.pickPlane(e.clientX, e.clientY);
       if (pl) return pickIntoEdit({ kind: 'plane', planeName: pl.planeName });
     }
-    if (['neutral', 'splitFace', 'mirrorPlane'].includes(armed)) {
+    if (['neutral', 'splitFace', 'splitTools', 'mirrorPlane'].includes(armed)) {
       const pl = state.vp.pickPlane(e.clientX, e.clientY);
       if (pl) return pickIntoEdit({ kind: 'plane', planeName: pl.planeName });
     }
@@ -1947,6 +1947,9 @@ async function runCommand(cmd) {
       break;
     case 'meshReverse':
       cmdMeshReverse();
+      break;
+    case 'meshShell':
+      cmdMeshShell();
       break;
     case 'convertMesh':
       cmdConvertMesh();
@@ -4007,7 +4010,7 @@ function splitFields(feature) {
       key: '__tools',
       label: 'Split with',
       type: 'pick',
-      pick: 'splitFace',
+      pick: 'splitTools',
       summary: (f) => {
         const n = (f.tools || []).length;
         if (!n) return 'Nothing yet';
@@ -6599,7 +6602,7 @@ function startSplit() {
     tools: []
   };
   openFeatureEditor(feature, 'Split Body', splitFields(feature));
-  setEditPick('splitFace');
+  setEditPick('splitTools');
   setStatus('Click a face or a plane to split with. Several can be used at once.');
 }
 
@@ -12364,7 +12367,8 @@ const PICK_PROMPTS = {
   openFaces: 'Click the faces to leave open.',
   draftFaces: 'Click the faces.',
   neutral: 'Click the neutral plane.',
-  splitFace: 'Click the faces or planes to cut with.',
+  splitFace: 'Click the face or plane to cut with.',
+  splitTools: 'Click the faces or planes to cut with. Several can be used at once.',
   mirrorPlane: 'Click the plane to mirror in.',
   combineTarget: 'Click the body to keep.',
   combineTools: 'Click the bodies to combine with it.',
@@ -12407,7 +12411,7 @@ function pickCountText(armed, f) {
     openFaces: f.openFaces,
     draftFaces: f.faces,
     moveFaces: f.faces,
-    splitFace: f.tools,
+    splitTools: f.tools,
     combineTools: f.tools,
     moveBodies: f.bodies
   }[armed];
@@ -13172,6 +13176,7 @@ function setEditPick(which) {
       'toObject',
       'neutral',
       'splitFace',
+      'splitTools',
       'mirrorPlane',
       'alignFrom',
       'alignTo',
@@ -13606,10 +13611,16 @@ function pickIntoEdit(hit) {
     f[key] = at;
     ed.pickInto = null;
     setStatus(`Took the ${(snap?.label || 'point on the face').toLowerCase()} at ${at.map((n) => round(n, 2)).join(', ')}.`);
-  } else if (ed.pickInto === 'splitFace' || ed.pickInto === 'mirrorPlane') {
-    // A split takes a list of tools; a mirror takes one plane. Both arrive
-    // here because both are pointing at a flat thing.
-    const many = ed.pickInto === 'splitFace';
+  } else if (
+    ed.pickInto === 'splitTools' ||
+    ed.pickInto === 'splitFace' ||
+    ed.pickInto === 'mirrorPlane'
+  ) {
+    // Split Body takes a list of tools; a mirror and the mesh Plane Cut take
+    // one plane each. All three arrive here because all three are pointing at a
+    // flat thing, and they are told apart by which row is armed rather than by
+    // what the click hit.
+    const many = ed.pickInto === 'splitTools';
     let tool = null;
     if (hit.kind === 'plane') {
       tool = { plane: hit.planeName };
@@ -13647,8 +13658,15 @@ function pickIntoEdit(hit) {
       return true;
     }
 
-    f.planeRef = tool.plane ? { plane: tool.plane } : tool;
-    f.plane = tool.plane ? tool.plane : { face: tool.face };
+    const key = ed.pickInto === 'mirrorPlane' ? 'planeRef' : 'faceRef';
+    f[key] = tool.plane ? { plane: tool.plane } : tool;
+    // Plane Cut reads `plane` as a spec and a face reference beside it; a
+    // mirror reads the spec alone.
+    f.plane = tool.plane
+      ? tool.plane
+      : ed.pickInto === 'mirrorPlane'
+        ? { face: tool.face }
+        : f.plane;
     ed.pickInto = null;
     state.vp.setPlanesVisible($('#chkPlanes').checked);
   } else if (ed.pickInto === 'combineTarget') {
@@ -15971,6 +15989,41 @@ function cmdMeshErase() {
     setEditPick('eraseFaces');
     setStatus('Click the faces to remove.');
   }
+}
+
+function cmdMeshShell() {
+  startMeshFeature('meshShell', 'Shell Mesh', meshShellFields(), {
+    thickness: '2',
+    repair: true,
+    openWith: null
+  });
+}
+
+function meshShellFields() {
+  return [
+    meshBodyField(),
+    { key: 'thickness', label: `Wall thickness (${unitLabel()})`, type: 'expr' },
+    {
+      // A solid shell is told which faces to leave open. A mesh has no faces to
+      // name, so a plane does the same job: everything of the wall on the far
+      // side of it is taken away, which is the mouth.
+      key: 'openWith',
+      label: 'Open it with a plane',
+      type: 'select',
+      options: [['', 'Closed all round'], ...planeOptions()],
+      get: (f) => (f.openWith ? optionForPlane(f.openWith) : ''),
+      set: (f, v) => {
+        f.openWith = v ? planeSpecFromOption(v) : null;
+      }
+    },
+    { key: 'repair', label: 'Repair first', type: 'bool' },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'A mesh has to be closed before it can be hollowed: there is no inside to take away otherwise. The wall is even all round, including through curves, which is what a downloaded or scanned part is made of.'
+    }
+  ];
 }
 
 function cmdConvertMesh() {
@@ -18840,6 +18893,8 @@ function describeFeature(feature) {
       return { title: 'Smooth', fields: meshSmoothFields() };
     case 'meshPlaneCut':
       return { title: 'Plane Cut', fields: meshPlaneCutFields() };
+    case 'meshShell':
+      return { title: 'Shell Mesh', fields: meshShellFields() };
     case 'meshErase':
       return { title: 'Erase And Fill', fields: meshEraseFields() };
     case 'textureExtrude':
