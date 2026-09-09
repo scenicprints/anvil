@@ -19,6 +19,30 @@ import { variableSweep } from './meshbuild.js';
 
 const EXTEND = 0.05; // mm of overrun so booleans do not leave slivers
 
+/**
+ * A block filling everything on the far side of a plane, in the direction the
+ * normal points. Used to cut a corner off.
+ */
+function halfSpaceAt(origin, normal, span, scope) {
+  const basis = basisFor(normal);
+  const box = K.box([span * 3, span * 3, span * 2], true, scope);
+  const m = new THREE.Matrix4();
+  // The box is centred a span along the normal, so its near face lands on the
+  // plane and its body is the side the normal points at.
+  const o = [
+    origin[0] + normal[0] * span,
+    origin[1] + normal[1] * span,
+    origin[2] + normal[2] * span
+  ];
+  m.set(
+    basis.x[0], basis.y[0], basis.n[0], o[0],
+    basis.x[1], basis.y[1], basis.n[1], o[1],
+    basis.x[2], basis.y[2], basis.n[2], o[2],
+    0, 0, 0, 1
+  );
+  return K.transform(box, m.elements, scope);
+}
+
 /* ------------------------------------------------------------------ */
 /* The corner profile                                                  */
 /* ------------------------------------------------------------------ */
@@ -401,13 +425,33 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
   // it on the corner itself and it bulges out and adds volume instead.
   const vertexFaces = new Map();
   const vertexSize = new Map();
+  // Which edges leave each corner, and where. A chamfer's corner facet is the
+  // plane through the point one chamfer distance along each of them.
+  const vertexLegs = new Map();
+  const vertexAt = new Map();
   for (const { edge } of convexTools) {
     if (edge.kind !== 'line') continue;
-    for (const v of [edge.verts[0], edge.verts[edge.verts.length - 1]]) {
+    const ends = [edge.verts[0], edge.verts[edge.verts.length - 1]];
+    for (const v of ends) {
       let set = vertexFaces.get(v);
       if (!set) vertexFaces.set(v, (set = new Set()));
       set.add(edge.faceA);
       set.add(edge.faceB);
+
+      // The direction the edge leaves this corner in, and the corner's place.
+      const pts = edge.points;
+      if (pts && pts.length >= 2) {
+        const first = v === ends[0];
+        const a = first ? pts[0] : pts[pts.length - 1];
+        const b = first ? pts[1] : pts[pts.length - 2];
+        const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const l = Math.hypot(d[0], d[1], d[2]);
+        if (l > 1e-12) {
+          if (!vertexLegs.has(v)) vertexLegs.set(v, []);
+          vertexLegs.get(v).push({ dir: [d[0] / l, d[1] / l, d[2] / l], size: sizeUsed.get(edge) });
+          vertexAt.set(v, a);
+        }
+      }
       // The ball has to fit every sweep meeting here, so it takes the smallest
       // radius of them. A bigger one would stand proud of the narrower fillet.
       const r = sizeUsed.get(edge);
@@ -438,8 +482,64 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
     }
   }
 
+  /*
+   * Where three chamfers meet, the three bevelled faces run together to a
+   * point. Fusion calls that Miter and offers Chamfer instead, which "creates
+   * a chamfer to join beveled edges at the corner": the point is cut off by a
+   * fourth facet through the tangent points, one chamfer distance along each
+   * edge leaving the corner.
+   *
+   * It is one more half space per corner, unioned into the same cut, so it
+   * takes its material away with everything else rather than in a pass of its
+   * own.
+   */
+  const cornerCuts = [];
+  if (kind === 'chamfer' && opts.cornerType === 'chamfer') {
+    for (const [v, legs] of vertexLegs) {
+      if (legs.length < 3) continue;
+      const at = vertexAt.get(v);
+      if (!at) continue;
+      const pts = legs
+        .filter((l) => l.size > 0)
+        .map((l) => [at[0] + l.dir[0] * l.size, at[1] + l.dir[1] * l.size, at[2] + l.dir[2] * l.size]);
+      if (pts.length < 3) continue;
+
+      // The plane through the first three of them. More than three legs at one
+      // corner is a shape whose tangent points need not be coplanar at all, so
+      // the facet is taken from three and the rest are left to the sweeps.
+      const u = sub(pts[1], pts[0]);
+      const w = sub(pts[2], pts[0]);
+      const n0 = cross(u, w);
+      const nl = len(n0);
+      if (nl < 1e-9) continue;
+      let n = [n0[0] / nl, n0[1] / nl, n0[2] / nl];
+      // Away from the corner vertex, which is the side the leftover point is
+      // on. The vertex itself has already gone: the three chamfers meet at a
+      // point further out along the diagonal than the vertex was, and that
+      // point is what this facet is here to take off. Cutting the side the
+      // vertex is on removes only what is removed already, which is exactly
+      // what the first version of this did.
+      const toCorner = sub(at, pts[0]);
+      if (dot(n, toCorner) > 0) n = [-n[0], -n[1], -n[2]];
+
+      // Bounded to the corner. A half space is unbounded, and the plane
+      // through the three tangent points of one corner of a box has most of
+      // that box on the far side of it, so cutting with the plane alone takes
+      // the part away rather than its corner. The ball is big enough to hold
+      // the leftover point the three chamfers meet at, which sits about one
+      // chamfer distance and a half out along the diagonal, and far smaller
+      // than the gap to the next corner.
+      const big = Math.max(...legs.map((l) => l.size));
+      const reach = big * 8 + 1;
+      const near = K.translate(K.sphere(big * 2.5, circleSegments(big * 2.5), scope), at, scope);
+      cornerCuts.push(K.intersection(halfSpaceAt(pts[0], n, reach, scope), near, scope));
+    }
+  }
+
   return {
-    cut: convexTools.length ? K.unionAll(convexTools.map((t) => t.tool), scope) : null,
+    cut: convexTools.length || cornerCuts.length
+      ? K.unionAll([...convexTools.map((t) => t.tool), ...cornerCuts], scope)
+      : null,
     addBack: concaveTools.length ? K.unionAll(concaveTools.map((t) => t.tool), scope) : null,
     blends: blends.length ? K.unionAll(blends, scope) : null,
     applied: convexTools.length + concaveTools.length,

@@ -3607,6 +3607,46 @@ async function run() {
     near(cutTwice / cutEqual, 2, 0.15, 'twice the second distance removes twice as much');
   });
 
+  test('chamfer: a chamfered corner cuts the point off, a mitred one does not', () => {
+    // Where three chamfers meet, the three bevelled faces run together to a
+    // point. Fusion calls that Miter and it is what this has always made.
+    // Chamfer joins the bevelled edges with a fourth facet across the corner,
+    // which takes a little more material off and leaves a face where the point
+    // used to be.
+    const box = (sets) => {
+      const doc = boxDoc(40, 40, 40);
+      doc.features.push({ id: uid('f'), type: 'chamfer', bodies: 'all', edges: [], sets });
+      const res = rebuild(doc);
+      assert(res.errors.length === 0, JSON.stringify(res.errors));
+      const solid = res.bodies[0].solid;
+      const topo = buildTopology(K.meshData(solid));
+      const out = { volume: solid.volume(), faces: topo.faces.length };
+      res.dispose();
+      return out;
+    };
+
+    const mitred = box([{ edges: [], all: true, radius: '5', chamferType: 'equal' }]);
+    const cornered = box([
+      { edges: [], all: true, radius: '5', chamferType: 'equal', cornerType: 'chamfer' }
+    ]);
+
+    assert(
+      cornered.volume < mitred.volume,
+      `the corner facet takes more off: ${cornered.volume.toFixed(1)} against ${mitred.volume.toFixed(1)}`
+    );
+    // Eight corners on a box, so eight new faces where the points were. That
+    // is the check that matters: a version that merely cut deeper would pass
+    // on volume alone.
+    assert(
+      cornered.faces === mitred.faces + 8,
+      `eight corner facets, got ${cornered.faces - mitred.faces}`
+    );
+
+    // Saying nothing is still the mitre, so nothing already built moves.
+    const old = box([{ edges: [], all: true, radius: '5', chamferType: 'equal', cornerType: undefined }]);
+    near(old.volume, mitred.volume, 1e-6, 'an absent corner type is the mitre');
+  });
+
   test('chamfer: an angle of forty five is the same as equal distances', () => {
     const mk = (sets) => {
       const doc = boxDoc(40, 40, 40);

@@ -337,7 +337,10 @@ part" with an empty list, because it was the only way to say it, and they are
 given the flag that means it on load so they still come back rounded. Fillet and
 Chamfer hold several edge sets, each with its own size, so a part can be
 blended at three radii in one feature; a chamfer set is equal, two distances, or
-a distance and the angle it leans at. A fillet set is asked for in one of six
+a distance and the angle it leans at. Where three chamfers meet, the three
+bevelled faces can run together to a point, which is the **mitre** and is what
+it has always made, or be joined by a fourth facet across the corner, which is
+the **chamfered corner**. A fillet set is asked for in one of six
 ways. **Rule** takes every edge of the part at once, filtered to the outside
 corners, the inside ones, or both: in the trade an outside corner is a round
 and an inside one is a fillet, and softening the outside corners while leaving

@@ -3749,6 +3749,19 @@ function blendFields(kind) {
             type: 'expr'
           });
           out.push({
+            // Where three chamfers meet, the three bevelled faces run together
+            // to a point, which is what Fusion calls Miter and what this has
+            // always made. Chamfer cuts that point off with a fourth facet, in
+            // Fusion's words "to join beveled edges at the corner".
+            key: `sets.${i}.cornerType`,
+            label: `Set ${n} corner`,
+            type: 'select',
+            options: [
+              ['miter', 'Miter, the faces run to a point'],
+              ['chamfer', 'Chamfer, a facet across the corner']
+            ]
+          });
+          out.push({
             key: `sets.${i}.chamferType`,
             label: `Set ${n} type`,
             type: 'select',

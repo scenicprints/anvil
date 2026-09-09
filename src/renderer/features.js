@@ -4407,6 +4407,7 @@ export function rebuild(doc, options = {}) {
           sizeFor,
           continuity,
           weight: continuity === 'G2' ? safeEval(set.weight, scope, 1) : undefined,
+          cornerType: kind === 'chamfer' ? set.cornerType || 'miter' : undefined,
           size2:
             kind === 'chamfer'
               ? chamferSecondDistance(kind, set, size, scope)

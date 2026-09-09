@@ -361,7 +361,7 @@ broken.
 | Edges/Faces/Features | | partial — edges only |
 | Distance, Angle | | has |
 | Tangent Chain | | has, v2.35.0 |
-| Corner Type | Chamfer, Miter, Blend | **missing**. Anvil's corner is what three chamfer planes meeting make, which reads as Fusion's Miter. Fusion's Chamfer type "creates a chamfer to join beveled edges at the corner", so it adds a facet; the exact construction of that and of Blend is *pending* a proper read, and naming a setting after a Fusion option without matching it is worse than leaving it out |
+| Corner Type | Chamfer, Miter, **Blend** | partial — Miter and Chamfer, v2.54.0. Blend is *pending*: Fusion's page gives a sentence for the Chamfer type and none I could reach for Blend, and naming a setting after a Fusion option without matching it is worse than leaving it out |
 
 ### Draft — partial
 
