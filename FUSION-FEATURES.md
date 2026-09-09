@@ -761,11 +761,11 @@ already followed and which Fusion states for both.
 Option-by-option comparison of each is *pending*; the Loft reference has its own
 surface variant page.
 
-### Modify — near complete
+### Modify — complete
 
 | Fusion | Anvil |
 |---|---|
-| **Fillet or chamfer surface edges** | **missing** |
+| Fillet or chamfer surface edges | has, v2.68.0 |
 | Trim | has |
 | Untrim | has |
 | Extend | has |
@@ -773,8 +773,13 @@ surface variant page.
 | Unstitch | has |
 | Reverse normal | has |
 
-The only gap in the surface workspace is filleting and chamfering the edges of a
-surface body, as opposed to a solid.
+Filleting and chamfering surface edges arrived in v2.68.0 and it is the same
+command as on a solid, with a different builder behind it. A sheet has no inside
+for a boolean to work on, so the blend is built as surface geometry: both faces
+are trimmed back to where it meets them and a strip is stitched into the gap.
+The options that only mean something on a solid, which is variable radius, hold
+lines, chord length, asymmetry and the chamfer corner types, are not offered on
+a surface rather than being quietly ignored.
 
 ---
 

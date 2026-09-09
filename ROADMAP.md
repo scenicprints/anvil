@@ -28,20 +28,6 @@ building that thing badly and then building it again.
 `FUSION-FEATURES.md` is the inventory these come from. Anything not listed here
 is either built or recorded there with the reason it is not.
 
-### Batch 22: surface edges
-
-**Fillet and chamfer on the edges of a surface body.**
-
-The edge tools build a cutting solid and boolean it against the part. A sheet
-has no inside for a boolean to work on, so the same tools cannot be pointed at
-it. What this needs is the blend built as surface geometry: the two sheets
-trimmed back to the tangent lines and a ruled or swept strip stitched between
-them.
-
-That is one piece of machinery and it is the only thing missing. It is a batch
-of its own because the same machinery is what a surface-to-surface blend wants
-later, and building it for one edge case first would mean building it twice.
-
 ### Batch 23: direct manipulation in Form
 
 **Tangent handles, vertex snapping to model geometry, and control points and

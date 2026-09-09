@@ -8092,6 +8092,50 @@ async function run() {
     );
   });
 
+  test('sheet: a trim off the centre lands where the wall actually is', () => {
+    // The point the line of intersection was hung off came out mirrored
+    // through the origin. Both planes here pass through it, so the cut landed
+    // in the right place anyway and the fault was invisible: move the wall off
+    // centre and the trim comes out the wrong size and in the wrong place.
+    const flat = squareSheet(0, 8);
+    const wall = SH.gridSheet(
+      [
+        [[6, -20, -10], [6, 20, -10]],
+        [[6, -20, 10], [6, 20, 10]]
+      ],
+      {}
+    );
+
+    const far = SH.trimSheet(flat, [wall], [8, 0, 0]);
+    near(SH.sheetArea(far), 4 * 20, 1, 'the strip beyond the wall, not half the square');
+    assert(
+      SH.sheetPoints(far).every((p) => p[0] > 6 - 1e-4),
+      'and all of it is beyond the wall'
+    );
+
+    const near0 = SH.trimSheet(flat, [wall], [0, 0, 0]);
+    near(SH.sheetArea(near0), 16 * 20, 1, 'and the rest is what is left');
+  });
+
+  test('sheet: a cut made of several triangles is still one cut', () => {
+    // A cut is recorded once per pair of triangles that made it, so a cutter
+    // of two triangles crossing one target triangle leaves two records end to
+    // end. The edge the split produces spans both, and asking a single record
+    // to cover it gets no for an answer, so the flood walked across a cut that
+    // was plainly there and kept the piece it was told to remove.
+    const flat = squareSheet(0, 8);
+    // Split lengthways, so the wall arrives as two triangles per crossing.
+    const wall = SH.gridSheet(
+      [
+        [[4, -20, -10], [4, 0, -10], [4, 20, -10]],
+        [[4, -20, 10], [4, 0, 10], [4, 20, 10]]
+      ],
+      {}
+    );
+    const kept = SH.trimSheet(flat, [wall], [8, 0, 0]);
+    near(SH.sheetArea(kept), 6 * 20, 1, 'the strip beyond the wall');
+  });
+
   test('sheet: two triangles that miss each other cross nowhere', () => {
     const a = [[0, 0, 0], [10, 0, 0], [0, 10, 0]];
     const b = [[0, 0, 5], [10, 0, 5], [0, 10, 5]];
@@ -8178,6 +8222,56 @@ async function run() {
     assert(!body.solid && body.sheet, 'and it is a surface, not a solid');
     // Three sides of 10, 20, 10, dragged 10 up.
     near(SH.sheetArea(body.sheet), 400, 0.01, '40 of curve by 10 of drag');
+  });
+
+  test('surface fillet: a fold in a sheet gets a real blend, not a boolean', () => {
+    // The edge tools build a cutting solid and boolean it against the part, and
+    // a sheet has no inside for that to work on. So the blend is built as
+    // surface geometry: both faces trimmed back to where it meets them, and a
+    // strip stitched into the gap.
+    //
+    // A U dragged 10 gives three flat panels and two square folds, and the
+    // arithmetic of a blend on a square fold is exact. A radius of 2 sets each
+    // face back 2, so 2 by 10 comes off each of the four sides of the two
+    // folds; what goes back is a quarter circle of radius 2, which is a
+    // shorter way across than the corner it replaces.
+    const build = (extra) => {
+      const doc = newDocument();
+      const sk = openCurveSketch('XY');
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: uid('f'), type: 'surfaceExtrude', sketch: sk.id, edges: [], distance: '10', direction: 'one' },
+        { id: uid('f'), bodies: 'all', sets: [{ radius: '2', all: true }], ...extra }
+      ];
+      return rebuild(doc);
+    };
+
+    const out = build({ type: 'fillet' });
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    const sheets = out.bodies.filter((b) => !b.solid && b.sheet);
+    assert(sheets.length === 1, `still one surface, got ${sheets.length}`);
+    const off = 2 * (2 * 2 * 10);
+    near(
+      SH.sheetArea(sheets[0].sheet),
+      400 - off + 2 * (Math.PI / 2) * 2 * 10,
+      1,
+      'the corners are gone and two quarter round strips are in their place'
+    );
+    out.dispose();
+
+    // A chamfer takes the same amount off and puts a flat back, which is the
+    // chord across the same corner rather than the arc.
+    const flat = build({ type: 'chamfer' });
+    assert(flat.errors.length === 0, flat.errors.map((e) => e.message).join('; '));
+    const cut = flat.bodies.filter((b) => !b.solid && b.sheet);
+    near(
+      SH.sheetArea(cut[0].sheet),
+      400 - off + 2 * Math.SQRT2 * 2 * 10,
+      1,
+      'and a chamfer is the chord, which is shorter than the arc'
+    );
+    flat.dispose();
   });
 
   test('surface extrude: a solid feature will not touch a surface body', () => {

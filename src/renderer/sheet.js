@@ -1007,7 +1007,53 @@ export function trimSheet(sheet, cutters, keepPoint) {
   }
 
   const merged = weldSheet(makeSheet(points, pieces), 1e-6);
-  return keepConnected(merged, keepPoint, cuts);
+  return keepConnected(merged, keepPoint, mergeCuts(cuts));
+}
+
+/**
+ * Join cuts that are stretches of the same line into one.
+ *
+ * A cut is recorded once per pair of triangles that made it, so a cutter of two
+ * triangles crossing one target triangle leaves two records end to end. The
+ * edge that comes out of the split is one edge spanning both of them, and the
+ * test for whether an edge lies on a cut asks a single record to cover it: two
+ * halves that each cover half of it answer no, and the flood step walks
+ * straight across a cut that is plainly there. Which is a trim that quietly
+ * keeps the piece it was told to remove.
+ */
+function mergeCuts(cuts) {
+  const lead = (v) => {
+    for (const x of v) if (Math.abs(x) > 1e-9) return Math.sign(x);
+    return 1;
+  };
+  const groups = new Map();
+  for (const c of cuts) {
+    // The same line reached from either side gives opposite normals and
+    // opposite directions, so both are turned a fixed way before grouping.
+    const ns = lead(c.n);
+    const n = ns < 0 ? mul(c.n, -1) : c.n;
+    const ds = lead(c.dir);
+    const dir = ds < 0 ? mul(c.dir, -1) : c.dir;
+    const lo = ds < 0 ? -c.hi : c.lo;
+    const hi = ds < 0 ? -c.lo : c.hi;
+    const k = `${n.map((v) => v.toFixed(5))}|${dot(c.o, n).toFixed(5)}|${dir.map((v) => v.toFixed(5))}`;
+    const rec = groups.get(k) || { o: c.o, n, dir, spans: [] };
+    rec.spans.push([lo, hi]);
+    groups.set(k, rec);
+  }
+
+  const out = [];
+  for (const rec of groups.values()) {
+    rec.spans.sort((a, b) => a[0] - b[0]);
+    const runs = [];
+    for (const [lo, hi] of rec.spans) {
+      const last = runs[runs.length - 1];
+      if (last && lo <= last[1] + 1e-5) last[1] = Math.max(last[1], hi);
+      else runs.push([lo, hi]);
+    }
+    for (const [lo, hi] of runs) out.push({ o: rec.o, n: rec.n, dir: rec.dir, lo, hi });
+  }
+  return out;
 }
 
 /** Does this edge lie along one of the cuts? */
@@ -1145,14 +1191,26 @@ export function triangleIntersection(a, b) {
   return [add(base, mul(line, lo - t0)), add(base, mul(line, hi - t0))];
 }
 
-/** A point lying on both planes, to hang the parameter along the line off. */
+/**
+ * A point lying on both planes, to hang the parameter along the line off.
+ *
+ * The point wanted is the one in the span of the two normals, and writing it
+ * that way is what makes the sign checkable: with p = a*na + b*nb, the two
+ * plane equations give a and b directly, and the cross products below are just
+ * that solution rearranged. Written the other way round they solve for minus
+ * it, which is a mirror image through the origin. Two planes that both pass
+ * through the origin land on the same answer either way, which is most of what
+ * a test model is, so this hid: the intersection came out reflected only once
+ * the cut was somewhere off centre.
+ */
 function pointOnBothPlanes(pa, na, pb, nb) {
   const d1 = dot(na, pa);
   const d2 = dot(nb, pb);
   const n = cross(na, nb);
   const denom = dot(n, n);
   if (denom < 1e-18) return pa.slice();
-  return mul(add(mul(cross(n, nb), d1), mul(cross(na, n), d2)), 1 / denom);
+  // cross(nb, n) is na - (na.nb) nb, and cross(n, na) is nb - (na.nb) na.
+  return mul(add(mul(cross(nb, n), d1), mul(cross(n, na), d2)), 1 / denom);
 }
 
 /* ----------------------------------------------------------------- stitch */
@@ -1240,6 +1298,73 @@ export function stitchSheets(sheets, tol = 1e-4) {
   // one worth orienting.
   const done = openEdges === 0 ? orientMesh(welded) : welded;
   return { sheet: done, closed: openEdges === 0, openLoops: loops, openEdges };
+}
+
+/**
+ * Split boundary edges at points that lie on them.
+ *
+ * Two surfaces can meet exactly and still not be joined. Where one side has a
+ * vertex partway along an edge the other side does not, welding the points
+ * together leaves a T: the long edge has no partner, the two short ones have no
+ * partner, and a mesh that is closed to look at reports every one of them as a
+ * rim. Trimming makes these constantly, because where a cut lands on a face is
+ * decided by that face's triangles and not by the surface being stitched to it.
+ *
+ * Only boundary edges are worth looking at. An edge that already has a
+ * neighbour is joined, whatever else happens to lie on it.
+ */
+export function healTJunctions(sheet, tol = 1e-5) {
+  const P = sheetPoints(sheet);
+  const tris = sheetTris(sheet);
+  const ek = (a, b) => `${Math.min(a, b)}_${Math.max(a, b)}`;
+  const sides = (t) => [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]];
+
+  const uses = new Map();
+  for (const t of tris) for (const [a, b] of sides(t)) uses.set(ek(a, b), (uses.get(ek(a, b)) || 0) + 1);
+
+  const loose = new Set();
+  for (const t of tris) {
+    for (const [a, b] of sides(t)) {
+      if (uses.get(ek(a, b)) === 1) {
+        loose.add(a);
+        loose.add(b);
+      }
+    }
+  }
+  if (!loose.size) return sheet;
+
+  const out = [];
+  let changed = false;
+  for (const t of tris) {
+    const poly = [];
+    for (const [a, b] of sides(t)) {
+      poly.push(a);
+      if (uses.get(ek(a, b)) !== 1) continue;
+      const pa = P[a];
+      const ab = sub(P[b], pa);
+      const l2 = dot(ab, ab);
+      if (l2 < 1e-18) continue;
+      const extra = [];
+      for (const v of loose) {
+        if (v === a || v === b) continue;
+        const s = dot(sub(P[v], pa), ab) / l2;
+        if (s <= 1e-6 || s >= 1 - 1e-6) continue;
+        if (len(sub(P[v], add(pa, mul(ab, s)))) > tol) continue;
+        extra.push([s, v]);
+      }
+      extra.sort((x, y) => x[0] - y[0]);
+      for (const [, v] of extra) poly.push(v);
+    }
+    if (poly.length === 3) {
+      out.push(t);
+      continue;
+    }
+    changed = true;
+    // A triangle with extra points along its sides is still convex, so a fan
+    // from the first corner covers it without folding over itself.
+    for (let i = 1; i + 1 < poly.length; i++) out.push([poly[0], poly[i], poly[i + 1]]);
+  }
+  return changed ? makeSheet(P, out) : sheet;
 }
 
 /** One sheet per face of a solid, which is what Unstitch produces. */

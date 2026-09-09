@@ -46,6 +46,7 @@ import {
 } from './edgefeature.js';
 import * as SH from './sheet.js';
 import * as SM from './sheetmetal.js';
+import { blendSheetEdges } from './surfaceblend.js';
 import * as MT from './meshtools.js';
 import * as FM from './form.js';
 
@@ -5001,12 +5002,20 @@ export function rebuild(doc, options = {}) {
 
   function doEdgeBlend(feature, bodies, scope, ks, errs) {
     normalizeBlend(feature);
-    const targets = pickBodies(feature, bodies);
+    const targets = pickBodies(feature, bodies, { sheets: 'either' });
     if (!targets.length) return bodies;
     const kind = feature.type === 'chamfer' ? 'chamfer' : 'fillet';
 
     const out = bodies.slice();
     for (const b of targets) {
+      // A surface body takes the same feature and a different builder. There
+      // is no inside to cut, so the blend is built as surface geometry and
+      // stitched in where the faces were trimmed back.
+      if (isSheet(b)) {
+        const done = blendSheetBody(feature, b, kind, scope, errs);
+        if (done) out[out.indexOf(b)] = { ...b, sheet: done };
+        continue;
+      }
       let solid = b.solid;
       let anything = false;
       let skipped = 0;
@@ -7440,6 +7449,49 @@ export function rebuild(doc, options = {}) {
         (u[0] * v[1] - u[1] * v[0]) * dir[2];
     }
     return sum >= 0;
+  }
+
+  /**
+   * Fillet or chamfer a surface body, set by set.
+   *
+   * Kept apart from the solid path rather than folded into it. The two share
+   * the dialog, the picks and the sets, and nothing else: a size on a solid is
+   * a tool to cut with and a size on a sheet is how far back to trim, and every
+   * option below that point belongs to one or the other. Variable radius, hold
+   * lines and setbacks are all solid-only, and saying so out loud is better
+   * than quietly building something that ignores them.
+   */
+  function blendSheetBody(feature, body, kind, scope, errs) {
+    let sheet = body.sheet;
+    let anything = false;
+    for (const set of feature.sets) {
+      const topo = buildTopology(sheet);
+      const edges = set.all
+        ? topo.edges.filter((e) => !e.boundary && !e.tangent)
+        : resolveEdgeRefs(topo, set.edges || []);
+      if (!edges.length) continue;
+      // Both kinds are stored under the same name, which the solid path uses
+      // too: a chamfer's distance is a fillet's radius in the same box.
+      const size = safeEval(set.radius, scope, 0);
+      const done = size > 0 && blendSheetEdges(sheet, topo, edges, size, kind);
+      if (!done) continue;
+      sheet = done.sheet;
+      anything = true;
+      if (done.skipped.length) {
+        errs.push({
+          feature: feature.id,
+          message: `${done.skipped.length} of those are rim edges of the surface, which have only one side and nothing to blend into`
+        });
+      }
+    }
+    if (!anything) {
+      errs.push({
+        feature: feature.id,
+        message: 'Nothing on that surface could take a blend of that size'
+      });
+      return null;
+    }
+    return sheet;
   }
 
   /**

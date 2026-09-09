@@ -3629,10 +3629,33 @@ function blendPickRow(armed) {
  * own size, so a part can be blended at three different radii in one feature
  * rather than three.
  */
+/**
+ * Whether this blend is pointed at a surface body.
+ *
+ * A surface takes the same feature and a different builder, and most of the
+ * dialog below belongs to the solid one. Rather than let a variable radius or a
+ * hold line sit there being quietly ignored, the rows that cannot work are not
+ * offered and a note says why.
+ */
+function blendOnSurface(f) {
+  const ids = Array.isArray(f.bodies) ? f.bodies : [];
+  return (state.result?.bodies || []).some((b) => ids.includes(b.id) && !b.solid && b.sheet);
+}
+
 function blendFields(kind) {
   return {
     build(feature) {
       const out = [];
+      out.push({
+        key: '__surfaceNote',
+        label: '',
+        type: 'note',
+        showIf: blendOnSurface,
+        text:
+          kind === 'fillet'
+            ? 'This is a surface body, so the fillet is built as surface geometry: both faces are trimmed back to where the blend meets them and a strip is stitched into the gap. A radius is all it takes; variable radius, hold lines and the rest are solid-only and are not offered here.'
+            : 'This is a surface body, so the chamfer is built as surface geometry: both faces are trimmed back and a flat strip is stitched into the gap. One distance is all it takes; two distances, an angle and the corner types are solid-only and are not offered here.'
+      });
       (feature.sets || []).forEach((set, i) => {
         const n = i + 1;
         out.push({
@@ -3683,6 +3706,7 @@ function blendFields(kind) {
             key: `sets.${i}.filletType`,
             label: `Set ${n} type`,
             type: 'select',
+            showIf: (f) => !blendOnSurface(f),
             options: [
               ['constant', 'Constant radius'],
               ['variable', 'Variable radius'],
@@ -3752,7 +3776,7 @@ function blendFields(kind) {
               typeOf(f) === 'asymmetric' ? `Set ${n} radius on face 1` : `Set ${n} radius`,
             type: 'expr',
             showIf: (f) =>
-              ['constant', 'variable', 'asymmetric'].includes(typeOf(f))
+              blendOnSurface(f) || ['constant', 'variable', 'asymmetric'].includes(typeOf(f))
           });
           out.push({
             key: `sets.${i}.radius2`,
@@ -3771,13 +3795,14 @@ function blendFields(kind) {
               ['G1', 'Tangent (G1)'],
               ['G2', 'Curvature (G2)']
             ],
-            showIf: (f) => typeOf(f) !== 'hold'
+            showIf: (f) => typeOf(f) !== 'hold' && !blendOnSurface(f)
           });
           out.push({
             key: `sets.${i}.weight`,
             label: `Set ${n} tangency weight`,
             type: 'expr',
-            showIf: (f) => f.sets[i]?.continuity === 'G2' && typeOf(f) !== 'hold'
+            showIf: (f) =>
+              f.sets[i]?.continuity === 'G2' && typeOf(f) !== 'hold' && !blendOnSurface(f)
           });
           out.push({
             key: `sets.${i}.endRadius`,
@@ -3819,6 +3844,7 @@ function blendFields(kind) {
             key: `sets.${i}.cornerType`,
             label: `Set ${n} corner`,
             type: 'select',
+            showIf: (f) => !blendOnSurface(f),
             options: [
               ['miter', 'Miter, the faces run to a point'],
               ['chamfer', 'Chamfer, a facet across the corner'],
@@ -3829,6 +3855,7 @@ function blendFields(kind) {
             key: `sets.${i}.chamferType`,
             label: `Set ${n} type`,
             type: 'select',
+            showIf: (f) => !blendOnSurface(f),
             options: [
               ['equal', 'Equal distance'],
               ['two', 'Two distances'],
