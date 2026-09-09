@@ -1018,6 +1018,11 @@ else, because a relief notch in the middle of a hem cuts the fold in half.
 Folded to nothing the metal cracks, so the inner radius never goes below a
 thousandth and defaults to one thickness.
 
+A **base flange** takes the metal to one side of the sketch plane, the other
+side, or straddling it, which is the same question a rib's start side answers
+and matters for the same reason: the plane you drew on is usually a face of
+something else. It can go into a component of its own.
+
 **Lofted Flange** is the one sheet metal feature that is not a fold. A
 transition from a square duct to a round one has no bend line anywhere on it, so
 it cannot go in the panel and bend tree and it has no flat pattern here. That is

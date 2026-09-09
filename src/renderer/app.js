@@ -14974,7 +14974,9 @@ function cmdBaseFlange() {
     type: 'baseFlange',
     sketch: sketchId,
     seeds: sketchId ? activeSeeds(sketchId) : null,
-    faces: []
+    faces: [],
+    orientation: 'side1',
+    op: 'new'
   };
   openFeatureEditor(feature, 'Base Flange', baseFlangeFields());
   if (!feature.seeds?.length) {
@@ -15308,6 +15310,32 @@ function baseFlangeFields() {
       }
     },
     sheetRuleField(),
+    {
+      // Which side of the sketch plane the metal goes. Fusion's Orientation,
+      // and the same question a rib's start side answers.
+      key: 'orientation',
+      label: 'Orientation',
+      type: 'select',
+      options: [
+        ['side1', 'Side 1'],
+        ['side2', 'Side 2'],
+        ['center', 'Centred on the plane']
+      ]
+    },
+    {
+      key: 'op',
+      label: 'Operation',
+      type: 'select',
+      options: [
+        ['new', 'New body'],
+        ['component', 'New component']
+      ],
+      get: (f) => f.op || 'new',
+      set: (f, v) => {
+        f.op = v;
+        if (v === 'component') ensureFeatureComponent(f);
+      }
+    },
     {
       key: '__note',
       label: '',

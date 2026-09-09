@@ -11597,6 +11597,46 @@ async function run() {
     near(volumes[1], 40 * 30 * 4, 1, 'and the one made to the thick one');
   });
 
+  test('sheet metal: orientation decides which side of the plane the metal goes', () => {
+    const plate = (extra) => {
+      const doc = newDocument();
+      doc.sheetMetalRules = [{ ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2' }];
+      doc.sheetMetalRule = 'Thin';
+
+      const sk = newSketch('XY', 'Plate');
+      sk.points = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [], ...extra }
+      ];
+      const out = rebuild(doc);
+      assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+      const bb = out.bodies[0].solid.boundingBox();
+      // The volume must not move with the orientation: this is which side of
+      // the plane the same sheet sits on, not how much metal there is.
+      near(out.bodies[0].solid.volume(), 40 * 30 * 2, 1, 'the same plate either way');
+      return [+bb.min[2].toFixed(3), +bb.max[2].toFixed(3)];
+    };
+
+    // Side 1 is the plane as drawn, which is what it has always done.
+    const side1 = plate({});
+    assert(side1[0] === 0 && side1[1] === 2, `side 1 sits on the plane, got ${side1}`);
+
+    const side2 = plate({ orientation: 'side2' });
+    assert(side2[0] === -2 && side2[1] === 0, `side 2 hangs below it, got ${side2}`);
+
+    const centred = plate({ orientation: 'center' });
+    assert(centred[0] === -1 && centred[1] === 1, `centred straddles it, got ${centred}`);
+  });
+
   test('sheet metal: reading a solid as sheet needs it to be that thick', () => {
     const doc = newDocument();
     doc.features = [prim('box', { width: '60', depth: '40', height: '2', centered: true })];

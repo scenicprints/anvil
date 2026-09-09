@@ -725,8 +725,8 @@ every row carries its own settings.
 | Bend Position (edge) | Inside, Outside, Adjacent, Tangent | has |
 | Flip (edge) | | *pending* |
 | Miter Corners (edge) | | has, as its own command |
-| Orientation (base, contour) | Side 1, Side 2, Center | **missing** |
-| Operation (base, contour) | New Body, New Component | **missing** |
+| Orientation (base, contour) | Side 1, Side 2, Center | has, v2.46.0, on base |
+| Operation (base, contour) | New Body, New Component | has, v2.46.0, on base |
 | Direction (contour) | One Side, Two Sides, Symmetric | **missing** |
 | Sheet Metal Rule | pick the rule when the first body is made | partial |
 | **Override Rules** | per-flange overrides of bend radius, bend relief, and 2- and 3-bend corner relief | **missing** |

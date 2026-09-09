@@ -6463,7 +6463,10 @@ export function rebuild(doc, options = {}) {
       solid,
       sheetMetal: part,
       createdBy: feature.id,
-      component: feature.component || null
+      // A new component puts the sheet in one of its own, which is what keeps a
+      // later feature in another component from reaching into it. The same
+      // operation every other create feature offers.
+      component: feature.op === 'component' ? `${feature.id}:c` : feature.component || null
     };
     bodies.push(body);
     return body;
@@ -6552,6 +6555,28 @@ export function rebuild(doc, options = {}) {
     const { contours, plane } = extrudeProfiles(feature, doc, scope, regionsById);
     if (!contours.length) throw new Error('Select a closed profile to make a sheet from');
 
+    // Which side of the sketch plane the metal goes. A panel is extruded from
+    // its frame along the frame's own normal, so Side 1 is the plane as drawn,
+    // Side 2 seats the frame a thickness back, and Centre puts it half a
+    // thickness back so the sheet straddles what was drawn. Only the base panel
+    // moves; flanges hang off it and follow.
+    const seat =
+      feature.orientation === 'side2'
+        ? -rule.thickness
+        : feature.orientation === 'center'
+          ? -rule.thickness / 2
+          : 0;
+    const frame = seat
+      ? {
+          ...plane,
+          origin: [
+            plane.origin[0] + plane.n[0] * seat,
+            plane.origin[1] + plane.n[1] * seat,
+            plane.origin[2] + plane.n[2] * seat
+          ]
+        }
+      : plane;
+
     const part = SM.newPart(rule);
     let made = 0;
     for (const region of groupRings(contours)) {
@@ -6559,7 +6584,7 @@ export function rebuild(doc, options = {}) {
         part,
         region.outer,
         region.holes,
-        plane,
+        frame,
         `${feature.id}:p${made}`
       );
       made++;
