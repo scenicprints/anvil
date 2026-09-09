@@ -7165,6 +7165,79 @@ async function run() {
     near(afterFront[0].area, afterFront[1].area, 1e-6, 'and the halves are equal');
   });
 
+  test('split face: projecting along a direction lands where the direction takes it', () => {
+    // Fusion's Along Vector. The tool is projected onto the face in a stated
+    // direction rather than carried on by its own shape, which is how a shape
+    // drawn on one plane gets put onto a face that is not parallel to it.
+    const doc = newDocument();
+    doc.features.push(
+      prim('box', { width: '40', depth: '40', height: '10', centered: true })
+    );
+
+    // A flat strip of surface lying above the box: a line across on XZ at
+    // z = 30, dragged along that plane's normal. It has to be flat rather than
+    // standing on edge, because a sheet swept along a direction lying in its
+    // own plane has no volume to project with.
+    const sk = newSketch({ base: 'XZ', offset: '-30' }, 'Strip');
+    sk.points = [{ x: -10, y: 30 }, { x: 10, y: 30 }];
+    sk.entities = [{ id: 1, type: 'line', p: [0, 1] }];
+    sk.nextEntityId = 2;
+    doc.sketches[sk.id] = sk;
+    doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+    doc.features.push({
+      id: uid('f'),
+      type: 'surfaceExtrude',
+      sketch: sk.id,
+      edges: [],
+      distance: '60',
+      direction: 'one'
+    });
+
+    let out = rebuild(doc);
+    const sheet = out.bodies.find((b) => !b.solid && b.sheet);
+    assert(sheet, 'the strip came out as a surface');
+    const boxBody = out.bodies.find((b) => b.solid);
+    const beforeVolume = boxBody.solid.volume();
+    const beforeTop = buildTopology(K.meshData(boxBody.solid)).faces.filter(
+      (f) => f.planar && f.normal[2] > 0.99
+    ).length;
+    assert(beforeTop === 1, `one top face to start, got ${beforeTop}`);
+    const toolId = sheet.id;
+    const boxId = boxBody.id;
+    out.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'splitFace',
+      bodies: [boxId],
+      tool: toolId,
+      splitType: 'vector',
+      projectDir: [0, 0, -1]
+    });
+
+    out = rebuild(doc);
+    assert(out.errors.length === 0, JSON.stringify(out.errors));
+    const after = out.bodies.find((b) => b.id === boxId);
+    near(after.solid.volume(), beforeVolume, 1e-6, 'the box is exactly the size it was');
+
+    const tops = buildTopology(K.meshData(after.solid)).faces.filter(
+      (f) => f.planar && f.normal[2] > 0.99
+    );
+    assert(tops.length > 1, `the top face is parted, got ${tops.length}`);
+    const areas = tops.map((f) => f.area).sort((a, b) => b - a);
+    // The strip runs from x = -10 to x = 10 across a 40 box, so its shadow is a
+    // band 20 by 40 down the middle and the rest of the top is what is left
+    // either side of it.
+    near(areas[0], 40 * 20, 1, 'the band the strip cast');
+    near(
+      areas.reduce((sum, a) => sum + a, 0),
+      40 * 40,
+      1,
+      'and the pieces still add up to the top'
+    );
+    out.dispose();
+  });
+
   test('split face: a plane that misses the body says so', () => {
     const doc = newDocument();
     doc.features = [

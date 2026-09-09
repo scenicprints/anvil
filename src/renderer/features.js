@@ -7007,27 +7007,83 @@ export function rebuild(doc, options = {}) {
     const targets = pickBodies(feature, list);
     if (!targets.length) return list;
 
+    /*
+     * Fusion's Split Type. With Surface the tool's own shape is carried on
+     * until it crosses the body, which is what this always did. Along Vector
+     * projects the tool onto the face in a stated direction instead: the tool
+     * is swept both ways along that direction into a solid, and the face is
+     * parted where that solid's shadow falls on it.
+     *
+     * The difference shows on a face the tool does not reach. Carried on by
+     * its own shape, a small patch of surface may never arrive; projected
+     * along a direction, it lands wherever the direction takes it, which is
+     * how a logo drawn on one plane gets put onto a face that is not parallel
+     * to it.
+     */
+    const alongVector = feature.splitType === 'vector';
+    let dir = null;
+    if (alongVector) {
+      dir = feature.projectDir ? normalizeVec(feature.projectDir) : null;
+      if (!dir || !(Math.hypot(dir[0], dir[1], dir[2]) > 0.5)) {
+        errs.push({
+          feature: feature.id,
+          message: 'Projecting along a vector needs a direction to project along'
+        });
+        return list;
+      }
+    }
+
     const out = list.slice();
     for (const b of targets) {
       const span = spanOfBody(b) + 20;
-      const half = sheetHalfSpace(tool.sheet, span, ks);
-      if (!half) {
-        errs.push({
-          feature: feature.id,
-          message: 'That surface curves back on itself, so it cannot split a face.'
-        });
-        continue;
+      let region;
+      if (alongVector) {
+        // The tool swept both ways along the direction. Every triangle of the
+        // sheet is taken as one face, which is what buildFacePrism wants, and
+        // the prism is started a span back so it reaches through the body
+        // whichever side of it the tool was drawn on.
+        const mesh = tool.sheet;
+        const count = mesh.triVerts.length / 3;
+        const all = { tris: Array.from({ length: count }, (_, i) => i), normal: dir };
+        const prism = buildFacePrism(mesh, all, span * 2, ks, dir);
+        region = prism
+          ? K.translate(prism, [-dir[0] * span, -dir[1] * span, -dir[2] * span], ks)
+          : null;
+        if (!region || K.isEmpty(region)) {
+          errs.push({
+            feature: feature.id,
+            message: 'That surface has no area to project, so there is nothing to split with'
+          });
+          continue;
+        }
+      } else {
+        region = sheetHalfSpace(tool.sheet, span, ks);
+        if (!region) {
+          errs.push({
+            feature: feature.id,
+            message: 'That surface curves back on itself, so it cannot split a face.'
+          });
+          continue;
+        }
       }
-      const near = K.intersection(b.solid, half, ks);
-      const far = K.difference(b.solid, half, ks);
+
+      const near = K.intersection(b.solid, region, ks);
+      const far = K.difference(b.solid, region, ks);
       if (K.isEmpty(near) || K.isEmpty(far)) {
         errs.push({
           feature: feature.id,
-          message: 'That surface does not cross this body, so there is nothing to split'
+          message: alongVector
+            ? 'That projection misses this body, so there is nothing to split'
+            : 'That surface does not cross this body, so there is nothing to split'
         });
         continue;
       }
-      out[out.indexOf(b)] = { ...b, solid: K.union(near, far, ks) };
+      // Marked as their own geometry before they go back together, or the two
+      // sides of the seam are welded into one face again and nothing has been
+      // split at all.
+      const nearSide = K.tagOriginal(near, `${feature.id}:near`, ks);
+      const farSide = K.tagOriginal(far, `${feature.id}:far`, ks);
+      out[out.indexOf(b)] = { ...b, solid: K.union(nearSide, farSide, ks) };
     }
     return out;
   }

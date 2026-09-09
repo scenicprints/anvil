@@ -446,6 +446,13 @@ only worth having now that a face can keep its name across a rebuild. Before
 that the two halves were indistinguishable the moment anything upstream moved,
 so a draft applied to one was as likely to land on the other.
 
+It cuts with a plane, a face, or a surface, and a surface can be **carried on by
+its own shape** until it crosses the body or **projected along a direction** you
+pick. The second is how a shape drawn on one plane gets put onto a face that is
+not parallel to it. A tool standing edge on to the direction is refused, because
+a sheet swept along a direction lying in its own plane has no volume to project
+with.
+
 **Silhouette Split** parts a body at its outline seen from a direction, which is
 the parting line of a moulded part. The silhouette has to be flat to split a
 solid at, which is Fusion's own rule, and it is fitted and checked rather than

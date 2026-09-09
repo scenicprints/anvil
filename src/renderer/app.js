@@ -6936,13 +6936,40 @@ function startSplitFace() {
     type: 'splitFace',
     bodies: bodySelectionOrAll(),
     plane: 'XY',
-    faceRef: null
+    faceRef: null,
+    splitType: 'surface',
+    projectDir: null
   };
   openFeatureEditor(feature, 'Split Face', splitFaceFields());
 }
 
 function splitFaceFields() {
   return [
+    {
+      // Fusion's Split Type. With Surface carries the tool's own shape on
+      // until it crosses the body; Along Vector projects it in a stated
+      // direction instead, which is how a shape drawn on one plane gets put
+      // onto a face that is not parallel to it.
+      key: 'splitType',
+      label: 'Split type',
+      type: 'select',
+      options: [
+        ['surface', 'With the surface, carried on'],
+        ['vector', 'Projected along a direction']
+      ]
+    },
+    {
+      key: '__projectDir',
+      label: 'Project along',
+      type: 'pick',
+      pick: 'projectDir',
+      showIf: (f) => f.splitType === 'vector',
+      summary: (f) => f.projectDirLabel || 'Nothing yet',
+      clear: (f) => {
+        f.projectDir = null;
+        f.projectDirLabel = null;
+      }
+    },
     {
       key: '__face',
       label: 'Split with a face',
@@ -7237,6 +7264,7 @@ function planeSpecFromOption(value) {
  */
 const DIRECTION_PICKS = {
   moveDirection: ['direction', 'directionLabel'],
+  projectDir: ['projectDir', 'projectDirLabel'],
   startTakeoff: ['startTakeoff', 'startTakeoffLabel'],
   endTakeoff: ['endTakeoff', 'endTakeoffLabel']
 };
@@ -12662,6 +12690,7 @@ const PICK_PROMPTS = {
   fullRoundFaces: 'Click the flat face to round away.',
   alignRegion: 'Click the flat region of the mesh to lay down.',
   moveDirection: 'Click an edge, a flat face, or an origin plane.',
+  projectDir: 'Click an edge, a flat face, or an origin plane to project along.',
   startTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
   endTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
   embossFaces: 'Click the faces to emboss onto.',

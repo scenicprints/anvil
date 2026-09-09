@@ -568,8 +568,18 @@ same idea with a narrower set of targets.
 |---|---|---|
 | Face to split | several at once | has |
 | Splitting Tool | a sketch, face or workplane | has |
-| Split Type | Split with Surface, **Along Vector**, **Closest Point** | **missing**, and category 2 rather than a quick win. Anvil does not project the tool at all: it extends the sheet into a half-space and cuts with that. Along Vector and Closest Point are two ways of choosing a projection direction, so they need a projection step that does not exist yet, not a flag |
+| Split Type | Split with Surface, Along Vector, **Closest Point** | has, v2.62.0, less Closest Point. Along Vector sweeps the tool both ways along the direction and parts the face where that solid's shadow falls on it. Closest Point projects each point along its own nearest direction, which is a different algorithm rather than another vector, and is *pending* |
 | Extend Splitting Tool | | n/a — the half-space is unbounded, so the tool always crosses the face |
+
+One limit worth knowing, said in the dialog rather than found out: a sheet
+swept along a direction lying in its own plane has no volume to project with,
+so a tool standing edge on to the direction is refused. A tool has to face the
+way it is being projected, at least somewhat.
+
+Two sides of the seam are marked as their own geometry before they go back
+together, which they were not before: without that the topology welds them into
+one face again and nothing has been split at all. Split Face by a plane already
+did this; by a surface it did not, so that path was quietly doing nothing.
 
 Fusion notes the point of it: a split face isolates an area so Draft or Press
 Pull can act on part of a face. Worth remembering, since it makes Draft's
