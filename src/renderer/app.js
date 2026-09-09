@@ -4361,6 +4361,13 @@ function webFields(feature) {
     { key: 'flip', label: 'Flip direction', type: 'bool' },
     { key: 'draftAngle', label: 'Draft angle (deg)', type: 'expr' },
     { key: 'extendCurves', label: 'Extend curves to the walls', type: 'bool' },
+    {
+      // The same row the rib has, and it means the same thing here.
+      key: 'footFillet',
+      label: 'Blend where it meets the part',
+      type: 'expr',
+      showIf: (f) => (f.op || 'join') === 'join'
+    },
     { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS }
   ];
 }
@@ -6936,6 +6943,7 @@ function startRib() {
     extent: 'depth',
     depth: '10',
     taper: '0',
+    footFillet: '0',
     flip: false,
     op: state.result?.bodies.length ? 'join' : 'new',
     targets: 'all'
@@ -7023,6 +7031,16 @@ function ribFields() {
       label: (f) =>
         f.ribDirection === 'inPlane' ? 'Hang it the other way' : 'Flip direction',
       type: 'bool'
+    },
+    {
+      // Fusion's Fillet Radius, and it is on the rib dialog rather than left
+      // to a fillet afterwards for a reason: the edges it wants are the ones
+      // the rib just made, and by the time the dialog has closed those are a
+      // dozen picks in a corner that is hard to get at. Zero leaves it sharp.
+      key: 'footFillet',
+      label: 'Blend where it meets the part',
+      type: 'expr',
+      showIf: (f) => (f.op || 'join') === 'join'
     },
     {
       key: '__ribNote',
@@ -7160,6 +7178,7 @@ function startWeb() {
     flip: false,
     draftAngle: '0',
     extendCurves: true,
+    footFillet: '0',
     op: state.result?.bodies.length ? 'join' : 'new',
     bodies: 'all',
     targets: 'all'
@@ -7228,16 +7247,19 @@ function startSplitFace() {
 function splitFaceFields() {
   return [
     {
-      // Fusion's Split Type. With Surface carries the tool's own shape on
-      // until it crosses the body; Along Vector projects it in a stated
-      // direction instead, which is how a shape drawn on one plane gets put
-      // onto a face that is not parallel to it.
+      // Fusion's Split Type, all three of them. With Surface carries the
+      // tool's own shape on until it crosses the body; Along Vector projects
+      // it in a stated direction instead, which is how a shape drawn on one
+      // plane gets put onto a face that is not parallel to it; Closest Point
+      // sends every point of the tool to the nearest point of the face, which
+      // wraps it rather than casting it.
       key: 'splitType',
       label: 'Split type',
       type: 'select',
       options: [
         ['surface', 'With the surface, carried on'],
-        ['vector', 'Projected along a direction']
+        ['vector', 'Projected along a direction'],
+        ['closest', 'Wrapped on, by shortest distance']
       ]
     },
     {

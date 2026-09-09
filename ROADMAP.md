@@ -70,20 +70,6 @@ with it rather than before it. A reference has to name something, and until
 there is a library there is nothing stable to name: a path on one machine is
 not a name on another.
 
-### Batch 25: the two algorithms
-
-**Split Face by closest point**, and **a fillet at the foot of a rib**.
-
-Neither is a setting. Closest point projects every point of the tool along its
-own nearest direction to the face, which is a different projection from the one
-Along Vector does rather than another vector to hand it. A rib's foot fillet
-needs the concave edges the rib made where it met the part, found by provenance
-rather than by picking, and then blended.
-
-They are together because both are a day of geometry apiece with nothing else
-depending on them, which makes them the right thing to do when the batches
-above are blocked on something else.
-
 ---
 
 ## The library: profiles, projects and two computers

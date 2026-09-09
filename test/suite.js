@@ -1922,6 +1922,104 @@ async function run() {
     stopped.dispose();
   });
 
+  test('rib: a fillet at the foot, found rather than picked', () => {
+    // A rib that stops dead against the part is a stress raiser exactly where
+    // the load runs, and worse on a printed part because the layers cross the
+    // corner. Fusion puts a Fillet Radius on the rib dialog rather than
+    // leaving it to a fillet afterwards, and the reason is that the edges it
+    // wants are down in a corner that is hard to pick once the dialog closes.
+    const build = (foot) => {
+      const doc = newDocument();
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '60', depth: '40', height: '10', centered: true },
+        op: 'new'
+      });
+      const sk = openSketch('XY', [[-20, 0], [20, 0]], 'Rib');
+      sk.plane = { base: 'XY', offset: '20' };
+      doc.sketches[sk.id] = sk;
+      doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+      doc.features.push({
+        id: uid('f'),
+        type: 'rib',
+        sketch: sk.id,
+        thickness: '4',
+        extent: 'toNext',
+        flip: true,
+        footFillet: foot,
+        op: 'join',
+        targets: 'all'
+      });
+      return rebuild(doc);
+    };
+
+    const sharp = build('0');
+    assert(sharp.errors.length === 0, JSON.stringify(sharp.errors));
+    const sharpVolume = K.properties(sharp.bodies[0].solid).volume;
+    sharp.dispose();
+
+    const r = 2;
+    const blended = build(String(r));
+    assert(blended.errors.length === 0, JSON.stringify(blended.errors));
+    const added = K.properties(blended.bodies[0].solid).volume - sharpVolume;
+
+    // Material goes in, it does not come out: the foot is a concave corner and
+    // a blend there fills it. The amount is the square the radius cuts out
+    // less the quarter circle that replaces it, run along the foot. The foot
+    // is the rectangle where a wall 40 long and 4 thick lands, so 88 of it.
+    const perLength = r * r - (Math.PI * r * r) / 4;
+    near(added, 88 * perLength, 8, 'a blend the size of the corner it fills');
+    blended.dispose();
+  });
+
+  test('web: the foot blend is the same one the rib gets', () => {
+    // Same mechanism, and worth its own test because Web and Rib are separate
+    // builders that only look alike from the dialog.
+    const build = (foot) => {
+      const doc = newDocument();
+      doc.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '60', depth: '40', height: '10', centered: true },
+        op: 'new'
+      });
+      const sk = openSketch('XY', [[-20, 0], [20, 0]], 'Web');
+      sk.plane = { base: 'XY', offset: '5' };
+      doc.sketches[sk.id] = sk;
+      doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+      doc.features.push({
+        id: uid('f'),
+        type: 'web',
+        sketch: sk.id,
+        thickness: '4',
+        extentType: 'depth',
+        depth: '15',
+        extendCurves: false,
+        footFillet: foot,
+        op: 'join',
+        targets: 'all'
+      });
+      return rebuild(doc);
+    };
+
+    const sharp = build('0');
+    assert(sharp.errors.length === 0, JSON.stringify(sharp.errors));
+    const was = K.properties(sharp.bodies[0].solid).volume;
+    sharp.dispose();
+
+    const blended = build('2');
+    assert(blended.errors.length === 0, JSON.stringify(blended.errors));
+    const added = K.properties(blended.bodies[0].solid).volume - was;
+    assert(added > 0, `a blend puts material into a concave corner, got ${added}`);
+    // Two feet 40 long and two ends 4 across, the same rectangle the rib lands
+    // in, each filled by the square less its quarter circle.
+    near(added, 88 * (4 - Math.PI), 8, 'a blend the size of the corner it fills');
+    blended.dispose();
+  });
+
   test('rib: in plane, the curve is the top of a gusset that lands on the part', () => {
     // Fusion's rib: "extruded in a direction parallel to the sketch plane" and
     // "to the nearest faces on a solid body". The curve is drawn edge on, the
@@ -7489,6 +7587,109 @@ async function run() {
       'and the pieces still add up to the top'
     );
     out.dispose();
+  });
+
+  test('split face: wrapped on by shortest distance, not cast from a direction', () => {
+    // Fusion's third Split Type. There is no direction: every point of the
+    // tool goes to the nearest point of the face. On a barrel that is the
+    // difference between a label on a curved sleeve and a slide projected onto
+    // it, which stretches at the edges and runs round the sides.
+    //
+    // A flat panel standing off the side of a cylinder makes the two disagree
+    // by a measurable amount. Cast along minus X it keeps its own width and
+    // wraps round to where the barrel turns away; laid on by shortest distance
+    // its corners fall on the barrel where the line from the panel meets it,
+    // which on a panel this far out is a much narrower band.
+    const make = (splitType, projectDir) => {
+      const doc = newDocument();
+      doc.features.push(prim('cylinder', { diameter: '40', height: '40', centered: true }));
+
+      // The panel: a line on XZ at x = 40 pulled along Y, so a flat rectangle
+      // standing off the side of the barrel, 20 across and 20 tall.
+      const sk = newSketch({ base: 'XZ', offset: '-10' }, 'Panel');
+      sk.points = [{ x: 40, y: -10 }, { x: 40, y: 10 }];
+      sk.entities = [{ id: 1, type: 'line', p: [0, 1] }];
+      sk.nextEntityId = 2;
+      doc.sketches[sk.id] = sk;
+      doc.features.push({ id: uid('f'), type: 'sketch', sketch: sk.id });
+      doc.features.push({
+        id: uid('f'),
+        type: 'surfaceExtrude',
+        sketch: sk.id,
+        edges: [],
+        distance: '20',
+        direction: 'one'
+      });
+
+      let out = rebuild(doc);
+      const sheet = out.bodies.find((b) => !b.solid && b.sheet);
+      assert(sheet, 'the panel came out as a surface');
+      const barrel = out.bodies.find((b) => b.solid);
+      const was = K.properties(barrel.solid).volume;
+
+      const ids = { tool: sheet.id, body: barrel.id };
+      out.dispose();
+
+      doc.features.push({
+        id: uid('f'),
+        type: 'splitFace',
+        bodies: [ids.body],
+        tool: ids.tool,
+        splitType,
+        projectDir: projectDir || null
+      });
+      out = rebuild(doc);
+      return { out, was, bodyId: ids.body };
+    };
+
+    /*
+     * How wide across Y the patch the tool put on the barrel is.
+     *
+     * Read off provenance rather than off shape. A split leaves the body
+     * exactly as it was, so the two sides of the seam are only told apart by
+     * which of them the split named, and on a barrel the near side arrives as
+     * several facets rather than one tidy face. The tags are the answer to
+     * the question anyway: everything named near is what the tool covered.
+     */
+    const bandWidth = (body) => {
+      const mesh = K.meshData(body.solid);
+      const faces = buildTopology(mesh).faces.filter((f) => /:near$/.test(f.src?.tag || ''));
+      assert(faces.length, 'the tool named a piece of the barrel');
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const f of faces) {
+        for (const t of f.tris) {
+          for (let k = 0; k < 3; k++) {
+            const y = mesh.vertProperties[mesh.triVerts[t * 3 + k] * mesh.numProp + 1];
+            lo = Math.min(lo, y);
+            hi = Math.max(hi, y);
+          }
+        }
+      }
+      return hi - lo;
+    };
+
+    const cast = make('vector', [-1, 0, 0]);
+    assert(cast.out.errors.length === 0, JSON.stringify(cast.out.errors));
+    const castBody = cast.out.bodies.find((b) => b.id === cast.bodyId);
+    near(K.properties(castBody.solid).volume, cast.was, 1e-6, 'the barrel is the size it was');
+    const castWidth = bandWidth(castBody);
+    cast.out.dispose();
+
+    const wrap = make('closest');
+    assert(wrap.out.errors.length === 0, JSON.stringify(wrap.out.errors));
+    const wrapBody = wrap.out.bodies.find((b) => b.id === wrap.bodyId);
+    near(K.properties(wrapBody.solid).volume, wrap.was, 1e-6, 'and so it is wrapped');
+    const wrapWidth = bandWidth(wrapBody);
+    wrap.out.dispose();
+
+    // Cast along minus X the panel keeps its 20 of width. Laid on by shortest
+    // distance, its corners at y = plus and minus 10, 40 out from the axis,
+    // land at 20 * sin(atan2(10, 40)), which is a shade under 5 either side.
+    near(castWidth, 20, 1.5, 'cast, the band is as wide as the panel');
+    const laid = 2 * 20 * Math.sin(Math.atan2(10, 40));
+    near(wrapWidth, laid, 1.5, 'wrapped, it is as wide as where the panel reaches');
+    assert(wrapWidth < castWidth - 5, 'and the two are not the same split');
   });
 
   test('split face: a plane that misses the body says so', () => {

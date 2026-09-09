@@ -186,7 +186,7 @@ out to meet a curve through its own middle would collapse it.
 | Depth | | has |
 | Flip Direction | | has |
 | Draft Angle + Draft Pull Direction + flip | | partial — angle and flip, v2.51.0. The pull direction is the sketch normal and is not separately settable. **Not in the shipped dialog** either, see below |
-| Fillet Radius | a fillet at the foot of the rib | **missing** — Anvil has this on Boss, not Rib. Boss builds its fillet into a revolved section, which a rib of any shape cannot use, so this wants the concave edges of the join found by provenance |
+| Fillet Radius | a fillet at the foot of the rib | has, v2.67.0. The edges are found rather than picked: a face knows which feature made it, so an edge with the rib on one side and something else on the other, and concave, is the foot. Web has the same row |
 | Direction of the wall | parallel to the sketch plane | has, v2.56.0, as a setting. **See the note below: Fusion's rib is not what this built first** |
 
 **The shipped dialog is five rows and Anvil has all five.** Kevin sent a
@@ -248,7 +248,8 @@ that has to change.
 
 Same option set as Rib, but perpendicular to the sketch plane rather than
 parallel. Anvil has profile, thickness, direction, extent type (To Next or
-Depth), depth, flip, draft angle and extend curves. Missing: **Fillet Radius**.
+Depth), depth, flip, draft angle and extend curves, and **Fillet Radius** since
+v2.67.0, which is the rib's own foot blend on the same finding-by-provenance.
 Presets arrived app-wide in v2.40.0.
 
 Note the pairing: Rib is parallel to the sketch plane, Web is perpendicular.
@@ -576,7 +577,7 @@ same idea with a narrower set of targets.
 |---|---|---|
 | Face to split | several at once | has |
 | Splitting Tool | a sketch, face or workplane | has |
-| Split Type | Split with Surface, Along Vector, **Closest Point** | has, v2.62.0, less Closest Point. Along Vector sweeps the tool both ways along the direction and parts the face where that solid's shadow falls on it. Closest Point projects each point along its own nearest direction, which is a different algorithm rather than another vector, and is *pending* |
+| Split Type | Split with Surface, Along Vector, **Closest Point** | has, all three. Surface and Along Vector v2.62.0, Closest Point v2.67.0: every point of the tool goes to the nearest point of the face, so the pattern wraps rather than being cast, and each triangle is swept along its own normal because on a curved face they no longer share one |
 | Extend Splitting Tool | | n/a — the half-space is unbounded, so the tool always crosses the face |
 
 One limit worth knowing, said in the dialog rather than found out: a sheet

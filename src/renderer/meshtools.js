@@ -855,6 +855,9 @@ export class SurfaceIndex {
     this.tris = sheetTris(mesh);
     const span = spanOf(this.P) || 1;
     this.cell = Math.max(span / 40, 1e-6);
+    // How far a search can usefully widen: past this it is off the end of the
+    // mesh in every direction and there is nothing more to find.
+    this.reach = Math.ceil(span / this.cell) + 2;
     this.grid = new Map();
     this.tris.forEach((t, i) => {
       const lo = [Infinity, Infinity, Infinity];
@@ -893,6 +896,50 @@ export class SurfaceIndex {
               if (seen.has(t)) continue;
               seen.add(t);
               const q = closestOnTriangle(p, this.P[this.tris[t][0]], this.P[this.tris[t][1]], this.P[this.tris[t][2]]);
+              const d = len(sub(q, p));
+              if (!best || d < best.d) best = { d, q };
+            }
+          }
+        }
+      }
+    }
+    return best ? best.q : p;
+  }
+
+  /**
+   * The point on the mesh nearest this one, however far away it is.
+   *
+   * Where `closest` gives up after three rings and hands the point back,
+   * because a remeshed vertex that has not moved is a safe answer, this one
+   * keeps widening until it finds something. Laying a tool onto a face by
+   * shortest distance starts with the tool held well clear of the body, so
+   * giving up quietly would leave it exactly where it was drawn.
+   *
+   * It stops as soon as the best it has found is nearer than the ring it is
+   * about to search, which is what makes it the real nearest point rather than
+   * the first one it happened to meet.
+   */
+  nearest(p) {
+    const c = this.cell;
+    const bx = Math.floor(p[0] / c);
+    const by = Math.floor(p[1] / c);
+    const bz = Math.floor(p[2] / c);
+    const seen = new Set();
+    let best = null;
+    for (let ring = 0; ring <= this.reach; ring++) {
+      if (best && best.d <= (ring - 1) * c) break;
+      for (let x = bx - ring; x <= bx + ring; x++) {
+        for (let y = by - ring; y <= by + ring; y++) {
+          for (let z = bz - ring; z <= bz + ring; z++) {
+            for (const t of this.grid.get(`${x}_${y}_${z}`) || []) {
+              if (seen.has(t)) continue;
+              seen.add(t);
+              const q = closestOnTriangle(
+                p,
+                this.P[this.tris[t][0]],
+                this.P[this.tris[t][1]],
+                this.P[this.tris[t][2]]
+              );
               const d = len(sub(q, p));
               if (!best || d < best.d) best = { d, q };
             }

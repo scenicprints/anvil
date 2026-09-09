@@ -3274,6 +3274,75 @@ export function rebuild(doc, options = {}) {
     }
 
     apply(feature, solid, feature.op || 'join');
+
+    /*
+     * Fusion's Fillet Radius on a rib: a blend where the rib meets the part.
+     *
+     * It is not decoration. A rib is there to stop a wall flexing, and a wall
+     * that stops dead against another wall is a stress raiser at exactly the
+     * place the load goes through. On a printed part it is worse, because the
+     * layers run across that corner.
+     *
+     * The edges to blend are found rather than picked, and provenance is what
+     * makes that possible: a face knows which feature made it, so an edge with
+     * the rib on one side and something else on the other is the foot of the
+     * rib. Concave, because that is the inside corner; the rib's own outside
+     * corners are not what this is for.
+     */
+    const foot = safeEval(feature.footFillet, scope, 0);
+    if (foot > 1e-6) filletFootOf(feature, foot, ks, errs);
+  }
+
+  /**
+   * Blend the inside corners a feature left where it met what it was joined to.
+   *
+   * Every body is looked at rather than only the one that was joined, because
+   * a join hands back whichever body it merged into and there is no telling
+   * which that was from here. A body with none of the feature's faces on it
+   * costs one topology read and is passed over.
+   */
+  function filletFootOf(feature, radius, ks, errs) {
+    let blended = 0;
+    for (const b of [...bodies]) {
+      if (!b.solid) continue;
+      let topo;
+      try {
+        topo = buildTopology(meshOf(b), topologyOptions(b));
+      } catch {
+        continue;
+      }
+      const mine = new Set();
+      topo.faces.forEach((f, i) => {
+        if (f.src?.tag === feature.id) mine.add(i);
+      });
+      if (!mine.size) continue;
+
+      const edges = topo.edges.filter(
+        (e) => !e.convex && mine.has(e.faceA) !== mine.has(e.faceB)
+      );
+      if (!edges.length) continue;
+
+      const tools = buildEdgeTools(topo, edges, radius, 'fillet', ks, {});
+      if (!tools.applied) continue;
+      let solid = b.solid;
+      if (tools.cut) solid = K.difference(solid, tools.cut, ks);
+      if (tools.addBack) solid = K.union(solid, tools.addBack, ks);
+      if (tools.blends) solid = K.union(solid, tools.blends, ks);
+      replaceBody(bodies, b, { solid });
+      blended++;
+      if (tools.skipped.length) {
+        errs.push({
+          feature: feature.id,
+          message: `${tools.skipped.length} of the foot could not take that radius and was left sharp`
+        });
+      }
+    }
+    if (!blended) {
+      errs.push({
+        feature: feature.id,
+        message: 'Nothing was found where this meets the part, so there is no foot to blend'
+      });
+    }
   }
 
   /**
@@ -5801,6 +5870,11 @@ export function rebuild(doc, options = {}) {
     // Symmetric splits the thickness either side of the curve. The thickener
     // already centres it, so "one direction" is the case that has to shift.
     apply(feature, walls, feature.op || 'join');
+
+    // The same blend the rib gets, for the same reason: a web is a stiffener
+    // and the corner it lands in is where the load goes.
+    const foot = safeEval(feature.footFillet, scope, 0);
+    if (foot > 1e-6) filletFootOf(feature, foot, ks, errs);
   }
 
   /** Every open run of curves in a sketch, as its own chain. */
@@ -7352,6 +7426,64 @@ export function rebuild(doc, options = {}) {
     }
   }
 
+  /** Whether a sheet's own faces point more with a direction than against it. */
+  function sheetFaces(mesh, dir) {
+    const P = SH.sheetPoints(mesh);
+    let sum = 0;
+    for (const [a, b, c] of SH.sheetTris(mesh)) {
+      const u = [P[b][0] - P[a][0], P[b][1] - P[a][1], P[b][2] - P[a][2]];
+      const v = [P[c][0] - P[a][0], P[c][1] - P[a][1], P[c][2] - P[a][2]];
+      // Not normalised, so a big triangle counts for more than a sliver.
+      sum +=
+        (u[1] * v[2] - u[2] * v[1]) * dir[0] +
+        (u[2] * v[0] - u[0] * v[2]) * dir[1] +
+        (u[0] * v[1] - u[1] * v[0]) * dir[2];
+    }
+    return sum >= 0;
+  }
+
+  /**
+   * The material under a tool laid onto a body's surface by shortest distance.
+   *
+   * Each vertex of the tool is moved to the nearest point of the body, which
+   * leaves the tool lying on the surface rather than hanging in front of it,
+   * and then every triangle of it is swept both ways along its own normal.
+   * Its own normal, one triangle at a time, because on a curved face the
+   * triangles no longer share one: swept along a single direction the far side
+   * of a barrel would be missed and the near side stretched.
+   *
+   * The nearest point is asked of an index rather than of every triangle in
+   * turn. A tool of a few hundred triangles against a body of a few thousand
+   * is a million comparisons done the slow way, and the tool is drawn to be
+   * looked at while it is dragged.
+   */
+  function wrappedRegion(sheet, body, span, ks) {
+    const index = new MT.SurfaceIndex(meshOf(body));
+    const P = SH.sheetPoints(sheet).map((p) => index.nearest(p));
+    const tris = SH.sheetTris(sheet);
+    const laid = SH.makeSheet(P, tris);
+
+    const parts = [];
+    for (let i = 0; i < tris.length; i++) {
+      const [a, b, c] = tris[i].map((v) => P[v]);
+      const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      const n = normalizeVec([
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0]
+      ]);
+      // Three points that landed in a line: two vertices of the tool met the
+      // same corner of the body. There is no sweep to make from it and the
+      // triangles either side cover the same ground.
+      if (!n || !(Math.hypot(n[0], n[1], n[2]) > 0.5)) continue;
+      const prism = buildFacePrism(laid, { tris: [i], normal: n }, span * 2, ks, n);
+      if (!prism) continue;
+      parts.push(K.translate(prism, [-n[0] * span, -n[1] * span, -n[2] * span], ks));
+    }
+    return parts.length ? K.unionAll(parts, ks) : null;
+  }
+
   /**
    * Split a face along a surface, without changing the shape at all.
    *
@@ -7378,6 +7510,15 @@ export function rebuild(doc, options = {}) {
      * how a logo drawn on one plane gets put onto a face that is not parallel
      * to it.
      */
+    /*
+     * And Closest Point, which is the third of Fusion's three. There is no
+     * direction at all: every point of the tool goes to the nearest point of
+     * the face, so the pattern wraps rather than being cast. On a cylinder
+     * that is the difference between a label printed on a curved sleeve and a
+     * label projected from a slide projector, which stretches at the edges and
+     * runs off the sides of the barrel entirely.
+     */
+    const closest = feature.splitType === 'closest';
     const alongVector = feature.splitType === 'vector';
     let dir = null;
     if (alongVector) {
@@ -7395,7 +7536,16 @@ export function rebuild(doc, options = {}) {
     for (const b of targets) {
       const span = spanOfBody(b) + 20;
       let region;
-      if (alongVector) {
+      if (closest) {
+        region = wrappedRegion(tool.sheet, b, span, ks);
+        if (!region || K.isEmpty(region)) {
+          errs.push({
+            feature: feature.id,
+            message: 'That surface has no area to wrap, so there is nothing to split with'
+          });
+          continue;
+        }
+      } else if (alongVector) {
         // The tool swept both ways along the direction. Every triangle of the
         // sheet is taken as one face, which is what buildFacePrism wants, and
         // the prism is started a span back so it reaches through the body
@@ -7403,9 +7553,15 @@ export function rebuild(doc, options = {}) {
         const mesh = tool.sheet;
         const count = mesh.triVerts.length / 3;
         const all = { tris: Array.from({ length: count }, (_, i) => i), normal: dir };
-        const prism = buildFacePrism(mesh, all, span * 2, ks, dir);
+        // Swept the way the sheet already faces. A prism built against its own
+        // base's winding comes out inside-out, and an inside-out tool does not
+        // fail: it cuts the body inside out too, so the part comes back larger
+        // than it went in. Which way the sheet faces is not the user's
+        // business and is not even shown, so it cannot be theirs to get right.
+        const sweep = sheetFaces(mesh, dir) ? dir : [-dir[0], -dir[1], -dir[2]];
+        const prism = buildFacePrism(mesh, all, span * 2, ks, sweep);
         region = prism
-          ? K.translate(prism, [-dir[0] * span, -dir[1] * span, -dir[2] * span], ks)
+          ? K.translate(prism, [-sweep[0] * span, -sweep[1] * span, -sweep[2] * span], ks)
           : null;
         if (!region || K.isEmpty(region)) {
           errs.push({
@@ -7432,7 +7588,9 @@ export function rebuild(doc, options = {}) {
           feature: feature.id,
           message: alongVector
             ? 'That projection misses this body, so there is nothing to split'
-            : 'That surface does not cross this body, so there is nothing to split'
+            : closest
+              ? 'That surface wraps onto nothing this body owns, so there is nothing to split'
+              : 'That surface does not cross this body, so there is nothing to split'
         });
         continue;
       }
