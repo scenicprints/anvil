@@ -34,6 +34,8 @@ import { parseSVG, parseDXF } from '../src/renderer/vectorimport.js';
 import { parsePLY, parseOFF, parseGLTF, parseDAE } from '../src/renderer/meshutil.js';
 import { readRecords, readASM } from '../src/renderer/asmread.js';
 import {
+  MATERIALS,
+  RENDER_FINISH,
   massProperties,
   combinedMass,
   interferences,
@@ -8455,6 +8457,29 @@ async function run() {
     assert(!body.solid && body.sheet, 'and it is a surface, not a solid');
     // Three sides of 10, 20, 10, dragged 10 up.
     near(SH.sheetArea(body.sheet), 400, 0.01, '40 of curve by 10 of drag');
+  });
+
+  test('render: every material has a finish of its own', () => {
+    /*
+     * A material with no entry in the finish table falls back to PLA, silently.
+     * That is fine as a safety net for something a document names that this
+     * version has never heard of, and wrong for a material in the list: oak
+     * rendering as plastic is not a fallback, it is a missing row.
+     *
+     * So the check is against the material list rather than against a count,
+     * because a count goes stale the moment somebody adds a material and the
+     * list does not.
+     */
+    const finishes = RENDER_FINISH;
+    const missing = MATERIALS.map(([id]) => id).filter((id) => !finishes[id]);
+    assert(!missing.length, `every material has a finish, missing: ${missing.join(', ')}`);
+
+    // And metalness is a switch rather than a dial: a value in between is not
+    // a thing that exists, it is a material that was never decided about.
+    for (const [id] of MATERIALS) {
+      const m = finishes[id].metalness;
+      assert(m === 0 || m === 1, `${id} is metal or it is not, got ${m}`);
+    }
   });
 
   test('continuity: a box corner is G0, a filleted one is G1', () => {

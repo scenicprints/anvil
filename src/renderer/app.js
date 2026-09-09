@@ -95,6 +95,7 @@ import {
   curvatureColours,
   minimumRadiusColours,
   zebraColours,
+  RENDER_FINISH,
   surfaceContinuity,
   isoLines,
   validateBodies,
@@ -9967,41 +9968,6 @@ function cmdRender() {
     }
   );
 }
-
-/**
- * Give every body the finish of what it is made of, and hand back the undo.
- *
- * This is what makes the Material command worth more than a number on a mass
- * report: steel renders as metal because it is metal. Put back afterwards,
- * because the working view is deliberately matt, so the shape is the subject
- * and not the finish.
- */
-/*
- * What each material is actually like, as numbers a renderer understands.
- *
- * Metalness is not a dial between plastic and metal: it is a switch, and half
- * of it is not a thing that exists. What separates brushed aluminium from
- * polished steel is roughness, and what separates a printed part from a moulded
- * one is roughness too. So the metals differ from each other only in how rough
- * they are, and the plastics carry a clear coat instead, which is the thin shiny
- * layer over a diffuse colour that a moulded or painted part actually has.
- */
-const RENDER_FINISH = {
-  aluminium: { metalness: 1, roughness: 0.34 },
-  steel: { metalness: 1, roughness: 0.28 },
-  stainless: { metalness: 1, roughness: 0.2 },
-  brass: { metalness: 1, roughness: 0.26 },
-  titanium: { metalness: 1, roughness: 0.42 },
-  // A printed part is matt and slightly rough whatever it is made of: the layer
-  // lines scatter far more light than the polymer does.
-  pla: { metalness: 0, roughness: 0.62, clearcoat: 0.15, clearcoatRoughness: 0.5 },
-  petg: { metalness: 0, roughness: 0.42, clearcoat: 0.4, clearcoatRoughness: 0.3 },
-  abs: { metalness: 0, roughness: 0.58, clearcoat: 0.2, clearcoatRoughness: 0.45 },
-  nylon: { metalness: 0, roughness: 0.7, clearcoat: 0.05, clearcoatRoughness: 0.6 },
-  // Resin comes off the printer glossy, which is most of why it photographs
-  // better than filament does.
-  resin: { metalness: 0, roughness: 0.18, clearcoat: 0.8, clearcoatRoughness: 0.1 }
-};
 
 /**
  * Give every body the finish of what it is made of, and hand back the undo.

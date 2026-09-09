@@ -33,6 +33,47 @@ export const MATERIALS = [
   ['oak', 'Oak', 0.75]
 ];
 
+
+
+/*
+ * What each material is actually like, as numbers a renderer understands.
+ *
+ * Metalness is not a dial between plastic and metal: it is a switch, and half
+ * of it is not a thing that exists. What separates brushed aluminium from
+ * polished steel is roughness, and what separates a printed part from a moulded
+ * one is roughness too. So the metals differ from each other only in how rough
+ * they are, and the plastics carry a clear coat instead, which is the thin shiny
+ * layer over a diffuse colour that a moulded or painted part actually has.
+ */
+export const RENDER_FINISH = {
+  aluminium: { metalness: 1, roughness: 0.34 },
+  steel: { metalness: 1, roughness: 0.28 },
+  stainless: { metalness: 1, roughness: 0.2 },
+  brass: { metalness: 1, roughness: 0.26 },
+  titanium: { metalness: 1, roughness: 0.42 },
+  // A printed part is matt and slightly rough whatever it is made of: the layer
+  // lines scatter far more light than the polymer does.
+  pla: { metalness: 0, roughness: 0.62, clearcoat: 0.15, clearcoatRoughness: 0.5 },
+  petg: { metalness: 0, roughness: 0.42, clearcoat: 0.4, clearcoatRoughness: 0.3 },
+  abs: { metalness: 0, roughness: 0.58, clearcoat: 0.2, clearcoatRoughness: 0.45 },
+  nylon: { metalness: 0, roughness: 0.7, clearcoat: 0.05, clearcoatRoughness: 0.6 },
+  // ABS with the gloss taken off it, which is what ASA is for: it goes outside
+  // and it is meant not to shine.
+  asa: { metalness: 0, roughness: 0.72, clearcoat: 0.1, clearcoatRoughness: 0.6 },
+  // Rubber. No coat at all and rough enough to kill a highlight, because the
+  // one thing everybody knows about a flexible part is that it is not shiny.
+  tpu: { metalness: 0, roughness: 0.85 },
+  // Polycarbonate is the glassy one: hard, clear, and it holds a reflection.
+  pc: { metalness: 0, roughness: 0.15, clearcoat: 0.9, clearcoatRoughness: 0.08 },
+  // Wood is matt and has no coat, and this is as far as roughness alone gets
+  // it: without a grain it reads as a pale matt solid rather than as oak. The
+  // colour and the grain are a texture, which is not a thing bodies carry yet.
+  oak: { metalness: 0, roughness: 0.78 },
+  // Resin comes off the printer glossy, which is most of why it photographs
+  // better than filament does.
+  resin: { metalness: 0, roughness: 0.18, clearcoat: 0.8, clearcoatRoughness: 0.1 }
+};
+
 const DENSITY = new Map(MATERIALS.map(([id, , d]) => [id, d]));
 
 /** Grams per cubic centimetre for a named material, PLA when unknown. */
