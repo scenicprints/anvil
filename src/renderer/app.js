@@ -4707,6 +4707,18 @@ function shellFields() {
       type: 'expr'
     },
     {
+      // Fusion's Sharp and Rounded Offset. Eroding leaves the cavity with
+      // square internal corners: fine on a milled part, a stress raiser on a
+      // printed one, and impossible to reach with a tool on a moulded one.
+      key: 'offsetType',
+      label: 'Inside corners',
+      type: 'select',
+      options: [
+        ['sharp', 'Sharp'],
+        ['rounded', 'Rounded to the wall thickness']
+      ]
+    },
+    {
       // Straddling the surface takes a thickness each way. One number halved
       // was the old reading, and it could not make a wall that sits mostly
       // outside the shape it came from.

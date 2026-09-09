@@ -1318,6 +1318,43 @@ async function run() {
     res.dispose();
   });
 
+  test('shell: rounded corners leave more material than sharp ones', () => {
+    // Eroding with a ball leaves the cavity square in its corners, which on a
+    // printed part is a stress raiser and on a moulded one is a shape no tool
+    // can cut. Rounding them to the wall thickness is what a real process
+    // leaves, and it takes material out of the void, so the wall gains it.
+    const shelled = (extra) => {
+      const doc = newDocument();
+      doc.features = [
+        prim('box', { width: '40', depth: '30', height: '20' }),
+        { id: uid('f'), type: 'shell', bodies: 'all', thickness: '2', ...extra }
+      ];
+      const res = rebuild(doc);
+      const unexpected = res.errors.filter((e) => !/left sharp/.test(e.message));
+      assert(!unexpected.length, JSON.stringify(unexpected));
+      const props = K.properties(res.bodies[0].solid);
+      res.dispose();
+      return props;
+    };
+
+    const sharp = shelled({});
+    const rounded = shelled({ offsetType: 'rounded' });
+
+    assert(
+      rounded.volume > sharp.volume,
+      `rounding the void leaves more wall: ${rounded.volume.toFixed(1)} against ${sharp.volume.toFixed(1)}`
+    );
+    // Not so much more that the void has closed up: it is a radius on the
+    // corners, not a smaller cavity.
+    assert(rounded.volume < sharp.volume * 1.25, 'and it is still a shell, not a lump');
+    assert(rounded.genus < 0, `still a sealed hollow, genus ${rounded.genus}`);
+
+    // Sharp is what an older document meant when it said nothing, so it has to
+    // come out identical to not asking.
+    const oldDocument = shelled({ offsetType: undefined });
+    near(oldDocument.volume, sharp.volume, 1e-6, 'saying nothing is still sharp');
+  });
+
   test('shell: refuses a wall thicker than the part rather than emptying it', () => {
     const doc = newDocument();
     doc.features = [

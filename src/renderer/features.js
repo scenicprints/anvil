@@ -461,6 +461,9 @@ export function normalizeSplit(f) {
 
 export function normalizeShell(f) {
   if (!f.side) f.side = 'inside';
+  // Sharp is what every shell before this did, so an absent value has to keep
+  // meaning that.
+  if (!f.offsetType) f.offsetType = 'sharp';
   // Straddling the surface used to split one thickness evenly, which is the
   // only thing one number could have meant. Inside and outside are separate
   // now, so what an old document meant is written out: half each. A shell made
@@ -4661,6 +4664,44 @@ export function rebuild(doc, options = {}) {
           message: `Shell skipped: ${thickness} mm is thicker than the body`
         });
         continue;
+      }
+
+      // Fusion's Rounded Offset. Eroding with a ball leaves the cavity with
+      // sharp corners, so the inside of a shelled box has square internal
+      // corners: fine on a milled part, a stress raiser on a printed one and
+      // impossible to reach with a tool on a moulded one. Rounding the
+      // cavity's own convex edges at the wall thickness is what turns them
+      // into the radius a real process would leave.
+      if (feature.offsetType === 'rounded' && eat > 1e-9) {
+        try {
+          const inner = buildTopology(K.meshData(cavityBase));
+          const corners = inner.edges.filter((e) => e.convex);
+          if (corners.length) {
+            const tools = buildEdgeTools(inner, corners, eat, 'fillet', ks, {});
+            if (tools.applied) {
+              let rounded = cavityBase;
+              if (tools.cut) rounded = K.difference(rounded, tools.cut, ks);
+              if (tools.addBack) rounded = K.union(rounded, tools.addBack, ks);
+              if (tools.blends) rounded = K.union(rounded, tools.blends, ks);
+              if (!K.isEmpty(rounded)) cavityBase = rounded;
+            }
+            if (tools.skipped.length) {
+              errs.push({
+                feature: feature.id,
+                message: `${tools.skipped.length} internal corner${
+                  tools.skipped.length === 1 ? '' : 's'
+                } could not take the full wall radius and were left sharp`
+              });
+            }
+          }
+        } catch (err) {
+          // A cavity too knotted to read is still a perfectly good sharp
+          // shell, so the rounding is dropped rather than the whole feature.
+          errs.push({
+            feature: feature.id,
+            message: `The inside corners were left sharp: ${err.message}`
+          });
+        }
       }
 
       let cavity = cavityBase;

@@ -365,7 +365,10 @@ face itself, and if they are not parallel it says so rather than guessing.
 
 **Shell** puts the wall inside, outside or
 straddling the original surface, and one click on the mouth takes the whole run
-of faces that carry on smoothly from it. **Draft** tapers one side of the neutral plane
+of faces that carry on smoothly from it. Its inside corners can be left sharp or
+**rounded to the wall thickness**: eroding leaves them square, which is fine on
+a milled part, a stress raiser on a printed one, and a shape no tool can cut on
+a moulded one. **Draft** tapers one side of the neutral plane
 or both, which is the shape a moulded part has about its parting line.
 
 **Rib** thickens an open sketch curve into a wall. Its depth can be a number or

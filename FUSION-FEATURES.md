@@ -519,7 +519,7 @@ parting-line work.
 
 | Option | Values | Anvil |
 |---|---|---|
-| Type | Sharp Offset, **Rounded Offset** | **missing** — sharp only |
+| Type | Sharp Offset, Rounded Offset | has, v2.52.0 |
 | Object | Faces to remove, or a whole Body with no opening | has |
 | Direction | Inside, Outside, Both | has |
 | Inside Thickness / Outside Thickness | two values when the direction is Both | has, v2.29.0 |
