@@ -415,6 +415,43 @@ export function topologyOptions(body) {
 }
 
 /** Bring a hole up to the shape the dialog now works in. */
+/**
+ * Bring a flange up to the shape the dialog now works in.
+ *
+ * It used to be one set of settings and a list of edges, so a box with two
+ * sides at ninety and two tabs at thirty was three features, and three features
+ * is three places to change the bend radius when the material does. Fusion's
+ * dialog is a table for that reason.
+ *
+ * An old flange becomes one row holding everything it had, which is exactly
+ * what it was: several edges that happened to share their settings.
+ */
+export function normalizeFlange(f) {
+  if (Array.isArray(f.rows) && f.rows.length) return f;
+  f.rows = [
+    {
+      edges: f.edges || [],
+      angle: f.angle ?? '90',
+      height: f.height ?? '20',
+      radius: f.radius ?? '',
+      widthType: f.widthType || 'full',
+      width: f.width ?? '',
+      widthOffset: f.widthOffset ?? '0',
+      heightDatum: f.heightDatum || 'tangent',
+      extent: f.extent || 'distance',
+      toObject: f.toObject ?? null,
+      toOffset: f.toOffset ?? '0',
+      // Left exactly as it was, undefined included. The dialog has always put
+      // 'inside' on a new flange, and a flange made without one has always
+      // meant the bend starts at the edge; giving it a default here would move
+      // every such flange the first time its document was reopened.
+      bendPosition: f.bendPosition,
+      relief: f.relief !== false
+    }
+  ];
+  return f;
+}
+
 export function normalizeHole(f) {
   if (!f.holeType) f.holeType = f.counterbore ? 'counterbore' : f.countersink ? 'countersink' : 'simple';
   if (!f.extent) f.extent = f.through ? 'all' : 'distance';
@@ -1566,9 +1603,28 @@ export function rebuild(doc, options = {}) {
   function doExtrude(feature, doc, scope, ks, regionsById, apply, errs) {
     normalizeExtrude(feature);
 
-    const { contours, plane } = extrudeProfiles(feature, doc, scope, regionsById);
+    /*
+     * A thin extrude can start from open curves rather than from a closed
+     * profile, which is Fusion's Tangent Chain and is what the option is for.
+     *
+     * A closed profile has an inside, so a wall can be offset from it. An open
+     * run of curves has no inside at all: what a wall means there is the curve
+     * itself given a thickness, which is the same thickening a rib does. So the
+     * two are different constructions rather than one with a flag, and the
+     * curves are only offered where they mean something.
+     *
+     * It matters because most sheet-like parts are drawn as a line, not as a
+     * long thin closed loop. Drawing the loop is the workaround this removes.
+     */
+    const { contours, plane } = feature.fromCurves
+      ? chainWalls(feature, doc, scope, ks)
+      : extrudeProfiles(feature, doc, scope, regionsById);
     if (!contours.length) {
-      throw new Error('Select one or more profiles or planar faces to extrude.');
+      throw new Error(
+        feature.fromCurves
+          ? 'That sketch has no open run of curves to thicken.'
+          : 'Select one or more profiles or planar faces to extrude.'
+      );
     }
 
     // Where the extrusion begins. Fusion lets that be somewhere other than the
@@ -1578,8 +1634,11 @@ export function rebuild(doc, options = {}) {
 
     // Thin extrude turns the profile into a wall of its own before any of the
     // depth settings apply, so everything after this is the same either way.
+    // Curves arrive already thickened, since a wall is all an open run can mean.
     const walls =
-      feature.kind === 'thin' ? thinWallContours(feature, contours, scope, ks) : contours;
+      feature.kind === 'thin' && !feature.fromCurves
+        ? thinWallContours(feature, contours, scope, ks)
+        : contours;
 
     const side = (which) => {
       const extent = (which === 2 ? feature.extent2 : feature.extent) || 'distance';
@@ -1939,6 +1998,82 @@ export function rebuild(doc, options = {}) {
    * wall lands on is the wall location; the region between the two offsets is
    * what gets extruded.
    */
+  /**
+   * Open runs of sketch curves, thickened into contours to extrude.
+   *
+   * The thickness sits where the wall location says, the same three choices a
+   * thin extrude from a profile has: to one side of the line, to the other, or
+   * half each way. Centred is the useful one here and is not the default, for
+   * the same reason it is not the default there: changing it would move every
+   * thin extrude that already exists.
+   */
+  function chainWalls(feature, doc, scope, ks) {
+    const sk = doc.sketches[feature.sketch];
+    if (!sk) throw new Error('That sketch is gone');
+    solveSketch(sk, { maxIterations: 40 });
+    const plane = sketchPlanes[sk.id] || resolvePlane(sk.plane, scope, builtConstruction);
+
+    const t = Math.abs(safeEval(feature.wall, scope, 1));
+    if (!(t > 1e-9)) throw new Error('A wall of no thickness is nothing');
+    const loc = feature.wallLocation || 'side1';
+
+    /*
+     * Fusion's Tangent Chain, and what it decides.
+     *
+     * On, a run carries on through every join, so an outline drawn as line,
+     * arc, line, arc is one wall. Off, it stops wherever the curve turns a
+     * corner, so the same drawing gives four walls that can be extruded to
+     * different heights.
+     *
+     * On by default because the run is what people draw and the corner is
+     * where they did not mean to stop.
+     */
+    const chains = splitAtCorners(openChains(sk), feature.tangentChain === false);
+
+    // How much goes each side of the line. The thickener takes a distance per
+    // side rather than a total, the same convention a rib uses, so a centred
+    // wall is half each way and a one-sided one is all of it on one.
+    const width = loc === 'center' ? t / 2 : loc === 'side2' ? [0, t] : [t, 0];
+
+    const contours = [];
+    for (const chain of chains) {
+      const made = thickenPolyline(chain.points, width, chain.closed);
+      if (made) contours.push(...made);
+    }
+    return { contours, plane };
+  }
+
+  /**
+   * Break runs wherever they turn a corner, when the tangent chain is off.
+   *
+   * A corner is a turn the eye reads as one: five degrees is a smooth join
+   * drawn in short segments, and thirty is a corner. Twenty is where the line
+   * is drawn, which is the same threshold the topology uses to decide that two
+   * faces are tangent.
+   */
+  function splitAtCorners(chains, split) {
+    if (!split) return chains;
+    const out = [];
+    for (const chain of chains) {
+      const pts = chain.points;
+      let run = [pts[0]];
+      for (let i = 1; i < pts.length; i++) {
+        run.push(pts[i]);
+        if (i + 1 >= pts.length) continue;
+        const a = Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x);
+        const b = Math.atan2(pts[i + 1].y - pts[i].y, pts[i + 1].x - pts[i].x);
+        let turn = Math.abs(b - a);
+        if (turn > Math.PI) turn = Math.PI * 2 - turn;
+        if (turn > (20 * Math.PI) / 180) {
+          out.push({ points: run, closed: false });
+          run = [pts[i]];
+        }
+      }
+      if (run.length > 1) out.push({ points: run, closed: chain.closed && out.length === 0 });
+    }
+    return out;
+  }
+
   function thinWallContours(feature, contours, scope, ks) {
     const t = Math.abs(safeEval(feature.wall, scope, 1));
     if (!(t > 1e-9)) throw new Error('Thin extrude needs a wall thickness');
@@ -7969,37 +8104,10 @@ export function rebuild(doc, options = {}) {
 
   /** A flange off one or more edges of a sheet metal part. */
   function doFlange(feature, scope, ks, errs) {
+    normalizeFlange(feature);
     const rule = sheetRule(scope, feature);
     const targets = pickSheetMetal(feature);
     if (!targets.length) throw new Error('Flange works on a sheet metal body');
-
-    const angle = (safeEval(feature.angle, scope, 90) * Math.PI) / 180;
-    const stated = safeEval(feature.height, scope, 20);
-    const radius = feature.radius ? safeEval(feature.radius, scope, rule.bendRadius) : rule.bendRadius;
-
-    /*
-     * Fusion's Height Datum: where the height is measured from.
-     *
-     * A flange panel begins where the bend arc ends, so a height given to the
-     * panel tree is measured from the bend tangent, which is Fusion's Tangent
-     * To Bend and is what this has always done. The other two are measured
-     * from a face of the parent, and the arc's end sits a radius above the
-     * inner face and a radius plus a thickness above the outer one. So the
-     * panel gets that much less.
-     *
-     * It matters because a bracket is dimensioned to its outside, not to a
-     * tangent point nobody can measure to with a rule.
-     */
-    const datum = feature.heightDatum || 'tangent';
-    const back = datum === 'outer' ? radius + rule.thickness : datum === 'inner' ? radius : 0;
-    const height = stated - back;
-    if (!(height > 1e-6)) {
-      throw new Error(
-        back > 0
-          ? `A height of ${stated} measured that way leaves nothing past the bend`
-          : 'A flange of no height is nothing'
-      );
-    }
 
     for (const body of targets) {
       const part = SM.clonePart(body.sheetMetal);
@@ -8015,146 +8123,187 @@ export function rebuild(doc, options = {}) {
         continue;
       }
 
-      for (const ref of feature.edges || []) {
-        const [edge] = resolveEdgeRefs(topo, [ref]);
-        if (!edge) {
-          errs.push({ feature: feature.id, message: 'Flange lost the edge it was on' });
-          continue;
-        }
-        const found = panelEdgeAt(part, frames, rule.thickness, edge.points);
-        if (!found) {
-          errs.push({
-            feature: feature.id,
-            message: 'That edge is not the boundary of a flat face, so no flange can grow from it'
-          });
-          continue;
-        }
-
-        // Where the bend sits relative to the edge that was picked. Each of
-        // these is a real position of the arc, named for what lines up with the
-        // edge: the flange's inner face, its outer face, the start of the bend,
-        // or the point the arc is tangent at.
-        const back =
-          feature.bendPosition === 'outside'
-            ? radius + rule.thickness
-            : feature.bendPosition === 'inside'
-              ? radius
-              : feature.bendPosition === 'tangent'
-                ? radius * Math.tan(Math.min(Math.abs(angle), Math.PI / 2) / 2)
-                : 0;
-
-        const line = SM.orientBendLine(found.panel.contour, { a: found.a, b: found.b });
-        const shifted = shiftLineInto(found.panel.contour, line, back);
-
-        // Fusion's Flange Width Type. Full Edge is the whole of the edge and
-        // is what a flange has always been here; the others take a piece of
-        // it, which is how a tab gets made without cutting the panel first.
-        // The panel tree already carried v0 and v1, so this is a matter of
-        // working out what to pass rather than new geometry.
-        const full = SM.bendLineLength(found.panel, shifted);
-        const width = feature.widthType || 'full';
-        let v0;
-        let v1;
-        if (width !== 'full' && full > 0) {
-          const w = Math.abs(safeEval(feature.width, scope, full / 2));
-          const off = safeEval(feature.widthOffset, scope, 0);
-          if (width === 'symmetric') {
-            const half = Math.min(w, full) / 2;
-            v0 = full / 2 - half;
-            v1 = full / 2 + half;
-          } else if (width === 'twoSides') {
-            // From a point along the edge, so much each way.
-            const at = Math.max(0, Math.min(full, off));
-            v0 = Math.max(0, at - w / 2);
-            v1 = Math.min(full, at + w / 2);
-          } else if (width === 'offsets') {
-            // Held off both ends by a stated amount, which is what a flange
-            // between two reference faces comes to.
-            v0 = Math.max(0, off);
-            v1 = Math.max(v0, full - w);
-          }
-          if (!(v1 > v0 + 1e-6)) {
-            errs.push({
-              feature: feature.id,
-              message: 'That flange width leaves nothing of the edge to fold'
-            });
-            continue;
-          }
-        }
+      /*
+       * Each row of edges carries its own angle, height and the rest.
+       *
+       * Fusion's flange dialog is a table for a reason: a box is four flanges
+       * off one panel and they are rarely the same. Two sides at ninety and two
+       * tabs at thirty used to be three features, and three features means
+       * three places to change the bend radius when the material does.
+       */
+      for (const row of feature.rows) {
+        const angle = (safeEval(row.angle, scope, 90) * Math.PI) / 180;
+        const stated = safeEval(row.height, scope, 20);
+        const radius = row.radius ? safeEval(row.radius, scope, rule.bendRadius) : rule.bendRadius;
 
         /*
-         * Fusion's To Object extent. The height is not a number here but
-         * whatever reaches the thing picked, which is how a flange lands on a
-         * face of the part beside it and stays there when that part moves.
+         * Fusion's Height Datum: where the height is measured from.
          *
-         * Worked out by asking rather than by geometry: the panel is added to a
-         * throwaway copy at a height of one, the frames are resolved, and the
-         * child's own frame says where the flange starts and which way it runs.
-         * The height then falls out of where that ray meets the plane. Doing it
-         * from the bend arithmetic instead would mean keeping a second copy of
-         * that arithmetic in step with the first.
+         * A flange panel begins where the bend arc ends, so a height given to
+         * the panel tree is measured from the bend tangent, which is Fusion's
+         * Tangent To Bend and is what this has always done. The other two are
+         * measured from a face of the parent, and the arc's end sits a radius
+         * above the inner face and a radius plus a thickness above the outer
+         * one. So the panel gets that much less.
+         *
+         * It matters because a bracket is dimensioned to its outside, not to a
+         * tangent point nobody can measure to with a rule.
          */
-        let reach = height;
-        if (feature.extent === 'object' && feature.toObject) {
-          const target = objectPlane(feature.toObject, scope);
-          if (!target) {
-            errs.push({
-              feature: feature.id,
-              message: 'Flange has lost the face it was running to'
-            });
-            continue;
-          }
-          const probe = SM.clonePart(part);
-          const trial = SM.addFlangePanel(probe, found.panel.id, shifted, {
-            angle,
-            radius,
-            height: 1,
-            v0,
-            v1,
-            panelId: 'probe:p',
-            bendId: 'probe:b',
-            relief: false
+        const datum = row.heightDatum || 'tangent';
+        const back0 = datum === 'outer' ? radius + rule.thickness : datum === 'inner' ? radius : 0;
+        const height = stated - back0;
+        if (!(height > 1e-6)) {
+          errs.push({
+            feature: feature.id,
+            message:
+              back0 > 0
+                ? `A height of ${stated} measured that way leaves nothing past the bend`
+                : 'A flange of no height is nothing'
           });
-          const frame = trial && SM.resolveFrames(probe, rule.thickness, rule.kFactor, {})
-            .get(trial.panel.id);
-          if (!frame) {
-            errs.push({ feature: feature.id, message: 'That flange cannot be measured to an object' });
-            continue;
-          }
-          const denom =
-            frame.x[0] * target.n[0] + frame.x[1] * target.n[1] + frame.x[2] * target.n[2];
-          if (Math.abs(denom) < 1e-6) {
-            errs.push({
-              feature: feature.id,
-              message: 'That flange runs along the face it was told to stop at, so it never meets it'
-            });
-            continue;
-          }
-          const gap =
-            (target.origin[0] - frame.origin[0]) * target.n[0] +
-            (target.origin[1] - frame.origin[1]) * target.n[1] +
-            (target.origin[2] - frame.origin[2]) * target.n[2];
-          reach = gap / denom + safeEval(feature.toOffset, scope, 0);
-          if (!(reach > 1e-6)) {
-            errs.push({
-              feature: feature.id,
-              message: 'That face is behind the bend, so the flange would have no length'
-            });
-            continue;
-          }
+          continue;
         }
 
-        const res = SM.addFlangePanel(part, found.panel.id, shifted, {
-          angle,
-          radius,
-          height: reach,
-          v0,
-          v1,
-          panelId: `${feature.id}:p${n}`,
-          bendId: `${feature.id}:b${n}`,
-          relief: feature.relief !== false
-        });
-        if (res) n++;
+        for (const ref of row.edges || []) {
+          const [edge] = resolveEdgeRefs(topo, [ref]);
+          if (!edge) {
+            errs.push({ feature: feature.id, message: 'Flange lost the edge it was on' });
+            continue;
+          }
+          const found = panelEdgeAt(part, frames, rule.thickness, edge.points);
+          if (!found) {
+            errs.push({
+              feature: feature.id,
+              message: 'That edge is not the boundary of a flat face, so no flange can grow from it'
+            });
+            continue;
+          }
+
+          // Where the bend sits relative to the edge that was picked. Each of
+          // these is a real position of the arc, named for what lines up with
+          // the edge: the flange's inner face, its outer face, the start of the
+          // bend, or the point the arc is tangent at.
+          const back =
+            row.bendPosition === 'outside'
+              ? radius + rule.thickness
+              : row.bendPosition === 'inside'
+                ? radius
+                : row.bendPosition === 'tangent'
+                  ? radius * Math.tan(Math.min(Math.abs(angle), Math.PI / 2) / 2)
+                  : 0;
+
+          const line = SM.orientBendLine(found.panel.contour, { a: found.a, b: found.b });
+          const shifted = shiftLineInto(found.panel.contour, line, back);
+
+          // Fusion's Flange Width Type. Full Edge is the whole of the edge and
+          // is what a flange has always been here; the others take a piece of
+          // it, which is how a tab gets made without cutting the panel first.
+          // The panel tree already carried v0 and v1, so this is a matter of
+          // working out what to pass rather than new geometry.
+          const full = SM.bendLineLength(found.panel, shifted);
+          const width = row.widthType || 'full';
+          let v0;
+          let v1;
+          if (width !== 'full' && full > 0) {
+            const w = Math.abs(safeEval(row.width, scope, full / 2));
+            const off = safeEval(row.widthOffset, scope, 0);
+            if (width === 'symmetric') {
+              const half = Math.min(w, full) / 2;
+              v0 = full / 2 - half;
+              v1 = full / 2 + half;
+            } else if (width === 'twoSides') {
+              // From a point along the edge, so much each way.
+              const at = Math.max(0, Math.min(full, off));
+              v0 = Math.max(0, at - w / 2);
+              v1 = Math.min(full, at + w / 2);
+            } else if (width === 'offsets') {
+              // Held off both ends by a stated amount, which is what a flange
+              // between two reference faces comes to.
+              v0 = Math.max(0, off);
+              v1 = Math.max(v0, full - w);
+            }
+            if (!(v1 > v0 + 1e-6)) {
+              errs.push({
+                feature: feature.id,
+                message: 'That flange width leaves nothing of the edge to fold'
+              });
+              continue;
+            }
+          }
+
+          /*
+           * Fusion's To Object extent. The height is not a number here but
+           * whatever reaches the thing picked, which is how a flange lands on a
+           * face of the part beside it and stays there when that part moves.
+           *
+           * Worked out by asking rather than by geometry: the panel is added to
+           * a throwaway copy at a height of one, the frames are resolved, and
+           * the child's own frame says where the flange starts and which way it
+           * runs. The height then falls out of where that ray meets the plane.
+           * Doing it from the bend arithmetic instead would mean keeping a
+           * second copy of that arithmetic in step with the first.
+           */
+          let reach = height;
+          if (row.extent === 'object' && row.toObject) {
+            const target = objectPlane(row.toObject, scope);
+            if (!target) {
+              errs.push({
+                feature: feature.id,
+                message: 'Flange has lost the face it was running to'
+              });
+              continue;
+            }
+            const probe = SM.clonePart(part);
+            const trial = SM.addFlangePanel(probe, found.panel.id, shifted, {
+              angle,
+              radius,
+              height: 1,
+              v0,
+              v1,
+              panelId: 'probe:p',
+              bendId: 'probe:b',
+              relief: false
+            });
+            const frame = trial && SM.resolveFrames(probe, rule.thickness, rule.kFactor, {})
+              .get(trial.panel.id);
+            if (!frame) {
+              errs.push({ feature: feature.id, message: 'That flange cannot be measured to an object' });
+              continue;
+            }
+            const denom =
+              frame.x[0] * target.n[0] + frame.x[1] * target.n[1] + frame.x[2] * target.n[2];
+            if (Math.abs(denom) < 1e-6) {
+              errs.push({
+                feature: feature.id,
+                message: 'That flange runs along the face it was told to stop at, so it never meets it'
+              });
+              continue;
+            }
+            const gap =
+              (target.origin[0] - frame.origin[0]) * target.n[0] +
+              (target.origin[1] - frame.origin[1]) * target.n[1] +
+              (target.origin[2] - frame.origin[2]) * target.n[2];
+            reach = gap / denom + safeEval(row.toOffset, scope, 0);
+            if (!(reach > 1e-6)) {
+              errs.push({
+                feature: feature.id,
+                message: 'That face is behind the bend, so the flange would have no length'
+              });
+              continue;
+            }
+          }
+
+          const res = SM.addFlangePanel(part, found.panel.id, shifted, {
+            angle,
+            radius,
+            height: reach,
+            v0,
+            v1,
+            panelId: `${feature.id}:p${n}`,
+            bendId: `${feature.id}:b${n}`,
+            relief: row.relief !== false
+          });
+          if (res) n++;
+        }
       }
       if (!n) continue;
       materialiseSheetPart(feature, part, rule, ks, body, errs);

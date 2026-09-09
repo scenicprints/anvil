@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.73.0**. 583 tests in the window, plus 55 checks of the
+Current version: **2.74.0**. 583 tests in the window, plus 55 checks of the
 library, profiles and the version counter in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
@@ -41,10 +41,11 @@ not built. Reading it back after the library shipped, the honest summary is:
 - **Deliberately not here**, and recorded as such in `README.md`: CAM and
   toolpaths, drawings, simulation study types, a photoreal renderer with real
   lights, and generative design's study and explore machinery.
-- **Conveniences**: tangent chain as a way of picking a profile on thin extrude
-  and emboss, several flanges in one sheet-metal feature, ground-to-parent
-  (which needs nested components rather than effort), and four Inspect readings
-  Fusion has that Anvil does not.
+- **Conveniences**, all built in v2.74.0: a thin extrude that builds its wall
+  from open curves with a tangent chain, several flanges in one sheet-metal
+  feature with per-row settings, ground-to-parent, and the four Inspect
+  readings, which are surface continuity, isocurve analysis, validate, and
+  colour by component or feature.
 - **Mould-specific**: moving and fixing a parting line on draft, which matters
   for injection tooling and not for a printed part.
 

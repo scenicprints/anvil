@@ -47,7 +47,10 @@ import {
   designAdvice,
   thicknessAt,
   meshSize,
-  spunProfile
+  spunProfile,
+  surfaceContinuity,
+  isoLines,
+  validateBodies
 } from '../src/renderer/analysis.js';
 import { sectionedMesh } from '../src/renderer/features.js';
 import { buildTopology } from '../src/renderer/topology.js';
@@ -5688,6 +5691,66 @@ async function run() {
     return doc;
   }
 
+  test('assembly: a component held to another moves with it', () => {
+    /*
+     * Fusion's Ground To Parent. Grounding in space is right for the one part
+     * everything else is built around and wrong for everything bolted to it:
+     * when the arm swings, the plate bolted to the arm should swing with it,
+     * and a plate grounded in space stays put while the arm walks away.
+     *
+     * Anvil's components are a flat list, so what "inside" means here is named
+     * directly. Which turns out to be the whole of it: a part held rigidly to
+     * another is a rigid joint, and the solver already walks those.
+     */
+    const base = newComponent('Base');
+    base.grounded = true;
+    const arm = newComponent('Arm');
+    const plate = newComponent('Plate');
+    plate.groundedTo = arm.id;
+    const loose = newComponent('Loose');
+
+    const joint = {
+      id: 'j1',
+      type: 'revolute',
+      parent: base.id,
+      child: arm.id,
+      origin: { p: [0, 0, 0], axis: [0, 0, 1] },
+      angle: '90'
+    };
+
+    const { transforms, errors } = solveAssembly([base, arm, plate, loose], [joint], {});
+    assert(errors.length === 0, `errors: ${JSON.stringify(errors)}`);
+
+    // The arm swings a quarter turn, so a point out along X lands out along Y.
+    const armAt = new THREE.Vector3(10, 0, 0).applyMatrix4(transforms.get(arm.id));
+    near(armAt.y, 10, 1e-6, 'the arm swung');
+
+    // And the plate went with it, because it is held to the arm.
+    const plateAt = new THREE.Vector3(10, 0, 0).applyMatrix4(transforms.get(plate.id));
+    near(plateAt.x, 0, 1e-6, 'the plate swung too');
+    near(plateAt.y, 10, 1e-6, 'by exactly as much');
+
+    // The one held to nothing stayed where it was, which is what says the
+    // holding did the work rather than everything moving together.
+    const looseAt = new THREE.Vector3(10, 0, 0).applyMatrix4(transforms.get(loose.id));
+    near(looseAt.x, 10, 1e-6, 'and the loose one did not move');
+    near(looseAt.y, 0, 1e-6, 'in either direction');
+  });
+
+  test('assembly: held to something that is gone is simply not held', () => {
+    // A name that no longer resolves must not be a failure. The safe reading is
+    // that the component is not held at all, which is what it looks like on
+    // screen anyway once the thing it named has been deleted.
+    const comps = [
+      { id: 'a', name: 'A', grounded: true, transform: null },
+      { id: 'b', name: 'B', grounded: false, groundedTo: 'deleted', transform: null },
+      { id: 'c', name: 'C', grounded: false, groundedTo: 'c', transform: null }
+    ];
+    const out = solveAssembly(comps, [], {});
+    assert(out.errors.length === 0, JSON.stringify(out.errors));
+    assert(out.transforms.size >= 1, 'and everything still gets placed');
+  });
+
   test('coil: its volume is the section area times the path length', () => {
     // Pappus: a solid of revolution-like sweep has the volume of its section
     // times the distance the section's centroid travels. For a helix of radius
@@ -8207,6 +8270,73 @@ async function run() {
 
   /* -------- surfaces through the timeline -------- */
 
+  test('thin extrude: an open run of curves becomes a wall', () => {
+    /*
+     * Fusion's Tangent Chain on a thin extrude, and the reason it exists. Most
+     * sheet-like parts are drawn as a line, not as a long thin closed loop, and
+     * drawing the loop is the workaround this removes.
+     *
+     * A closed profile has an inside, so a wall can be offset from it. An open
+     * run has none: what a wall means there is the curve itself given a
+     * thickness. Two constructions rather than one with a flag.
+     */
+    const build = (extra) => {
+      const doc = newDocument();
+      const sk = openCurveSketch('XY');
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        {
+          id: uid('f'),
+          type: 'extrude',
+          sketch: sk.id,
+          seeds: [],
+          faces: [],
+          kind: 'thin',
+          fromCurves: true,
+          wall: '2',
+          wallLocation: 'center',
+          direction: 'one',
+          extent: 'distance',
+          distance: '10',
+          op: 'new',
+          ...extra
+        }
+      ];
+      return rebuild(doc);
+    };
+
+    const out = build({});
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    assert(out.bodies.length === 1, `one wall, got ${out.bodies.length}`);
+    // The curve is 10, 20, 10 long: 40 of run, 2 thick, extruded 10.
+    const chained = K.properties(out.bodies[0].solid).volume;
+    near(chained, 40 * 2 * 10, 60, 'a wall the length of the run');
+    out.dispose();
+
+    /*
+     * Off, the run stops at every corner, so the same drawing gives three
+     * separate walls. They still touch, so this is not a count of bodies: it
+     * is that three squared-off walls overlap at each corner where one mitred
+     * run does not, and the overlap is a thickness square at each of the two
+     * corners.
+     */
+    const split = build({ tangentChain: false });
+    assert(split.errors.length === 0, split.errors.map((e) => e.message).join('; '));
+    const parted = K.properties(split.bodies[0].solid).volume;
+    // Less material, by about a corner's worth at each of the two corners. The
+    // exact figure depends on which way the run turns, so what is pinned here
+    // is that squaring off takes material away and that it is the size of the
+    // corners rather than of the walls.
+    assert(parted < chained, `squared off is smaller, got ${parted} against ${chained}`);
+    const lost = chained - parted;
+    assert(
+      lost > 2 * 2 * 10 * 0.5 && lost < 2 * 2 * 10 * 3,
+      `and it is the corners that went, not a wall: lost ${lost.toFixed(1)}`
+    );
+    split.dispose();
+  });
+
   test('surface extrude: an open curve becomes an open surface', () => {
     const doc = newDocument();
     const sk = openCurveSketch('XY');
@@ -8222,6 +8352,113 @@ async function run() {
     assert(!body.solid && body.sheet, 'and it is a surface, not a solid');
     // Three sides of 10, 20, 10, dragged 10 up.
     near(SH.sheetArea(body.sheet), 400, 0.01, '40 of curve by 10 of drag');
+  });
+
+  test('continuity: a box corner is G0, a filleted one is G1', () => {
+    /*
+     * The reading zebra cannot give you. A stripe that kinks says there is
+     * something wrong; this says by how much, and the difference between a
+     * tenth of a degree and five is the difference between a surface that is
+     * finished and one that is not.
+     */
+    const boxDoc = (...features) => {
+      const doc = newDocument();
+      doc.features = features;
+      return doc;
+    };
+    const sharp = rebuild(
+      boxDoc(prim('box', { width: '40', depth: '40', height: '40', centered: true }))
+    );
+    const mesh = K.meshData(sharp.bodies[0].solid);
+    const topo = buildTopology(mesh);
+    const corner = topo.edges.filter((e) => !e.boundary && e.convex && e.dihedral > 80);
+    assert(corner.length, 'a box has square edges');
+    const read = surfaceContinuity(mesh, topo, [corner[0]]);
+    near(read[0].angle, 90, 1, 'a square corner turns ninety degrees');
+    assert(/^G0/.test(read[0].verdict), `and reads as G0, got ${read[0].verdict}`);
+    sharp.dispose();
+
+    // A fillet meets the flat tangentially, so the turn across that join is
+    // nothing. It is the same edge in the same place; what changed is the
+    // shape either side of it.
+    const blended = rebuild(
+      boxDoc(
+        prim('box', { width: '40', depth: '40', height: '40', centered: true }),
+        { id: 'ffil', type: 'fillet', bodies: 'all', sets: [{ radius: '6', all: true }] }
+      )
+    );
+    const m2 = K.meshData(blended.bodies[0].solid);
+    const t2 = buildTopology(m2);
+    const joins = t2.edges.filter((e) => !e.boundary && e.dihedral < 15);
+    assert(joins.length, 'a fillet meets the flat somewhere');
+    const soft = surfaceContinuity(m2, t2, joins);
+    const worst = Math.max(...soft.map((r) => r.angle));
+    assert(worst < 15, `a fillet runs into the flat, worst turn ${worst.toFixed(2)} degrees`);
+    assert(
+      soft.some((r) => /^G[12]/.test(r.verdict)),
+      `and reads as at least tangent, got ${JSON.stringify(soft.map((r) => [r.verdict, +r.angle.toFixed(2)]))}`
+    );
+    blended.dispose();
+  });
+
+  test('isocurves: lines are drawn across a face and stay on it', () => {
+    // On a face of a solid there is no real u and v to follow, so these are
+    // contours in the face's own frame. What they are for is the same either
+    // way: evenly spaced lines bunch where a surface is tight.
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '20', height: '10', centered: true })];
+    const out = rebuild(doc);
+    const mesh = K.meshData(out.bodies[0].solid);
+    const topo = buildTopology(mesh);
+    const top = topo.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    assert(top, 'the box has a top');
+
+    const runs = isoLines(mesh, top, 8);
+    assert(runs.length > 4, `lines were drawn, got ${runs.length}`);
+    // Every point of every line is on the face it was drawn on. A contour that
+    // wandered off the face would be a picture of the wrong thing.
+    for (const run of runs) {
+      for (const p of run) {
+        near(p[2], 5, 1e-6, 'on the top face');
+        assert(Math.abs(p[0]) <= 20 + 1e-6 && Math.abs(p[1]) <= 10 + 1e-6, 'and within it');
+      }
+    }
+    out.dispose();
+  });
+
+  test('validate: a good solid is quiet, a surface says it is open', () => {
+    // Not a proof that a body is right. The kernel has already settled most of
+    // what a validity check asks elsewhere, so what is worth reporting is what
+    // builds cleanly and goes wrong later.
+    const solidDoc = newDocument();
+    solidDoc.features = [prim('box', { width: '20', depth: '20', height: '20', centered: true })];
+    const out = rebuild(solidDoc);
+    const mesh = K.meshData(out.bodies[0].solid);
+    const topo = buildTopology(mesh);
+    const clean = validateBodies([
+      { name: 'Box', mesh, topo, solid: out.bodies[0].solid, sheet: false }
+    ]);
+    assert(clean[0].notes.every((n) => n.level === 'ok'), JSON.stringify(clean[0].notes));
+    out.dispose();
+
+    const doc = newDocument();
+    const sk = openCurveSketch('XY');
+    doc.sketches[sk.id] = sk;
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: uid('f'), type: 'surfaceExtrude', sketch: sk.id, edges: [], distance: '10', direction: 'one' }
+    ];
+    const surf = rebuild(doc);
+    const body = surf.bodies.find((b) => !b.solid && b.sheet);
+    const st = buildTopology(body.sheet);
+    const said = validateBodies([{ name: 'Surface', mesh: body.sheet, topo: st, sheet: true }]);
+    assert(
+      said[0].notes.some((n) => /rim/.test(n.text)),
+      // Being open is what a surface is, not a fault. Saying so is the useful
+      // part: it cannot be printed until it is thickened or stitched.
+      JSON.stringify(said[0].notes)
+    );
+    surf.dispose();
   });
 
   test('surface fillet: a fold in a sheet gets a real blend, not a boolean', () => {
@@ -13256,6 +13493,148 @@ async function run() {
 
     const centred = plate({ orientation: 'center' });
     assert(centred[0] === -1 && centred[1] === 1, `centred straddles it, got ${centred}`);
+  });
+
+  test('sheet metal: two sets of edges, each with its own angle and height', () => {
+    /*
+     * Fusion's flange dialog is a table, and this is why. A box is four flanges
+     * off one panel and they are rarely all the same: two sides at ninety and
+     * two tabs at thirty used to be three features here, and three features is
+     * three places to change the bend radius when the material does.
+     */
+    const doc = newDocument();
+    doc.sheetMetalRules = [{ ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2', bendRadius: '2' }];
+    doc.sheetMetalRule = 'Thin';
+
+    const sk = newSketch('XY', 'Plate');
+    sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+    sk.entities = [
+      { id: 1, type: 'line', p: [0, 1] },
+      { id: 2, type: 'line', p: [1, 2] },
+      { id: 3, type: 'line', p: [2, 3] },
+      { id: 4, type: 'line', p: [3, 0] }
+    ];
+    sk.nextEntityId = 5;
+    doc.sketches[sk.id] = sk;
+    doc.features = [
+      { id: uid('f'), type: 'sketch', sketch: sk.id },
+      { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] }
+    ];
+
+    let out = rebuild(doc);
+    const topo = buildTopology(K.meshData(out.bodies[0].solid));
+    // The two long edges of the plate, at x = 0 and x = 60.
+    const sideAt = (x) =>
+      topo.edges.find(
+        (e) =>
+          e.kind === 'line' &&
+          e.convex &&
+          Math.abs(e.refPoint[0] - x) < 0.01 &&
+          Math.abs(e.refPoint[2] - 2) < 0.01
+      );
+    const farSide = sideAt(60);
+    const nearSide = sideAt(0);
+    assert(farSide && nearSide, 'found both edges to flange off');
+    const refs = [edgeReference(farSide, topo), edgeReference(nearSide, topo)];
+    const plate = K.properties(out.bodies[0].solid).volume;
+    out.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'flange',
+      bodies: 'all',
+      rows: [
+        { edges: [refs[0]], angle: '90', height: '20', bendPosition: 'inside' },
+        { edges: [refs[1]], angle: '90', height: '8', bendPosition: 'inside' }
+      ]
+    });
+
+    out = rebuild(doc);
+    assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+    const bb = K.boundingBox(out.bodies[0].solid);
+
+    // One row 20 tall and one 8 tall, both folded up: the part is as tall as
+    // the taller of them, and both are really there.
+    //
+    // 24 and not 22. The height is measured from the end of the bend, which is
+    // the default datum, so the panel starts a radius above the top of the
+    // plate: 2 of plate, 2 of bend, then the 20 that was asked for.
+    near(bb.max[2], 2 + 2 + 20, 0.5, 'the taller flange sets the height');
+    const both = K.properties(out.bodies[0].solid).volume;
+    out.dispose();
+
+    /*
+     * Both are really there, and each used its own height.
+     *
+     * Checked against the two flanges built separately rather than against
+     * arithmetic. A bend is not a right-angled corner: it eats a radius off the
+     * plate and puts an arc back, and the arc's length depends on the k-factor
+     * of the rule. Writing that sum out here would be keeping a second copy of
+     * the bend arithmetic in step with the real one, which is exactly the bug
+     * this test would then be unable to see.
+     */
+    const only = (row) => {
+      const one = { ...doc, features: doc.features.slice(0, -1) };
+      one.features = [...one.features, { id: uid('f'), type: 'flange', bodies: 'all', rows: [row] }];
+      const res = rebuild(one);
+      assert(res.errors.length === 0, res.errors.map((e) => e.message).join('; '));
+      const v = K.properties(res.bodies[0].solid).volume;
+      res.dispose();
+      return v;
+    };
+    const tall = only({ edges: [refs[0]], angle: '90', height: '20', bendPosition: 'inside' });
+    const short = only({ edges: [refs[1]], angle: '90', height: '8', bendPosition: 'inside' });
+    near(both, tall + short - plate, 1, 'one feature made exactly the two flanges');
+    assert(tall > short + 500, 'and the two rows really did use different heights');
+  });
+
+  test('sheet metal: an old flange becomes one row and builds the same', () => {
+    // Every flange in every saved document is the old shape: one set of
+    // settings and a list of edges. That is exactly one row of the new table,
+    // and it has to come out identical, because the alternative is somebody's
+    // bracket quietly changing shape the first time they reopen it.
+    const build = (extra) => {
+      const doc = newDocument();
+      doc.sheetMetalRules = [{ ...SM.DEFAULT_RULE, name: 'Thin', thickness: '2', bendRadius: '2' }];
+      doc.sheetMetalRule = 'Thin';
+      const sk = newSketch('XY', 'Plate');
+      sk.points = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+      sk.entities = [
+        { id: 1, type: 'line', p: [0, 1] },
+        { id: 2, type: 'line', p: [1, 2] },
+        { id: 3, type: 'line', p: [2, 3] },
+        { id: 4, type: 'line', p: [3, 0] }
+      ];
+      sk.nextEntityId = 5;
+      doc.sketches[sk.id] = sk;
+      doc.features = [
+        { id: uid('f'), type: 'sketch', sketch: sk.id },
+        { id: uid('f'), type: 'baseFlange', sketch: sk.id, seeds: null, faces: [] }
+      ];
+      let out = rebuild(doc);
+      const topo = buildTopology(K.meshData(out.bodies[0].solid));
+      const edge = topo.edges.find(
+        (e) =>
+          e.kind === 'line' &&
+          e.convex &&
+          Math.abs(e.refPoint[0] - 60) < 0.01 &&
+          Math.abs(e.refPoint[2] - 2) < 0.01
+      );
+      const ref = edgeReference(edge, topo);
+      out.dispose();
+      doc.features.push({ id: uid('f'), type: 'flange', bodies: 'all', ...extra(ref) });
+      out = rebuild(doc);
+      assert(out.errors.length === 0, out.errors.map((e) => e.message).join('; '));
+      const v = K.properties(out.bodies[0].solid).volume;
+      out.dispose();
+      return v;
+    };
+
+    const old = build((ref) => ({ edges: [ref], angle: '90', height: '20' }));
+    const rows = build((ref) => ({
+      rows: [{ edges: [ref], angle: '90', height: '20' }]
+    }));
+    near(rows, old, 1e-6, 'the same flange either way round');
   });
 
   test('sheet metal: one flange can depart from the rule without moving it', () => {

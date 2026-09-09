@@ -53,7 +53,7 @@ Adds depth to profiles or planar faces.
 |---|---|---|
 | Type | Extrude, Thin Extrude | has |
 | Profiles | sketch profiles or faces; a whole sketch from the browser | has |
-| Tangent Chain | thin extrude only | missing |
+| Tangent Chain | thin extrude only | has, v2.74.0. A thin extrude can build its wall from the open curves of a sketch rather than from a closed profile, and the chain decides whether the run carries through a corner or stops at it |
 | Start | Profile Plane, Offset, Object | has |
 | Direction | One Side, Two Sides, Symmetric | has |
 | Measurement | Half Length, Whole Length (symmetric only) | has |
@@ -261,7 +261,7 @@ the point of view of matching.
 | Option | Values | Anvil |
 |---|---|---|
 | Sketch Profiles / Faces | | has |
-| Tangent Chain | | **missing** |
+| Tangent Chain | | n/a — Emboss takes a profile or a face, and a run of curves has no area to emboss. The option belongs to the thin extrude, where it is built |
 | Effect | Emboss, Deboss | has |
 | Flip Normal | | has |
 | Depth | positive embosses, negative debosses | has |
@@ -844,7 +844,7 @@ every row carries its own settings.
 | Option | Values | Anvil |
 |---|---|---|
 | Type | Base, Edge, Contour | has, as three commands |
-| Selection box, per-row settings | several flanges in one feature | **missing** — one at a time |
+| Selection box, per-row settings | several flanges in one feature | has, v2.74.0. Each row of edges carries its own angle, height, width and bend; the material rule stays shared, because a part is not made of two materials |
 | Edges / Profiles | | has |
 | Flange Width Type (edge) | Full Edge, Symmetric, Two Sides, Two Offsets | has, v2.55.0. The offsets are given as distances rather than picked against reference faces |
 | Extent Type (edge) | Distance, To Object with an offset | has, v2.61.0 |
@@ -982,7 +982,7 @@ reported rather than solved.
 | Fusion | Anvil |
 |---|---|
 | New Component | has |
-| Ground to parent | **missing**, and it needs nesting rather than effort: components here are a flat list with joints between them, so there is no parent to ground to. Grounding itself is there |
+| Ground to parent | has, v2.74.0. Components are still a flat list, so what "inside" means is named directly: this one is held to that one. Which turned out to be the whole of it, since a part held rigidly to another is a rigid joint and the solver already walked those |
 | Edit In Place (edit an external component inside the assembly) | has, v2.70.0, with one difference stated below |
 | Update components in an assembly | has, as Update what is derived. Told to rather than watched for: a part that changes shape without being asked is worse than one that is a day old |
 | Derived design features (reference geometry from another design) | has, v2.70.0. Bodies, sketches and parameters, each picked by name |
@@ -1261,11 +1261,11 @@ gives you by default.
 | Section analysis (a 3D section view) | has |
 | Centre of mass and mass properties | has |
 | Find similar components | has |
-| **Surface continuity** | **missing** |
-| **Isocurve analysis** | **missing** |
+| Surface continuity | has, v2.74.0. Reports G0, G1 or G2 across a picked edge, measured against the tessellation rather than absolutely: a body here is triangles, so a curved face already steps a facet at a time, and a tangent join would otherwise read as a crease |
+| Isocurve analysis | has, v2.74.0. Real u and v on a surface built from curves, and contours in the face's own frame anywhere else, which is a stand-in and says so |
 | Environment map reflections | has. `environmentMap` runs a chrome face analysis |
-| **Validate** | **missing** |
-| **Colour code components and features** | **missing** |
+| Validate | has, v2.74.0. Not a proof that a body is right: the kernel settles most of that. It reports what builds cleanly and goes wrong later, sliver faces first |
+| Colour code components and features | has, v2.74.0. A reading rather than a change: nothing is written to the document and Clear Analysis puts the real colours back |
 | Fastener stack analysis | **missing** (Design Extension) |
 
 Anvil also has a wall-thickness reading and a design-advice pass, which Fusion

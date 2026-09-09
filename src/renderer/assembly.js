@@ -174,6 +174,44 @@ function clampToLimits(value, limits, which) {
  * each of them being rigidly jointed to the first, so it is expressed that way
  * rather than given a second mechanism of its own.
  */
+/**
+ * Ground To Parent, as a joint nobody has to make.
+ *
+ * Fusion's version is about nesting: a sub-component fixed inside the component
+ * it sits in, rather than fixed in space. Anvil's components are a flat list, so
+ * what "inside" means here is named directly: this one is held to that one.
+ *
+ * Which turns out to be the whole of it. A part held rigidly to another is a
+ * rigid joint, and the solver already walks those; the difference from grounding
+ * is only what it is held to. Grounded in space is a part that never moves, and
+ * on an assembly with one thing bolted to another that is the wrong answer:
+ * moving the bracket should take the plate with it.
+ */
+function jointsFromGroundedTo(components, joints) {
+  const out = [];
+  const alreadyChild = new Set((joints || []).map((j) => j.child));
+  const known = new Set((components || []).map((c) => c.id));
+  for (const c of components || []) {
+    const to = c.groundedTo;
+    // Held to itself, or to something that has gone: neither is a joint. The
+    // component is simply not held, which is the safe reading.
+    if (!to || to === c.id || !known.has(to)) continue;
+    // A part already hanging off a joint keeps that joint, the same rule rigid
+    // groups follow: nothing here may quietly overrule what somebody made.
+    if (alreadyChild.has(c.id)) continue;
+    alreadyChild.add(c.id);
+    out.push({
+      id: `groundedTo:${c.id}`,
+      name: 'Grounded to parent',
+      type: 'rigid',
+      parent: to,
+      child: c.id,
+      fromGround: true
+    });
+  }
+  return out;
+}
+
 function jointsFromRigidGroups(groups, joints) {
   const out = [];
   const alreadyChild = new Set((joints || []).map((j) => j.child));
@@ -240,9 +278,11 @@ export function solveAssembly(components, joints, scope, opts = {}) {
   const base = new Map();
   for (const c of list) base.set(c.id, matrixOf(c.transform));
 
-  const all = [...(joints || []), ...jointsFromRigidGroups(opts.rigidGroups, joints)].filter(
-    (j) => j.child && j.parent && base.has(j.child) && base.has(j.parent)
-  );
+  const all = [
+    ...(joints || []),
+    ...jointsFromGroundedTo(list, joints),
+    ...jointsFromRigidGroups(opts.rigidGroups, joints)
+  ].filter((j) => j.child && j.parent && base.has(j.child) && base.has(j.parent));
 
   // Split the joints into a tree that can be walked and the ones left over that
   // close a loop.

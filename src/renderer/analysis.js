@@ -1075,3 +1075,416 @@ export function intersectionRuns(solidA, solidB, scope) {
   }
   return runs;
 }
+
+/* ------------------------------------------------------------------ */
+/* Surface continuity                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How smoothly two faces meet along the edge between them.
+ *
+ * The three degrees everybody in surfacing talks about and nobody can see by
+ * looking. G0 is touching: the two faces share the edge and there is no gap. G1
+ * is tangent: they leave the edge in the same direction, so there is no crease.
+ * G2 is curvature continuous: they leave it curving by the same amount, so
+ * there is no band of different shading either.
+ *
+ * The difference between G1 and G2 is the difference between a joint you can
+ * find with a fingernail and one you can only find with a reflection, which is
+ * why zebra exists and why this exists beside it: zebra shows you there is
+ * something wrong, and this says by how much.
+ *
+ * Measured per point along the edge and reported at its worst, because a blend
+ * that is perfect for most of its length and creased at one end is a creased
+ * blend.
+ */
+export function surfaceContinuity(mesh, topo, edges) {
+  const P = pointsOf(mesh);
+  const tris = trisOf(mesh);
+  const normals = triNormals(P, tris);
+
+  // Which triangles of each face touch each vertex, so a normal can be taken
+  // on one side of the edge without the other side's triangles pulling it
+  // round. A normal averaged across the crease is a normal that says there is
+  // no crease.
+  const atVertex = new Map();
+  tris.forEach((t, i) => {
+    const face = topo.triFace[i];
+    for (const v of t) {
+      const key = `${face}_${v}`;
+      const rec = atVertex.get(key) || { n: [0, 0, 0], round: [], facets: [] };
+      rec.n = add3(rec.n, normals[i]);
+      rec.facets.push(normals[i]);
+      for (const w of t) if (w !== v) rec.round.push(w);
+      atVertex.set(key, rec);
+    }
+  });
+
+  const out = [];
+  for (const edge of edges) {
+    if (edge.faceA === undefined || edge.faceB === undefined || edge.faceB < 0) continue;
+    let worstAngle = 0;
+    let worstCurve = 0;
+    let worstGap = 0;
+    let samples = 0;
+
+    for (const v of edge.verts || []) {
+      const a = atVertex.get(`${edge.faceA}_${v}`);
+      const b = atVertex.get(`${edge.faceB}_${v}`);
+      if (!a || !b) continue;
+      const nA = norm3(a.n);
+      const nB = norm3(b.n);
+      if (!nA || !nB) continue;
+      samples++;
+
+      /*
+       * How far the two faces turn as they cross the edge, less how far each
+       * of them turns within itself.
+       *
+       * The subtraction is the whole measurement and not a fudge. A body here
+       * is triangles, so a curved face is already a series of small steps: a 6
+       * mm fillet drawn in forty facets steps two and a quarter degrees every
+       * facet, and a tangent join reads as two and a quarter degrees of crease
+       * unless that is accounted for. Which would put the floor of this
+       * reading an order of magnitude above the thing it exists to find.
+       *
+       * So what is reported is the step across the edge measured against the
+       * steps along each face beside it. A crease is a step that stands out
+       * from its neighbours; a tangent join is one that does not.
+       */
+      const dot = Math.max(-1, Math.min(1, nA[0] * nB[0] + nA[1] * nB[1] + nA[2] * nB[2]));
+      const across = (Math.acos(dot) * 180) / Math.PI;
+      const floor = Math.max(spread(a.facets), spread(b.facets));
+      worstAngle = Math.max(worstAngle, Math.max(0, across - floor));
+
+      // How hard each side is curving away from the edge, from the neighbours
+      // it has on its own side. Two sides that curve the same amount meet
+      // without a band of different shading; two that do not, do not.
+      const kA = normalCurvature(P, v, a.round, nA);
+      const kB = normalCurvature(P, v, b.round, nB);
+      if (kA !== null && kB !== null) {
+        const scale = Math.max(Math.abs(kA), Math.abs(kB), 1e-9);
+        worstCurve = Math.max(worstCurve, Math.abs(kA - kB) / scale);
+      }
+    }
+    if (!samples) continue;
+
+    /*
+     * The verdict, in the order the degrees are actually reached.
+     *
+     * The thresholds are the ones surfacing uses in practice rather than
+     * anything exact: a tenth of a degree is below what any process can hold,
+     * and five per cent of curvature is below what a reflection shows.
+     */
+    const verdict =
+      worstAngle > 0.1
+        ? worstAngle > 15
+          ? 'G0, and it is a corner'
+          : 'G0, touching but creased'
+        : worstCurve > 0.05
+          ? 'G1, tangent but the curvature steps'
+          : 'G2, curvature continuous';
+
+    out.push({
+      edge: edge.id,
+      angle: worstAngle,
+      curvature: worstCurve,
+      gap: worstGap,
+      points: samples,
+      verdict
+    });
+  }
+  return out;
+}
+
+/**
+ * The widest turn between any two facets of one face at one point.
+ *
+ * The noise floor of a reading taken on triangles: nothing smaller than this
+ * can be told apart from the tessellation itself.
+ */
+function spread(facets) {
+  let worst = 0;
+  for (let i = 0; i < facets.length; i++) {
+    const a = norm3(facets[i]);
+    if (!a) continue;
+    for (let j = i + 1; j < facets.length; j++) {
+      const b = norm3(facets[j]);
+      if (!b) continue;
+      const d = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+      worst = Math.max(worst, (Math.acos(d) * 180) / Math.PI);
+    }
+  }
+  return worst;
+}
+
+/** How sharply a surface bends away from a point, along its own neighbours. */
+function normalCurvature(P, v, round, n) {
+  let worst = null;
+  for (const w of round) {
+    const d = sub3(P[w], P[v]);
+    const l2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if (l2 < 1e-12) continue;
+    // The standard estimate: twice the height of a neighbour above the tangent
+    // plane, over the square of how far away it is.
+    const k = (2 * (d[0] * n[0] + d[1] * n[1] + d[2] * n[2])) / l2;
+    if (worst === null || Math.abs(k) > Math.abs(worst)) worst = k;
+  }
+  return worst;
+}
+
+/* ------------------------------------------------------------------ */
+/* Isocurves                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Lines drawn across a face, for reading its shape.
+ *
+ * On a surface built from curves there is a real u and v to follow and those
+ * are the lines. On anything else, and on every face of a solid, there is no
+ * parameterisation at all: the face is triangles, and triangles have no idea
+ * which way is along.
+ *
+ * So the fallback is contours in the face's own frame, which is not the same
+ * thing and is honest about being a stand-in. What it is for is the same
+ * either way: evenly spaced lines bunch up where a surface is tight and spread
+ * where it is slack, and a line that wobbles is a surface that wobbles.
+ */
+export function isoLines(mesh, face, count = 8) {
+  const P = pointsOf(mesh);
+  const tris = trisOf(mesh);
+  const members = face.tris.map((t) => tris[t]);
+  if (!members.length) return [];
+
+  // The frame to run the contours in: the face's own normal, and the longest
+  // direction across it for the first axis.
+  const n = norm3(face.normal) || [0, 0, 1];
+  const seen = [...new Set(members.flat())];
+  const centre = seen.reduce((acc, v) => add3(acc, P[v]), [0, 0, 0]).map((c) => c / seen.length);
+  let u = null;
+  let far = 0;
+  for (const v of seen) {
+    const d = sub3(P[v], centre);
+    const flat = sub3(d, mul3(n, d[0] * n[0] + d[1] * n[1] + d[2] * n[2]));
+    const l = Math.hypot(flat[0], flat[1], flat[2]);
+    if (l > far) {
+      far = l;
+      u = norm3(flat);
+    }
+  }
+  if (!u) return [];
+  const w = norm3(cross3(n, u)) || [0, 1, 0];
+
+  const runs = [];
+  for (const axis of [u, w]) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of seen) {
+      const t = dot3(sub3(P[v], centre), axis);
+      lo = Math.min(lo, t);
+      hi = Math.max(hi, t);
+    }
+    if (!(hi > lo + 1e-9)) continue;
+    for (let i = 1; i < count; i++) {
+      const at = lo + ((hi - lo) * i) / count;
+      const segs = [];
+      for (const t of members) {
+        const seg = sliceTriangle(P, t, centre, axis, at);
+        if (seg) segs.push(seg);
+      }
+      if (segs.length) runs.push(...joinSegments(segs));
+    }
+  }
+  return runs;
+}
+
+/** Where a plane crosses one triangle, as a segment. */
+function sliceTriangle(P, t, origin, axis, at) {
+  const d = t.map((v) => dot3(sub3(P[v], origin), axis) - at);
+  const hits = [];
+  for (let i = 0; i < 3; i++) {
+    const j = (i + 1) % 3;
+    if ((d[i] > 0 && d[j] < 0) || (d[i] < 0 && d[j] > 0)) {
+      const f = d[i] / (d[i] - d[j]);
+      hits.push(add3(P[t[i]], mul3(sub3(P[t[j]], P[t[i]]), f)));
+    } else if (Math.abs(d[i]) < 1e-12) {
+      hits.push(P[t[i]].slice());
+    }
+  }
+  return hits.length >= 2 ? [hits[0], hits[1]] : null;
+}
+
+/** Loose segments walked into runs, so a contour draws as one line. */
+function joinSegments(segs) {
+  const key = (p) => `${p[0].toFixed(4)}_${p[1].toFixed(4)}_${p[2].toFixed(4)}`;
+  const left = segs.slice();
+  const runs = [];
+  while (left.length) {
+    const run = left.pop();
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (let i = left.length - 1; i >= 0; i--) {
+        const seg = left[i];
+        if (key(seg[0]) === key(run[run.length - 1])) run.push(seg[1]);
+        else if (key(seg[1]) === key(run[run.length - 1])) run.push(seg[0]);
+        else if (key(seg[1]) === key(run[0])) run.unshift(seg[0]);
+        else if (key(seg[0]) === key(run[0])) run.unshift(seg[1]);
+        else continue;
+        left.splice(i, 1);
+        grew = true;
+      }
+    }
+    if (run.length > 1) runs.push(run);
+  }
+  return runs;
+}
+
+/* ------------------------------------------------------------------ */
+/* Validate                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What is wrong with a body, said plainly.
+ *
+ * Not a proof that it is right. A kernel that will boolean a shape at all has
+ * already settled the questions a validity check exists to ask in most
+ * packages, so what is worth reporting here is different: the things that build
+ * cleanly and then go wrong later, at the slicer or on the bed.
+ *
+ * A sliver face is the one that costs. It survives every check, exports fine,
+ * and comes out of a slicer as a wall a nozzle cannot lay down.
+ */
+export function validateBodies(entries) {
+  const out = [];
+  for (const entry of entries) {
+    const { name, mesh, topo, solid, sheet } = entry;
+    const notes = [];
+    const size = topo?.extent || 1;
+
+    if (sheet) {
+      const rim = (topo?.edges || []).filter((e) => e.boundary).length;
+      // Not a fault. A surface is open by nature, and saying so is the useful
+      // part: a surface cannot be printed until it is thickened or stitched.
+      notes.push({
+        level: 'note',
+        text: rim
+          ? `An open surface with ${rim} edge${rim === 1 ? '' : 's'} of rim. It has no inside, so it cannot be printed until it is thickened or stitched.`
+          : 'A closed surface. Stitch turns it into a solid.'
+      });
+    } else if (solid) {
+      const props = solid.volume ? { volume: solid.volume(), area: solid.surfaceArea?.() } : null;
+      if (props && !(props.volume > 0)) {
+        notes.push({ level: 'bad', text: 'No volume at all: this is not a solid.' });
+      }
+      if (topo?.open) {
+        notes.push({
+          level: 'bad',
+          text: 'The shell is not closed. Exporting this gives a mesh a slicer will argue with.'
+        });
+      }
+    }
+
+    // Faces so small nothing downstream can hold them: a wall thinner than a
+    // nozzle, a facet smaller than a slicer's tolerance.
+    const tiny = (topo?.faces || []).filter((f) => f.area > 0 && f.area < size * size * 1e-6);
+    if (tiny.length) {
+      notes.push({
+        level: 'warn',
+        text: `${tiny.length} face${tiny.length === 1 ? '' : 's'} smaller than a thousandth of the part across. These survive every check and come out of a slicer as walls a nozzle cannot lay down.`
+      });
+    }
+
+    // Edges shorter than the tolerance anything downstream works to.
+    const short = (topo?.edges || []).filter((e) => {
+      const pts = e.points || [];
+      if (pts.length < 2) return false;
+      let len = 0;
+      for (let i = 1; i < pts.length; i++) {
+        len += Math.hypot(
+          pts[i][0] - pts[i - 1][0],
+          pts[i][1] - pts[i - 1][1],
+          pts[i][2] - pts[i - 1][2]
+        );
+      }
+      return len < size * 1e-5;
+    });
+    if (short.length) {
+      notes.push({
+        level: 'warn',
+        text: `${short.length} edge${short.length === 1 ? '' : 's'} shorter than a hundred-thousandth of the part. Usually the leftovers of a boolean that nearly missed.`
+      });
+    }
+
+    const degenerate = countDegenerate(mesh);
+    if (degenerate) {
+      notes.push({
+        level: 'warn',
+        text: `${degenerate} triangle${degenerate === 1 ? '' : 's'} with no area. Harmless here and rejected by some other packages.`
+      });
+    }
+
+    if (!notes.length) notes.push({ level: 'ok', text: 'Nothing to report.' });
+    out.push({ name, notes });
+  }
+  return out;
+}
+
+function countDegenerate(mesh) {
+  if (!mesh?.triVerts) return 0;
+  const P = pointsOf(mesh);
+  let n = 0;
+  for (let i = 0; i < mesh.triVerts.length; i += 3) {
+    const a = P[mesh.triVerts[i]];
+    const b = P[mesh.triVerts[i + 1]];
+    const c = P[mesh.triVerts[i + 2]];
+    const u = sub3(b, a);
+    const v = sub3(c, a);
+    const x = cross3(u, v);
+    if (Math.hypot(x[0], x[1], x[2]) < 1e-12) n++;
+  }
+  return n;
+}
+
+/* ---------------------------------------------------------- small helpers */
+
+function pointsOf(mesh) {
+  const stride = mesh.numProp;
+  const out = [];
+  for (let i = 0; i < mesh.vertProperties.length; i += stride) {
+    out.push([mesh.vertProperties[i], mesh.vertProperties[i + 1], mesh.vertProperties[i + 2]]);
+  }
+  return out;
+}
+
+function trisOf(mesh) {
+  const out = [];
+  for (let i = 0; i < mesh.triVerts.length; i += 3) {
+    out.push([mesh.triVerts[i], mesh.triVerts[i + 1], mesh.triVerts[i + 2]]);
+  }
+  return out;
+}
+
+function triNormals(P, tris) {
+  return tris.map(([a, b, c]) => {
+    const x = cross3(sub3(P[b], P[a]), sub3(P[c], P[a]));
+    // Area weighted on purpose: a sliver triangle should not swing the normal
+    // at a vertex as far as the big one beside it.
+    return x;
+  });
+}
+
+const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul3 = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a, b) => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0]
+];
+function norm3(a) {
+  if (!a) return null;
+  const l = Math.hypot(a[0], a[1], a[2]);
+  return l > 1e-12 ? [a[0] / l, a[1] / l, a[2] / l] : null;
+}

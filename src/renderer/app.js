@@ -33,6 +33,7 @@ import {
   meshOf,
   isSheet,
   normalizeSheetRules,
+  normalizeFlange,
   topologyOptions,
   RebuildCache,
   uid
@@ -88,6 +89,9 @@ import {
   curvatureColours,
   minimumRadiusColours,
   zebraColours,
+  surfaceContinuity,
+  isoLines,
+  validateBodies,
   accessibilityColours,
   curvatureComb,
   designAdvice,
@@ -336,7 +340,11 @@ function rebuildAll() {
         overlayMesh: b.overlayMesh || null,
         // A colour set by hand, which is about how it looks and not about what
         // it is made of, so it lives on the document rather than the timeline.
-        appearance: state.doc.appearance?.byBody?.[b.id] || null,
+        // Colour by component or by feature is a reading, not a change, so it
+        // paints over whatever the body's real colour is and leaves the
+        // document alone. Clear Analysis puts it back.
+        appearance:
+          state.colourBy?.of.get(b.id) ?? (state.doc.appearance?.byBody?.[b.id] || null),
         visible: !state.hiddenBodies.has(b.id)
       });
     } catch (err) {
@@ -2370,6 +2378,21 @@ async function runCommand(cmd) {
     case 'interference':
       startInterference();
       break;
+    case 'surfaceContinuity':
+      cmdSurfaceContinuity();
+      break;
+    case 'isocurveAnalysis':
+      cmdIsocurveAnalysis();
+      break;
+    case 'validate':
+      cmdValidate();
+      break;
+    case 'colourByComponent':
+      cmdColourBy('component');
+      break;
+    case 'colourByFeature':
+      cmdColourBy('feature');
+      break;
     case 'draftAnalysis':
       startDraftAnalysis();
       break;
@@ -2405,6 +2428,9 @@ async function runCommand(cmd) {
       break;
     case 'newComponent':
       addComponent();
+      break;
+    case 'groundToParent':
+      cmdGroundToParent();
       break;
     case 'newJoint':
       startJoint();
@@ -3745,7 +3771,9 @@ function renderTree() {
   if (state.doc.components.length) {
     addNode('Components', { head: true });
     for (const c of state.doc.components) {
-      addNode(`${c.name}${c.grounded ? ' (grounded)' : ''}`, {
+      const heldTo =
+        c.groundedTo && (state.doc.components || []).find((o) => o.id === c.groundedTo);
+      addNode(`${c.name}${c.grounded ? ' (grounded)' : heldTo ? ` (held to ${heldTo.name})` : ''}`, {
         child: true,
         selected: state.activeComponent === c.id,
         onClick: () => {
@@ -4066,6 +4094,7 @@ function objectRefText(ref) {
  */
 function extrudeFields() {
   const isThin = (f) => f.kind === 'thin';
+  const fromCurves = (f) => f.kind === 'thin' && !!f.fromCurves;
   const twoSides = (f) => f.direction === 'two';
   const notSymmetric = (f) => f.direction !== 'symmetric';
 
@@ -4089,6 +4118,41 @@ function extrudeFields() {
         ['solid', 'Extrude'],
         ['thin', 'Thin extrude']
       ]
+    },
+    {
+      /*
+       * A thin extrude can start from open curves instead of a closed profile.
+       *
+       * Most sheet-like parts are drawn as a line, not as a long thin closed
+       * loop, and drawing the loop is the workaround this removes. A closed
+       * profile has an inside to offset a wall from; an open run has none, so
+       * the wall is the curve itself given a thickness. Two constructions, and
+       * the curves are only offered where they mean something.
+       */
+      key: 'fromCurves',
+      label: 'Build the wall from',
+      type: 'select',
+      showIf: isThin,
+      options: [
+        [false, 'The profile picked above'],
+        [true, 'The open curves in that sketch']
+      ],
+      get: (f) => !!f.fromCurves,
+      set: (f, v) => {
+        f.fromCurves = v === true || v === 'true';
+      }
+    },
+    {
+      // Fusion's Tangent Chain. On, an outline drawn as line, arc, line, arc is
+      // one wall; off, it is four, each of which can be a different height.
+      key: 'tangentChain',
+      label: 'Carry the run through corners',
+      type: 'bool',
+      showIf: fromCurves,
+      get: (f) => f.tangentChain !== false,
+      set: (f, v) => {
+        f.tangentChain = !!v;
+      }
     },
     {
       key: 'start',
@@ -7053,6 +7117,7 @@ const RIBBON_MENUS = {
   ],
   assemble: [
     ['newComponent', 'New Component'],
+    ['groundToParent', 'Ground To Parent'],
     ['newJoint', 'Joint'],
     ['asBuiltJoint', 'As-built Joint'],
     ['jointOrigin', 'Joint Origin'],
@@ -7078,6 +7143,11 @@ const RIBBON_MENUS = {
     ['environmentMap', 'Environment Map'],
     ['accessibility', 'Accessibility'],
     ['designAdvice', 'Design Advice'],
+    ['surfaceContinuity', 'Surface Continuity'],
+    ['isocurveAnalysis', 'Isocurve Analysis'],
+    ['validate', 'Validate'],
+    ['colourByComponent', 'Colour by component'],
+    ['colourByFeature', 'Colour by feature'],
     ['clearAnalysis', 'Clear Analysis']
   ],
   project: [
@@ -8571,6 +8641,27 @@ function renderAnalysisOverlay() {
     const c = g.children.pop();
     c.geometry?.dispose();
     c.material?.dispose();
+  }
+
+  // Isocurves and the edges a continuity reading was taken across, drawn the
+  // same way the comb is: overlay lines that own nothing in the document.
+  for (const run of state.isoRuns || []) {
+    if (run.length < 2) continue;
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(run.map((p) => new THREE.Vector3(p[0], p[1], p[2]))),
+      new THREE.LineBasicMaterial({ color: 0x2f7fbf, depthTest: false })
+    );
+    line.renderOrder = 8;
+    g.add(line);
+  }
+  for (const run of state.continuityMarks || []) {
+    if (run.length < 2) continue;
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(run.map((p) => new THREE.Vector3(p[0], p[1], p[2]))),
+      new THREE.LineBasicMaterial({ color: 0xd84b1e, depthTest: false })
+    );
+    line.renderOrder = 9;
+    g.add(line);
   }
 
   if (state.comb?.length) {
@@ -12021,6 +12112,194 @@ function startDraftAnalysis() {
  * surface has to flow, minimum radius and accessibility are for one that has to
  * be cut or printed.
  */
+/**
+ * How smoothly the faces either side of an edge meet.
+ *
+ * Zebra says there is something wrong; this says by how much. The two belong
+ * beside each other and neither replaces the other: a stripe that kinks is
+ * visible at a glance and tells you nothing about whether the kink is a tenth
+ * of a degree or five.
+ */
+function cmdSurfaceContinuity() {
+  if (state.sketcher.active) finishSketch();
+  if (!state.selection.edges.size) {
+    setStatus('Select the edges between the faces to measure across.');
+    return;
+  }
+
+  const lines = [];
+  const marks = [];
+  for (const key of state.selection.edges) {
+    const [bodyId, index] = String(key).split(':');
+    const rec = (state.records || []).find((r) => r.id === bodyId);
+    const edge = rec?.topology?.edges[Number(index)];
+    if (!edge || !rec.mesh) continue;
+    const [got] = surfaceContinuity(rec.mesh, rec.topology, [edge]);
+    if (!got) continue;
+    lines.push(
+      `${got.verdict}. Off tangent by ${got.angle.toFixed(2)} degrees, curvature step ${(got.curvature * 100).toFixed(0)} per cent.`
+    );
+    marks.push(edge.points);
+  }
+
+  if (!lines.length) {
+    setStatus('Those edges are rims rather than joins, so there is nothing on the far side to compare.');
+    return;
+  }
+  state.continuityMarks = marks;
+  renderAnalysis();
+  showReport('Surface Continuity', lines, [
+    'G0 means the faces touch. G1 means they leave the edge in the same direction, so there is no crease to feel.',
+    'G2 means they leave it curving by the same amount, so there is no band of different shading either. That is the one only a reflection finds, which is what zebra is for.'
+  ]);
+}
+
+/**
+ * Evenly spaced lines across a face, for reading its shape.
+ *
+ * They bunch up where a surface is tight and spread where it is slack, and a
+ * line that wobbles is a surface that wobbles. On a face of a solid there is no
+ * real u and v to follow, so these are contours in the face's own frame, which
+ * is a stand-in and is said to be one.
+ */
+function cmdIsocurveAnalysis() {
+  if (state.sketcher.active) finishSketch();
+  const faces = selectedFaceRefs();
+  if (!faces.size) {
+    setStatus('Select the faces to draw isocurves on.');
+    return;
+  }
+  const runs = [];
+  for (const [bodyId, ids] of faces) {
+    const rec = (state.records || []).find((r) => r.id === bodyId);
+    if (!rec?.topology) continue;
+    for (const id of ids) {
+      const face = rec.topology.faces[id];
+      if (face) runs.push(...isoLines(rec.mesh, face, 8));
+    }
+  }
+  if (!runs.length) {
+    setStatus('Nothing could be drawn on those faces.');
+    return;
+  }
+  state.isoRuns = runs;
+  renderAnalysis();
+  setStatus(`${runs.length} isocurves drawn. Clear Analysis puts them away.`);
+}
+
+/**
+ * What is wrong with the bodies, said plainly.
+ *
+ * Not a proof that they are right. The kernel has already settled most of what
+ * a validity check asks elsewhere, so what is worth reporting is what builds
+ * cleanly and goes wrong later: at the slicer, or on the bed.
+ */
+function cmdValidate() {
+  if (state.sketcher.active) finishSketch();
+  const records = (state.records || []).filter((r) => !r.isForm);
+  if (!records.length) {
+    setStatus('Nothing to validate yet.');
+    return;
+  }
+  const bodies = state.result?.bodies || [];
+  const found = validateBodies(
+    records.map((r) => ({
+      name: r.name,
+      mesh: r.mesh,
+      topo: r.topology,
+      sheet: r.sheet,
+      solid: bodies.find((b) => b.id === r.id)?.solid || null
+    }))
+  );
+
+  const lines = [];
+  for (const body of found) {
+    lines.push(`${body.name}`);
+    for (const note of body.notes) {
+      const mark = { bad: '!', warn: '?', note: '-', ok: 'ok' }[note.level] || '-';
+      lines.push(`   ${mark} ${note.text}`);
+    }
+  }
+  const bad = found.filter((b) => b.notes.some((n) => n.level === 'bad')).length;
+  const warn = found.filter((b) => b.notes.some((n) => n.level === 'warn')).length;
+  showReport('Validate', lines, [
+    bad
+      ? `${bad} bod${bad === 1 ? 'y' : 'ies'} would not export cleanly.`
+      : warn
+        ? 'Nothing that stops an export, and some things worth looking at before printing.'
+        : 'Nothing to report on any of them.'
+  ]);
+}
+
+/**
+ * Colour every body by which component it belongs to, or by what made it.
+ *
+ * A display, not a change: nothing is written to the document, and Clear
+ * Analysis puts the real colours back. It is for the question "which of these
+ * is which", which on an assembly of a dozen similar brackets is the only
+ * question worth asking of a picture.
+ */
+function cmdColourBy(kind) {
+  if (state.sketcher.active) finishSketch();
+  if (!state.records?.length) {
+    setStatus('Nothing to colour yet.');
+    return;
+  }
+  const bodies = state.result?.bodies || [];
+  const groupOf = (rec) => {
+    const body = bodies.find((b) => b.id === rec.id);
+    if (kind === 'component') {
+      const comp = (state.doc.components || []).find((c) => c.id === body?.component);
+      return comp ? comp.name : 'No component';
+    }
+    const made = (state.doc.features || []).find((f) => f.id === body?.createdBy);
+    return made ? featureLabel(made) : 'Unknown';
+  };
+
+  // A colour per group, spread round the wheel so neighbours in the list are
+  // not neighbours in colour.
+  const groups = [...new Set(state.records.map(groupOf))];
+  const colours = new Map();
+  groups.forEach((g, i) => {
+    const hue = (i * 360) / Math.max(1, groups.length);
+    colours.set(g, hslNumber(hue, 45, 62));
+  });
+
+  state.colourBy = { kind, of: new Map(state.records.map((r) => [r.id, colours.get(groupOf(r))])) };
+  rebuildAll();
+  showReport(
+    kind === 'component' ? 'Colour by component' : 'Colour by feature',
+    groups.map((g) => g),
+    ['Clear Analysis puts the real colours back. Nothing has been written to the document.']
+  );
+}
+
+/** A colour from hue, saturation and lightness, as the number three wants. */
+function hslNumber(h, s, l) {
+  const c = new THREE.Color();
+  c.setHSL(((h % 360) + 360) / 360 % 1, s / 100, l / 100);
+  return c.getHex();
+}
+
+/**
+ * A reading, in a panel rather than in the status line.
+ *
+ * A line of status is the wrong shape for a list: it can hold one sentence, and
+ * these answers are one sentence per body.
+ */
+function showReport(title, lines, notes) {
+  const fields = lines.map((line, i) => ({
+    key: `__line${i}`,
+    label: '',
+    type: 'note',
+    text: line
+  }));
+  for (const note of notes || []) {
+    fields.push({ key: `__note${fields.length}`, label: '', type: 'note', text: note });
+  }
+  showInspector(title, fields, () => {});
+}
+
 function startFaceAnalysis(kind) {
   if (state.sketcher.active) finishSketch();
   if (!state.result?.bodies.length) {
@@ -12135,12 +12414,22 @@ function startCurvatureComb() {
 /** Put every analysis away and show the model as it is. */
 function clearAnalysis() {
   const had =
-    state.section || state.draft || state.massMarker || state.faceAnalysis || state.comb;
+    state.section ||
+    state.draft ||
+    state.massMarker ||
+    state.faceAnalysis ||
+    state.comb ||
+    state.isoRuns ||
+    state.continuityMarks ||
+    state.colourBy;
   state.section = null;
   state.draft = null;
   state.massMarker = null;
   state.faceAnalysis = null;
   state.comb = null;
+  state.isoRuns = null;
+  state.continuityMarks = null;
+  state.colourBy = null;
   rebuildAll();
   setStatus(had ? 'Analysis cleared.' : 'No analysis was showing.');
 }
@@ -12464,6 +12753,47 @@ function addComponent() {
   state.dirty = true;
   rebuildAll();
   setStatus(`${c.name} is now active. New features go into it.`);
+}
+
+/**
+ * Hold one component to another, rather than to the world.
+ *
+ * Fusion's Ground To Parent. Grounding in space is right for the one part
+ * everything else is built around and wrong for everything bolted to it:
+ * moving the bracket should take the plate with it, and a plate grounded in
+ * space stays where it is while the bracket walks away.
+ */
+function cmdGroundToParent() {
+  const comps = state.doc.components || [];
+  const me = comps.find((c) => c.id === state.activeComponent);
+  if (!me) {
+    setStatus('Click a component in the browser first. That is the one being held.');
+    return;
+  }
+  const others = comps.filter((c) => c.id !== me.id);
+  if (!others.length) {
+    setStatus('There is nothing else to hold it to.');
+    return;
+  }
+  promptChoice(
+    `Hold ${me.name} to`,
+    [['', 'Nothing, let it move on its own'], ...others.map((c) => [c.id, c.name])],
+    (id) => {
+      if (id === undefined) return;
+      pushUndo('ground to parent');
+      me.groundedTo = id || null;
+      // Held to something else is not held in space. Both at once is a
+      // contradiction the solver would settle silently, so it is settled here.
+      if (id) me.grounded = false;
+      state.dirty = true;
+      rebuildAll();
+      setStatus(
+        id
+          ? `${me.name} is held to ${others.find((c) => c.id === id).name}, and moves with it.`
+          : `${me.name} moves on its own again.`
+      );
+    }
+  );
 }
 
 function startJoint(opts = {}) {
@@ -15240,16 +15570,24 @@ function pickIntoEdit(hit) {
       return true;
     }
     ed.pickInto = null;
-  } else if (ed.pickInto === 'startObject' || ed.pickInto === 'toObject') {
-    const key = ed.pickInto;
-    if (hit.kind === 'plane') f[key] = { plane: hit.planeName };
+  } else if (
+    ed.pickInto === 'startObject' ||
+    ed.pickInto === 'toObject' ||
+    /^toObject:\d+$/.test(ed.pickInto || '')
+  ) {
+    // A flange's rows each run to their own object, so the answer goes into the
+    // row that asked. Everything else keeps the one field.
+    const row = /^toObject:(\d+)$/.exec(ed.pickInto || '');
+    const key = row ? 'toObject' : ed.pickInto;
+    const into = row ? (f.rows[Number(row[1])] ||= {}) : f;
+    if (hit.kind === 'plane') into[key] = { plane: hit.planeName };
     else if (hit.kind === 'face') {
       const record = (state.records || []).find((r) => r.id === hit.bodyId);
       const face = record?.topology?.faces[hit.faceId];
       if (!face) return true;
-      f[key] = { bodyId: hit.bodyId, face: faceReference(face) };
+      into[key] = { bodyId: hit.bodyId, face: faceReference(face) };
     } else if (hit.bodyId) {
-      f[key] = { bodyId: hit.bodyId };
+      into[key] = { bodyId: hit.bodyId };
     } else {
       return true;
     }
@@ -15396,20 +15734,25 @@ function pickIntoEdit(hit) {
     const at = f.tools.indexOf(hit.bodyId);
     if (at >= 0) f.tools.splice(at, 1);
     else f.tools.push(hit.bodyId);
-  } else if (ed.pickInto === 'sheetEdges') {
+  } else if (ed.pickInto === 'sheetEdges' || /^sheetEdges:\d+$/.test(ed.pickInto || '')) {
     if (hit.kind !== 'edge' || hit.edgeId === null || hit.edgeId === undefined) return true;
     const rec = (state.records || []).find((r) => r.id === hit.bodyId);
     const edge = rec?.topology?.edges[hit.edgeId];
     if (!edge) return true;
-    f.edges = f.edges || [];
+    // A flange's edges live in whichever row is armed, so that a box can have
+    // two sides at ninety and two tabs at thirty in one feature. Everything
+    // else that picks sheet edges still has the one list.
+    const row = /^sheetEdges:(\d+)$/.exec(ed.pickInto || '');
+    const into = row ? (f.rows[Number(row[1])] ||= { edges: [] }) : f;
+    into.edges = into.edges || [];
     const ref = edgeReference(edge, rec.topology);
-    const at = f.edges.findIndex(
+    const at = into.edges.findIndex(
       (e) => e.mid && ref.mid && Math.hypot(
         e.mid[0] - ref.mid[0], e.mid[1] - ref.mid[1], e.mid[2] - ref.mid[2]
       ) < 1e-6
     );
-    if (at >= 0) f.edges.splice(at, 1);
-    else f.edges.push(ref);
+    if (at >= 0) into.edges.splice(at, 1);
+    else into.edges.push(ref);
     // The part the edge belongs to is the part being worked on.
     if (!Array.isArray(f.bodies) || !f.bodies.includes(hit.bodyId)) {
       f.bodies = [hit.bodyId];
@@ -16814,23 +17157,11 @@ function cmdFlange() {
     id: uid('f'),
     type: 'flange',
     bodies: pickedSheetIds(),
-    edges,
-    angle: '90',
-    height: '20',
-    radius: '',
-    widthType: 'full',
-    width: '',
-    widthOffset: '0',
-    heightDatum: 'tangent',
-    extent: 'distance',
-    toObject: null,
-    toOffset: '0',
-    bendPosition: 'inside',
-    relief: true
+    rows: [newFlangeRow(edges)]
   };
   openFeatureEditor(feature, 'Flange', flangeFields());
   if (!edges.length) {
-    setEditPick('sheetEdges');
+    setEditPick('sheetEdges:0');
     setStatus('Click the edges to put a flange on.');
   }
 }
@@ -17186,110 +17517,175 @@ function sheetBodyField(label = 'Parts') {
   };
 }
 
+/** One row of a flange: some edges, and everything that is true of them. */
+function newFlangeRow(edges) {
+  return {
+    edges: edges || [],
+    angle: '90',
+    height: '20',
+    radius: '',
+    widthType: 'full',
+    width: '',
+    widthOffset: '0',
+    heightDatum: 'tangent',
+    extent: 'distance',
+    toObject: null,
+    toOffset: '0',
+    bendPosition: 'inside',
+    relief: true
+  };
+}
+
+/**
+ * The Flange dialog, a row at a time.
+ *
+ * Fusion's is a table and this is why: a box is four flanges off one panel and
+ * they are rarely all the same. Two sides at ninety and two tabs at thirty used
+ * to be three features here, and three features is three places to change the
+ * bend radius when the material does.
+ *
+ * The sheet rule and its overrides stay at the bottom, outside the rows,
+ * because they are properties of the material and the material is not
+ * different on one edge of a part than on another.
+ */
 function flangeFields() {
-  return [
-    {
-      key: '__edges',
-      label: 'Edges',
-      type: 'pick',
-      pick: 'sheetEdges',
-      summary: (f) => countOf(f.edges, 'edge'),
-      clear: (f) => {
-        f.edges = [];
-      }
-    },
-    {
-      // Fusion's Flange Width Type. Full Edge is what a flange has always been
-      // here; the others take a piece of the edge, which is how a tab is made
-      // without cutting the panel first.
-      key: 'widthType',
-      label: 'Width',
-      type: 'select',
-      options: [
-        ['full', 'The full edge'],
-        ['symmetric', 'Symmetric about the middle'],
-        ['twoSides', 'So much either side of a point'],
-        ['offsets', 'Held off both ends']
-      ]
-    },
-    {
-      key: 'width',
-      label: (f) => (f.widthType === 'offsets' ? 'Held off the far end by' : 'Width'),
-      type: 'expr',
-      showIf: (f) => (f.widthType || 'full') !== 'full'
-    },
-    {
-      key: 'widthOffset',
-      label: (f) => (f.widthType === 'offsets' ? 'Held off the near end by' : 'Centred at'),
-      type: 'expr',
-      showIf: (f) => ['twoSides', 'offsets'].includes(f.widthType)
-    },
-    {
-      // Fusion's Extent Type. To Object is how a flange lands on a face of the
-      // part beside it and stays there when that part moves, instead of being
-      // a number that was right once.
-      key: 'extent',
-      label: 'Extent',
-      type: 'select',
-      options: [
-        ['distance', 'A stated height'],
-        ['object', 'To a face or a plane']
-      ]
-    },
-    {
-      key: '__toObject',
-      label: 'Run it to',
-      type: 'pick',
-      pick: 'toObject',
-      showIf: (f) => f.extent === 'object',
-      summary: (f) => objectRefText(f.toObject),
-      clear: (f) => {
-        f.toObject = null;
-      }
-    },
-    {
-      key: 'toOffset',
-      label: 'Stopping short by',
-      type: 'expr',
-      showIf: (f) => f.extent === 'object'
-    },
-    {
-      key: 'height',
-      label: 'Height',
-      type: 'expr',
-      showIf: (f) => f.extent !== 'object'
-    },
-    {
-      // Where that height is measured from. A bracket is dimensioned to its
-      // outside, not to a tangent point nobody can put a rule on.
-      key: 'heightDatum',
-      showIf: (f) => f.extent !== 'object',
-      label: 'Measured from',
-      type: 'select',
-      options: [
-        ['tangent', 'The end of the bend'],
-        ['inner', 'The inner face'],
-        ['outer', 'The outer face']
-      ]
-    },
-    { key: 'angle', label: 'Angle', type: 'expr' },
-    { key: 'radius', label: 'Bend radius', type: 'expr' },
-    sheetRuleField(),
-    ...sheetOverrideFields(),
-    {
-      key: 'bendPosition',
-      label: 'Bend position',
-      type: 'select',
-      options: SM.BEND_POSITIONS
-    },
-    { key: 'relief', label: 'Bend relief', type: 'bool' },
-    {
-      key: '__note',
-      label: '',
-      type: 'note',
-      text: 'Bend radius blank means the rule. Bend position says what lines up with the edge you picked: the flange inside face, its outside face, the start of the bend, or the point the arc is tangent at.'
+  return {
+    build(feature) {
+      normalizeFlange(feature);
+      const out = [];
+      feature.rows.forEach((row, i) => {
+        const n = i + 1;
+        const at = (f) => f.rows[i] || {};
+        const many = feature.rows.length > 1;
+        const label = (text) => (many ? `Row ${n} ${text}` : text.charAt(0).toUpperCase() + text.slice(1));
+
+        out.push({
+          key: `__edges${i}`,
+          label: label('edges'),
+          type: 'pick',
+          pick: `sheetEdges:${i}`,
+          summary: (f) => countOf(at(f).edges, 'edge'),
+          clear: (f) => {
+            f.rows[i].edges = [];
+          }
+        });
+        out.push({
+          // Fusion's Flange Width Type. Full Edge is what a flange has always
+          // been here; the others take a piece of the edge, which is how a tab
+          // is made without cutting the panel first.
+          key: `rows.${i}.widthType`,
+          label: label('width'),
+          type: 'select',
+          options: [
+            ['full', 'The full edge'],
+            ['symmetric', 'Symmetric about the middle'],
+            ['twoSides', 'So much either side of a point'],
+            ['offsets', 'Held off both ends']
+          ]
+        });
+        out.push({
+          key: `rows.${i}.width`,
+          label: (f) => label(at(f).widthType === 'offsets' ? 'held off the far end by' : 'width'),
+          type: 'expr',
+          showIf: (f) => (at(f).widthType || 'full') !== 'full'
+        });
+        out.push({
+          key: `rows.${i}.widthOffset`,
+          label: (f) => label(at(f).widthType === 'offsets' ? 'held off the near end by' : 'centred at'),
+          type: 'expr',
+          showIf: (f) => ['twoSides', 'offsets'].includes(at(f).widthType)
+        });
+        out.push({
+          // Fusion's Extent Type. To Object is how a flange lands on a face of
+          // the part beside it and stays there when that part moves, instead of
+          // being a number that was right once.
+          key: `rows.${i}.extent`,
+          label: label('extent'),
+          type: 'select',
+          options: [
+            ['distance', 'A stated height'],
+            ['object', 'To a face or a plane']
+          ]
+        });
+        out.push({
+          key: `__toObject${i}`,
+          label: label('run it to'),
+          type: 'pick',
+          pick: `toObject:${i}`,
+          showIf: (f) => at(f).extent === 'object',
+          summary: (f) => objectRefText(at(f).toObject),
+          clear: (f) => {
+            f.rows[i].toObject = null;
+          }
+        });
+        out.push({
+          key: `rows.${i}.toOffset`,
+          label: label('stopping short by'),
+          type: 'expr',
+          showIf: (f) => at(f).extent === 'object'
+        });
+        out.push({
+          key: `rows.${i}.height`,
+          label: label('height'),
+          type: 'expr',
+          showIf: (f) => at(f).extent !== 'object'
+        });
+        out.push({
+          // Where that height is measured from. A bracket is dimensioned to its
+          // outside, not to a tangent point nobody can put a rule on.
+          key: `rows.${i}.heightDatum`,
+          label: label('measured from'),
+          type: 'select',
+          showIf: (f) => at(f).extent !== 'object',
+          options: [
+            ['tangent', 'The end of the bend'],
+            ['inner', 'The inner face'],
+            ['outer', 'The outer face']
+          ]
+        });
+        out.push({ key: `rows.${i}.angle`, label: label('angle'), type: 'expr' });
+        out.push({ key: `rows.${i}.radius`, label: label('bend radius'), type: 'expr' });
+        out.push({
+          key: `rows.${i}.bendPosition`,
+          label: label('bend position'),
+          type: 'select',
+          options: SM.BEND_POSITIONS
+        });
+        out.push({ key: `rows.${i}.relief`, label: label('bend relief'), type: 'bool' });
+
+        if (many) {
+          out.push({
+            key: `__dropRow${i}`,
+            label: `Remove row ${n}`,
+            type: 'action',
+            run: (f) => {
+              f.rows.splice(i, 1);
+            }
+          });
+        }
+      });
+
+      out.push({
+        key: '__addRow',
+        label: 'Another set of edges',
+        type: 'action',
+        run: (f) => {
+          f.rows.push(newFlangeRow([]));
+          setEditPick(`sheetEdges:${f.rows.length - 1}`);
+        }
+      });
+
+      out.push(sheetRuleField());
+      out.push(...sheetOverrideFields());
+      out.push({
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: 'Each set of edges carries its own angle, height and bend. The material rule below is shared, because a part is not made of two materials. Bend radius blank means the rule. Bend position says what lines up with the edge you picked: the flange inside face, its outside face, the start of the bend, or the point the arc is tangent at.'
+      });
+      return out;
     }
-  ];
+  };
 }
 
 function contourFlangeFields() {
