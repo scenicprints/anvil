@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('anvil', {
   importText: (ext, label) => ipcRenderer.invoke('import:text', { ext, label }),
   importVector: (kind) => ipcRenderer.invoke('import:vector', kind),
   importBinary: (kind) => ipcRenderer.invoke('import:binary', kind),
+  readFileBytes: (file) => ipcRenderer.invoke('import:binaryPath', file),
   changedOnDisk: () => ipcRenderer.invoke('doc:changedOnDisk'),
   autosave: (doc) => ipcRenderer.invoke('doc:autosave', doc),
   recoveryInterval: () => ipcRenderer.invoke('doc:recoveryInterval'),

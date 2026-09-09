@@ -19,8 +19,14 @@ import {
   parseSTL,
   parseOBJ,
   parse3MF,
+  parsePLY,
+  parseOFF,
+  parseGLTF,
+  parseDAE,
+  unzip,
   meshReaderFor
 } from './meshutil.js';
+import { readASM } from './asmread.js';
 import {
   newDocument,
   newSketch,
@@ -17846,6 +17852,109 @@ function startMeshFeature(type, title, fields, extra = {}) {
  * a part you must not print, and the count is what tells you whether what you
  * have is usable.
  */
+/** Several meshes joined into one, for the readers that hand back a scene. */
+function meshesToOne(list) {
+  const verts = [];
+  const tris = [];
+  for (const m of list) {
+    const base = verts.length / 3;
+    for (const v of m.verts) verts.push(v);
+    for (const t of m.tris) tris.push(base + t);
+  }
+  return {
+    numProp: 3,
+    vertProperties: new Float32Array(verts),
+    triVerts: new Uint32Array(tris)
+  };
+}
+
+/**
+ * Open a Fusion archive.
+ *
+ * An `.f3d` is a zip, and the geometry inside it is Autodesk ShapeManager: a
+ * fork of ACIS, with the same entity model and no published specification. What
+ * comes out is what can be read of it, and what cannot is named rather than
+ * quietly dropped, because a part missing a face is a part you must not print.
+ *
+ * Two things about the result are worth knowing before it lands, so both are
+ * said. Sculpted surfaces are not read; planes, cylinders, cones, spheres and
+ * tori are. And an archive holds the timeline rather than only its answer, so
+ * more bodies come out than the design has, even after the ones that are only
+ * a step along the way have been dropped.
+ */
+async function insertF3D(name, bytes) {
+  let files;
+  try {
+    files = await unzip(bytes);
+  } catch (err) {
+    setStatus(`That does not open as a Fusion archive: ${err.message}`);
+    return;
+  }
+  const blobs = Object.keys(files).filter((n) => /\.smb$/i.test(n));
+  if (!blobs.length) {
+    setStatus('There is no geometry in that archive. A Fusion file with no bodies in it looks like this.');
+    return;
+  }
+
+  const bodies = [];
+  let faces = 0;
+  let unreadFaces = 0;
+  const unread = new Set();
+  for (const blob of blobs) {
+    let out;
+    try {
+      out = readASM(files[blob]);
+    } catch (err) {
+      setStatus(`That archive could not be read: ${err.message}`);
+      return;
+    }
+    faces += out.faces;
+    unreadFaces += out.unreadFaces;
+    for (const u of out.unread) unread.add(u);
+    bodies.push(...out.bodies);
+  }
+
+  if (!bodies.length) {
+    setStatus(
+      unread.size
+        ? `Nothing in that archive could be read. It is built from ${[...unread].join(' and ')}, which this does not read yet. Exporting a STEP from Fusion is the way in for now.`
+        : 'Nothing in that archive could be read.'
+    );
+    return;
+  }
+
+  // Biggest first, because after an archive's history has been sifted the ones
+  // worth keeping are at the top and the offcuts are at the bottom.
+  bodies.sort((a, b) => b.mesh.triVerts.length - a.mesh.triVerts.length);
+
+  pushUndo('open fusion archive');
+  const stem = name.replace(/\.[^.]+$/, '');
+  bodies.forEach((body, i) => {
+    const key = uid('m');
+    state.doc.meshData[key] = {
+      verts: Array.from(body.mesh.vertProperties),
+      tris: Array.from(body.mesh.triVerts)
+    };
+    insertFeature({
+      id: uid('f'),
+      type: 'insertMesh',
+      data: key,
+      label: bodies.length > 1 ? `${stem} ${i + 1}` : stem,
+      scale: '1',
+      at: [0, 0, 0]
+    });
+  });
+  state.dirty = true;
+  rebuildAll();
+
+  const missed = unreadFaces
+    ? `, and ${unreadFaces} face${unreadFaces === 1 ? '' : 's'} that could not be (${[...unread].join(', ')})`
+    : '';
+  setStatus(
+    `${bodies.length} bod${bodies.length === 1 ? 'y' : 'ies'} from ${faces} face${faces === 1 ? '' : 's'}${missed}. An archive holds the timeline, so some of these are earlier states.`
+  );
+}
+
 function insertSTEP(name, bytes) {
   let out;
   try {
@@ -17914,10 +18023,31 @@ async function cmdInsertMesh() {
   }
 
   const kind = meshReaderFor(name);
+
+  // A Fusion archive is not a mesh file either. It carries the surfaces, the
+  // same as a STEP does, so it comes in as bodies rather than as triangles
+  // somebody else chose for us.
+  if (kind === 'f3d') {
+    await insertF3D(name, bytes);
+    return;
+  }
+
+  /*
+   * The rest are meshes, and several of them hold more than one.
+   *
+   * A part sent as a GLB or a DAE usually arrives as a scene: a handful of
+   * meshes with names, not one lump of triangles. They come in as separate
+   * bodies, which is what they are, rather than being welded into one thing
+   * that cannot be taken apart again.
+   */
   let mesh;
   try {
     if (kind === 'obj') mesh = parseOBJ(new TextDecoder().decode(bytes));
     else if (kind === '3mf') mesh = await parse3MF(bytes);
+    else if (kind === 'ply') mesh = meshesToOne(parsePLY(bytes));
+    else if (kind === 'off') mesh = meshesToOne(parseOFF(new TextDecoder().decode(bytes)));
+    else if (kind === 'gltf') mesh = meshesToOne(await parseGLTF(bytes));
+    else if (kind === 'dae') mesh = meshesToOne(parseDAE(new TextDecoder().decode(bytes)));
     else mesh = parseSTL(bytes);
   } catch (err) {
     setStatus(`Could not read that ${kind ? kind.toUpperCase() : 'file'}: ${err.message}`);
@@ -22666,6 +22796,11 @@ window.anvilDev = {
   // in before anything touches it. A probe that assigns raw JSON straight into
   // state gets a rebuild that fails on a field nobody wrote.
   migrate,
+  // The archive readers, so a probe can drive them against real files rather
+  // than against a synthetic one that would only agree with my own guesses.
+  mesh: { unzip },
+  asm: { readASM },
+  insertF3D,
   // The parameter file readers, so a probe can put a table out and read it back
   // without going through a save dialog it cannot answer.
   expr: { parametersToCsv, parametersFromCsv },

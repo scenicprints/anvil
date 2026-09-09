@@ -676,12 +676,306 @@ async function inflateRaw(raw) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+/* ------------------------------------------------------------------ */
+/* More ways in                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * PLY, in both of its forms.
+ *
+ * The header is always text and says which. Scanners write PLY more than
+ * anything else does, which is why it is worth having: a scan of a part you are
+ * fitting something to arrives as a PLY far more often than as an STL.
+ */
+export function parsePLY(bytes) {
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const head = new TextDecoder('latin1').decode(buf.subarray(0, Math.min(buf.length, 65536)));
+  const endAt = head.indexOf('end_header');
+  if (!head.startsWith('ply') || endAt < 0) throw new Error('That is not a PLY file');
+  const lines = head.slice(0, endAt).split(/\r?\n/);
+  const dataAt = endAt + head.slice(endAt).indexOf('\n') + 1;
+
+  let format = 'ascii';
+  const elements = [];
+  for (const line of lines) {
+    const bits = line.trim().split(/\s+/);
+    if (bits[0] === 'format') format = bits[1];
+    else if (bits[0] === 'element') elements.push({ name: bits[1], count: Number(bits[2]), props: [] });
+    else if (bits[0] === 'property' && elements.length) {
+      const e = elements[elements.length - 1];
+      if (bits[1] === 'list') e.props.push({ list: true, countType: bits[2], type: bits[3], name: bits[4] });
+      else e.props.push({ list: false, type: bits[1], name: bits[2] });
+    }
+  }
+
+  const verts = [];
+  const tris = [];
+
+  if (format === 'ascii') {
+    const text = new TextDecoder().decode(buf.subarray(dataAt));
+    const rows = text.split(/\r?\n/).filter((l) => l.trim().length);
+    let at = 0;
+    for (const el of elements) {
+      for (let i = 0; i < el.count; i++, at++) {
+        const nums = (rows[at] || '').trim().split(/\s+/).map(Number);
+        if (el.name === 'vertex') verts.push(nums[0], nums[1], nums[2]);
+        else if (el.name === 'face') fanInto(tris, nums.slice(1, 1 + nums[0]));
+      }
+    }
+  } else {
+    const little = format !== 'binary_big_endian';
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let at = dataAt;
+    const sizeOf = { char: 1, uchar: 1, int8: 1, uint8: 1, short: 2, ushort: 2, int16: 2, uint16: 2, int: 4, uint: 4, int32: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
+    const read = (type) => {
+      const n = sizeOf[type] || 4;
+      let v = 0;
+      if (type === 'float' || type === 'float32') v = view.getFloat32(at, little);
+      else if (type === 'double' || type === 'float64') v = view.getFloat64(at, little);
+      else if (n === 1) v = view.getUint8(at);
+      else if (n === 2) v = view.getUint16(at, little);
+      else v = view.getUint32(at, little);
+      at += n;
+      return v;
+    };
+    for (const el of elements) {
+      for (let i = 0; i < el.count; i++) {
+        const row = {};
+        let list = null;
+        for (const prop of el.props) {
+          if (prop.list) {
+            const n = read(prop.countType);
+            list = [];
+            for (let k = 0; k < n; k++) list.push(read(prop.type));
+          } else row[prop.name] = read(prop.type);
+        }
+        if (el.name === 'vertex') verts.push(row.x, row.y, row.z);
+        else if (el.name === 'face' && list) fanInto(tris, list);
+      }
+    }
+  }
+
+  if (!tris.length) throw new Error('That PLY has no faces in it');
+  return [{ verts, tris }];
+}
+
+/** A polygon of any number of corners, as triangles from its first one. */
+function fanInto(tris, idx) {
+  for (let i = 1; i + 1 < idx.length; i++) tris.push(idx[0], idx[i], idx[i + 1]);
+}
+
+/**
+ * OFF, which is about as simple as a mesh file gets.
+ *
+ * Worth reading because it costs twenty lines and because academic and mesh
+ * processing tools still hand it out.
+ */
+export function parseOFF(text) {
+  const rows = String(text)
+    .split(/\r?\n/)
+    .map((l) => l.replace(/#.*$/, '').trim())
+    .filter((l) => l.length);
+  if (!/^(ST|C|N|4|n)*OFF$/i.test(rows[0] || '')) throw new Error('That is not an OFF file');
+  const counts = rows[1].split(/\s+/).map(Number);
+  const nv = counts[0];
+  const nf = counts[1];
+  const verts = [];
+  const tris = [];
+  for (let i = 0; i < nv; i++) {
+    const n = rows[2 + i].split(/\s+/).map(Number);
+    verts.push(n[0], n[1], n[2]);
+  }
+  for (let i = 0; i < nf; i++) {
+    const n = rows[2 + nv + i].split(/\s+/).map(Number);
+    fanInto(tris, n.slice(1, 1 + n[0]));
+  }
+  if (!tris.length) throw new Error('That OFF has no faces in it');
+  return [{ verts, tris }];
+}
+
+/**
+ * glTF and GLB, as far as the triangles.
+ *
+ * The format is a scene description with materials, animation and cameras, and
+ * none of that is a part. What is taken is the meshes and where the scene puts
+ * them, which is what somebody wants when a model they were sent happens to be
+ * a GLB rather than an STL.
+ */
+export async function parseGLTF(bytes, opts = {}) {
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let json = null;
+  let binary = null;
+
+  if (buf.length > 12 && new DataView(buf.buffer, buf.byteOffset).getUint32(0, true) === 0x46546c67) {
+    // GLB: a header, then chunks of JSON and of binary.
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let at = 12;
+    while (at + 8 <= buf.length) {
+      const len = view.getUint32(at, true);
+      const kind = view.getUint32(at + 4, true);
+      const body = buf.subarray(at + 8, at + 8 + len);
+      if (kind === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(body));
+      else if (kind === 0x004e4942) binary = body;
+      at += 8 + len + ((4 - (len % 4)) % 4);
+    }
+  } else {
+    json = JSON.parse(new TextDecoder().decode(buf));
+  }
+  if (!json?.meshes?.length) throw new Error('That glTF has no meshes in it');
+
+  // Buffers: the binary chunk, or data URIs. A file that points at another file
+  // beside it cannot be followed, since only this one was opened.
+  const buffers = (json.buffers || []).map((b, i) => {
+    if (!b.uri) return binary;
+    const m = /^data:[^;]*;base64,(.*)$/.exec(b.uri);
+    if (m) return Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
+    throw new Error(`That glTF keeps its data in ${b.uri}, which is a separate file`);
+  });
+
+  const SIZES = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+  const COUNTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+  const readAccessor = (index) => {
+    const acc = json.accessors[index];
+    const viewSpec = json.bufferViews[acc.bufferView];
+    const data = buffers[viewSpec.buffer];
+    if (!data) throw new Error('That glTF is missing the data its meshes point at');
+    const size = SIZES[acc.componentType] * COUNTS[acc.type];
+    const stride = viewSpec.byteStride || size;
+    const base = (viewSpec.byteOffset || 0) + (acc.byteOffset || 0);
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const out = [];
+    for (let i = 0; i < acc.count; i++) {
+      const at = base + i * stride;
+      for (let k = 0; k < COUNTS[acc.type]; k++) {
+        const o = at + k * SIZES[acc.componentType];
+        if (acc.componentType === 5126) out.push(view.getFloat32(o, true));
+        else if (acc.componentType === 5125) out.push(view.getUint32(o, true));
+        else if (acc.componentType === 5123) out.push(view.getUint16(o, true));
+        else if (acc.componentType === 5122) out.push(view.getInt16(o, true));
+        else out.push(view.getUint8(o));
+      }
+    }
+    return out;
+  };
+
+  const out = [];
+  for (const mesh of json.meshes) {
+    const verts = [];
+    const tris = [];
+    for (const prim of mesh.primitives || []) {
+      // Mode 4 is triangles. Strips and fans are rare in exported models and
+      // are left rather than guessed at.
+      if (prim.mode !== undefined && prim.mode !== 4) continue;
+      const pos = prim.attributes?.POSITION;
+      if (pos === undefined) continue;
+      const points = readAccessor(pos);
+      const base = verts.length / 3;
+      for (const v of points) verts.push(v);
+      if (prim.indices !== undefined) {
+        for (const i of readAccessor(prim.indices)) tris.push(base + i);
+      } else {
+        for (let i = 0; i < points.length / 3; i++) tris.push(base + i);
+      }
+    }
+    if (tris.length) out.push({ verts, tris, name: mesh.name || '' });
+  }
+  if (!out.length) throw new Error('That glTF has no triangles in it');
+  if (opts.yUp !== false) {
+    // glTF is Y up and everything here is Z up. Turning it on the way in is the
+    // difference between a part lying on the bed and one standing on its nose.
+    for (const m of out) {
+      for (let i = 0; i < m.verts.length; i += 3) {
+        const y = m.verts[i + 1];
+        m.verts[i + 1] = -m.verts[i + 2];
+        m.verts[i + 2] = y;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * COLLADA, as far as the triangles.
+ *
+ * XML, and old, and still what a good deal of scanned and downloaded geometry
+ * arrives as.
+ */
+export function parseDAE(text) {
+  const doc = new DOMParser().parseFromString(String(text), 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('That COLLADA file will not parse');
+
+  const sources = {};
+  for (const src of doc.querySelectorAll('source')) {
+    const arr = src.querySelector('float_array');
+    if (!arr) continue;
+    sources[`#${src.getAttribute('id')}`] = arr.textContent.trim().split(/\s+/).map(Number);
+  }
+  const verticesOf = {};
+  for (const v of doc.querySelectorAll('vertices')) {
+    const input = v.querySelector('input[semantic="POSITION"]');
+    if (input) verticesOf[`#${v.getAttribute('id')}`] = input.getAttribute('source');
+  }
+
+  const out = [];
+  for (const geom of doc.querySelectorAll('geometry')) {
+    const verts = [];
+    const tris = [];
+    for (const prim of geom.querySelectorAll('triangles, polylist')) {
+      const posInput = prim.querySelector('input[semantic="VERTEX"]');
+      if (!posInput) continue;
+      const via = posInput.getAttribute('source');
+      const src = sources[via] || sources[verticesOf[via]];
+      if (!src) continue;
+
+      const stride = prim.querySelectorAll('input').length || 1;
+      const offset = Number(posInput.getAttribute('offset') || 0);
+      const p = prim.querySelector('p');
+      if (!p) continue;
+      const idx = p.textContent.trim().split(/\s+/).map(Number);
+
+      const base = verts.length / 3;
+      for (const n of src) verts.push(n);
+      const counts = prim.querySelector('vcount');
+      if (counts) {
+        // A polylist gives the corner count of each polygon in turn.
+        const each = counts.textContent.trim().split(/\s+/).map(Number);
+        let at = 0;
+        for (const n of each) {
+          const corners = [];
+          for (let k = 0; k < n; k++) corners.push(base + idx[(at + k) * stride + offset]);
+          at += n;
+          fanInto(tris, corners);
+        }
+      } else {
+        for (let i = 0; i + 2 < idx.length / stride; i += 3) {
+          tris.push(
+            base + idx[i * stride + offset],
+            base + idx[(i + 1) * stride + offset],
+            base + idx[(i + 2) * stride + offset]
+          );
+        }
+      }
+    }
+    if (tris.length) out.push({ verts, tris, name: geom.getAttribute('name') || '' });
+  }
+  if (!out.length) throw new Error('That COLLADA file has no triangles in it');
+  return out;
+}
+
+/** The archive reader, which the Fusion archive needs as much as a 3MF does. */
+export { unzip };
+
 /** Which reader a file needs, from its name. */
 export function meshReaderFor(name) {
   const ext = String(name).toLowerCase().split('.').pop();
   if (ext === 'stl') return 'stl';
   if (ext === 'obj') return 'obj';
   if (ext === '3mf') return '3mf';
+  if (ext === 'ply') return 'ply';
+  if (ext === 'off') return 'off';
+  if (ext === 'gltf' || ext === 'glb') return 'gltf';
+  if (ext === 'dae') return 'dae';
+  if (ext === 'f3d' || ext === 'f3z') return 'f3d';
   return null;
 }
 

@@ -1845,6 +1845,43 @@ since undo hands back a document parsed afresh.
 
 ---
 
+## Reading a Fusion archive
+
+An `.f3d` is a zip. The geometry inside it is in `Breps.BlobParts` as `.smb`
+files, and those begin `ASM BinaryFile`: Autodesk ShapeManager, a fork of ACIS
+carrying the same entity model. Body, lump, shell, face, loop, coedge, edge,
+vertex, point, and a surface or curve hanging off each.
+
+There is no published specification for it. `asmread.js` was written by reading
+real files: the token tags first, then which record points at which. Two tags
+took finding, and everything rests on them: `0x13` and `0x14` are three untagged
+doubles each, a position and a direction, which is why a plane reads as an origin
+and two directions and nothing else.
+
+**Pointers are resolved by what they land on, not by where they sit.** The field
+order differs between ShapeManager versions and there is nothing to check
+against, so a reader written to "the fourth field is the lump" is one that breaks
+on the next file. A reader written to "the field that lands on a lump is the
+lump" does not.
+
+**What it reads and what it does not.** Planes, cylinders, cones, spheres and
+tori come in whole, with their trimming loops, through the same triangulator the
+STEP reader uses: by the time there is a surface and some rings of points on it,
+a STEP file and a Fusion archive are the same problem. Spline surfaces and the
+interpolated curves that trim them are not read. They are counted and named, not
+skipped in silence, because a part missing a face is a part you must not print.
+On real files that means a machined-looking part arrives complete and a sculpted
+one arrives partly, saying which parts it could not read.
+
+**An archive holds the timeline, not only its answer.** The same body appears
+once per state it passed through, so a design with three bodies can arrive as
+four hundred and fifty. Two things sift it. A body placed in the scene has a
+transform on it and one that is only a step along the way does not, which on a
+test file took 451 lumps down to 133; what is left is the same shape written
+more than once, which is caught by measuring it. What still comes through is more
+bodies than the design has, and the status line says so rather than pretending
+otherwise.
+
 ## What is not here
 
 **Not modelling at all**, and each its own application rather than a missing

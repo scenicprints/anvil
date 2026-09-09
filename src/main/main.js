@@ -1044,9 +1044,15 @@ ipcMain.handle('import:binary', async (_e, kind) => {
     kind === 'image'
       ? [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp'] }]
       : [
-          { name: 'Models', extensions: ['step', 'stp', 'stl', 'obj', '3mf'] },
+          {
+            name: 'Models',
+            extensions: [
+              'step', 'stp', 'stl', 'obj', '3mf', 'ply', 'off', 'gltf', 'glb', 'dae', 'f3d', 'f3z'
+            ]
+          },
+          { name: 'Fusion archive', extensions: ['f3d', 'f3z'] },
           { name: 'STEP', extensions: ['step', 'stp'] },
-          { name: 'Mesh', extensions: ['stl', 'obj', '3mf'] }
+          { name: 'Mesh', extensions: ['stl', 'obj', '3mf', 'ply', 'off', 'gltf', 'glb', 'dae'] }
         ];
   const res = await dialog.showOpenDialog(win, {
     title: kind === 'image' ? 'Choose an image' : 'Insert Model',
@@ -1062,6 +1068,49 @@ ipcMain.handle('import:binary', async (_e, kind) => {
     return { ok: false, error: err.message };
   }
 });
+
+/**
+ * The bytes of a model file named by path, rather than chosen in a dialog.
+ *
+ * What a drag onto the window needs, and what lets a probe drive an importer
+ * against a real file. Restricted to the extensions the importers actually
+ * read: this is a renderer asking the main process to open a file by name, and
+ * the narrower that is, the better.
+ */
+const MODEL_EXT = /\.(step|stp|stl|obj|3mf|ply|off|gltf|glb|dae|f3d|f3z)$/i;
+
+ipcMain.handle('import:binaryPath', async (_e, file) => {
+  if (!MODEL_EXT.test(String(file || ''))) {
+    return { ok: false, error: 'That is not a model file this can open' };
+  }
+  try {
+    const buf = await readMaybeSlowlyBytes(file);
+    return { ok: true, path: file, bytes: buf };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+/** The same slow-read notice the documents get, for a model off a synced folder. */
+async function readMaybeSlowlyBytes(file) {
+  const slow = setTimeout(() => {
+    try {
+      win?.webContents.send('doc:slowRead', { path: file });
+    } catch {
+      /* the window may be gone, and the read carries on regardless */
+    }
+  }, 1200);
+  try {
+    return await fs.readFile(file);
+  } finally {
+    clearTimeout(slow);
+    try {
+      win?.webContents.send('doc:slowRead', null);
+    } catch {
+      /* as above */
+    }
+  }
+}
 
 ipcMain.handle('doc:openPath', async (_e, file) => {
   return openDocument(file);

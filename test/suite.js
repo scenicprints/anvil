@@ -31,6 +31,8 @@ import {
 } from '../src/renderer/profile.js';
 import { textContours } from '../src/renderer/textoutline.js';
 import { parseSVG, parseDXF } from '../src/renderer/vectorimport.js';
+import { parsePLY, parseOFF, parseGLTF, parseDAE } from '../src/renderer/meshutil.js';
+import { readRecords, readASM } from '../src/renderer/asmread.js';
 import {
   massProperties,
   combinedMass,
@@ -8269,6 +8271,107 @@ async function run() {
   });
 
   /* -------- surfaces through the timeline -------- */
+
+  /* -------- more ways in -------- */
+
+  test('import: PLY reads as text and as bytes', () => {
+    // Scanners write PLY more than anything else does, which is why it is
+    // worth having: a scan of the thing you are fitting something to arrives
+    // as a PLY far more often than as an STL.
+    const ascii = [
+      'ply',
+      'format ascii 1.0',
+      'element vertex 4',
+      'property float x',
+      'property float y',
+      'property float z',
+      'element face 2',
+      'property list uchar int vertex_index',
+      'end_header',
+      '0 0 0',
+      '10 0 0',
+      '10 10 0',
+      '0 10 0',
+      '3 0 1 2',
+      '3 0 2 3'
+    ].join('\n');
+    const got = parsePLY(new TextEncoder().encode(ascii));
+    assert(got.length === 1, 'one mesh');
+    assert(got[0].tris.length === 6, `two triangles, got ${got[0].tris.length / 3}`);
+    near(got[0].verts[3], 10, 1e-6, 'and the points came through');
+
+    // A quad face is fanned rather than refused: a mesh file is allowed to
+    // hold polygons and everything downstream here wants triangles.
+    const quad = ascii
+      .replace('element face 2', 'element face 1')
+      .replace('3 0 1 2\n3 0 2 3', '4 0 1 2 3');
+    const fanned = parsePLY(new TextEncoder().encode(quad));
+    assert(fanned[0].tris.length === 6, 'a quad becomes two triangles');
+  });
+
+  test('import: OFF is about as simple as a mesh file gets', () => {
+    const text = ['OFF', '4 2 0', '0 0 0', '10 0 0', '10 10 0', '0 10 0', '3 0 1 2', '3 0 2 3'].join(
+      '\n'
+    );
+    const got = parseOFF(text);
+    assert(got[0].tris.length === 6, 'two triangles');
+    let bad = false;
+    try {
+      parseOFF('not an off file at all');
+    } catch {
+      bad = true;
+    }
+    assert(bad, 'and something that is not one says so');
+  });
+
+  await asyncTest('import: glTF comes in turned the right way up', async () => {
+    /*
+     * glTF is Y up and everything here is Z up. Turning it on the way in is the
+     * difference between a part lying on the bed and one standing on its nose,
+     * and it is the kind of thing nobody notices until they slice it.
+     */
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 7, 0]);
+    const indices = new Uint16Array([0, 1, 2, 0]);
+    const bin = new Uint8Array(positions.byteLength + indices.byteLength);
+    bin.set(new Uint8Array(positions.buffer), 0);
+    bin.set(new Uint8Array(indices.buffer), positions.byteLength);
+    const json = {
+      asset: { version: '2.0' },
+      buffers: [{ byteLength: bin.length }],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: positions.byteLength },
+        { buffer: 0, byteOffset: positions.byteLength, byteLength: indices.byteLength }
+      ],
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+        { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR' }
+      ],
+      meshes: [{ name: 'Tri', primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }]
+    };
+
+    const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
+    const pad = (n) => (4 - (n % 4)) % 4;
+    const total = 12 + 8 + jsonBytes.length + pad(jsonBytes.length) + 8 + bin.length + pad(bin.length);
+    const glb = new Uint8Array(total);
+    const view = new DataView(glb.buffer);
+    view.setUint32(0, 0x46546c67, true);
+    view.setUint32(4, 2, true);
+    view.setUint32(8, total, true);
+    view.setUint32(12, jsonBytes.length + pad(jsonBytes.length), true);
+    view.setUint32(16, 0x4e4f534a, true);
+    glb.set(jsonBytes, 20);
+    let at = 20 + jsonBytes.length + pad(jsonBytes.length);
+    view.setUint32(at, bin.length + pad(bin.length), true);
+    view.setUint32(at + 4, 0x004e4942, true);
+    glb.set(bin, at + 8);
+
+    const got = await parseGLTF(glb);
+    assert(got.length === 1, 'one mesh');
+    assert(got[0].name === 'Tri', 'and it kept its name');
+    // The point that was 7 up the glTF Y axis is now 7 along Z.
+    near(got[0].verts[7], 0, 1e-6, 'y is no longer where it was');
+    near(got[0].verts[8], 7, 1e-6, 'and z is');
+  });
 
   test('thin extrude: an open run of curves becomes a wall', () => {
     /*

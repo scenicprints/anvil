@@ -363,6 +363,20 @@ function faceTriangles(step, face, tol, stats) {
 
   // The outer ring is the one the file says is outer, or failing that the one
   // enclosing the most area once flattened.
+  const sameSense = !(face.args[3] && face.args[3].name === 'F');
+  return trimFace(surf, rings, sameSense, stats);
+}
+
+/**
+ * Rings on a surface, cut into triangles.
+ *
+ * The half of reading a boundary representation that has nothing to do with
+ * which file it came out of: by the time there is a surface and some rings of
+ * points on it, a STEP file and a Fusion archive are the same problem. Keeping
+ * one copy of it is what let the second reader be a parser and not a parser
+ * plus all of this again.
+ */
+export function trimFace(surf, rings, sameSense, stats) {
   const flat = rings.map((r) => ({ ...r, uv: r.pts.map(surf.to2d) }));
   let outerAt = flat.findIndex((r) => r.outer);
   if (outerAt < 0) {
@@ -403,11 +417,9 @@ function faceTriangles(step, face, tol, stats) {
 
   const verts = uvs.map(surf.to3d);
 
-  // Which way the face actually faces. `same_sense` says whether the surface
+  // Which way the face actually faces. The file says whether the surface
   // normal agrees with the face; the winding has to be made to match, or the
   // solid comes out inside out in patches.
-  const sameSense = !(face.args[3] && face.args[3].name === 'F');
-
   const tris = [];
   for (const t of indices) {
     if (t[0] === t[1] || t[1] === t[2] || t[0] === t[2]) continue;

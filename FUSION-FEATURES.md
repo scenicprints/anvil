@@ -1037,7 +1037,7 @@ disk. Recording it all anyway, because most of it has a local meaning.
 | Recover designs | has, v2.73.0. Unsaved work is written aside every twenty seconds, and offered back at startup only when the previous session did not exit cleanly. It arrives unsaved, because the file on disk is still what was last chosen and this is the argument for changing it |
 | Convert a design's type (parametric or direct) | has (direct modelling mode) |
 | Upload designs / web client / component tab | n/a — cloud |
-| Supported file formats | partial — see the import and export lists |
+| Supported file formats | in: STEP, STL, OBJ, 3MF, PLY, OFF, glTF, GLB, COLLADA, SVG, DXF, and **Fusion's own .f3d** since v2.75.0. Out: STL, STEP, 3MF, OBJ, DXF |
 
 **Recover designs is the one to take seriously.** Anvil has an undo stack and
 versions inside the document, and nothing that survives the process dying with
