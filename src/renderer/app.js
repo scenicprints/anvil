@@ -580,7 +580,7 @@ function handleViewportDown(e) {
         'jointAxis2',
         'surfaceCurves',
         'sheetEdges',
-        'moveDirection'
+        ...Object.keys(DIRECTION_PICKS)
       ].includes(armed) || !!blendPickRow(armed);
     // A plane click has to be offered before the body raycast, or a plane
     // drawn behind the model can never be reached.
@@ -595,7 +595,7 @@ function handleViewportDown(e) {
     // aiming at the top of a box and being handed the XZ plane it happens to
     // sit on. An edge or a face is what is being aimed at; a plane is what is
     // left when the click hit nothing.
-    if (armed === 'moveDirection') {
+    if (DIRECTION_PICKS[armed]) {
       const plane = state.vp.pickPlane(e.clientX, e.clientY);
       if (plane) return pickIntoEdit({ kind: 'plane', planeName: plane.planeName });
     }
@@ -4960,6 +4960,18 @@ function sweepFields() {
       }
     },
     ...CURVE_PICK_FIELDS('path', 'Path'),
+    {
+      // Fusion calls it Chain Selection and has it on Sweep. A path round a
+      // part is rarely one edge: a rounded outline is straight, arc, straight,
+      // arc, and clicking each in turn is the work this saves.
+      key: 'chainPath',
+      label: 'Follow tangent edges',
+      type: 'bool',
+      get: (f) => f.chainPath !== false,
+      set: (f, v) => {
+        f.chainPath = !!v;
+      }
+    },
     ...CURVE_PICK_FIELDS('rail', 'Guide rail', railed),
     {
       key: 'profileScaling',
@@ -5022,8 +5034,10 @@ function loftSectionRowText(entry, i) {
 function loftFields(feature) {
   const CONDITIONS = [
     ['connected', 'Connected'],
-    ['tangent', 'Tangent']
+    ['tangent', 'Tangent'],
+    ['direction', 'Direction, at an angle']
   ];
+  const leans = (which) => (f) => ['tangent', 'direction'].includes(f[which]);
   // Fusion lets the profile order be changed, and the order is what a loft is:
   // the same three sections in a different order is a different shape. Clicking
   // them again in the right order was the only way to fix a mis-ordered loft,
@@ -5057,17 +5071,58 @@ function loftFields(feature) {
     ...reorder,
     { key: 'startCondition', label: 'Start', type: 'select', options: CONDITIONS },
     {
-      key: 'startWeight',
-      label: 'Start weight',
+      // Which way to lean has to be given rather than inferred: two sections
+      // stacked on one axis have no preferred side, so a guess from where they
+      // sit comes out as nothing at all for the commonest loft there is.
+      key: '__startTakeoff',
+      label: 'Start takeoff direction',
+      type: 'pick',
+      pick: 'startTakeoff',
+      showIf: (f) => f.startCondition === 'direction',
+      summary: (f) => f.startTakeoffLabel || 'Towards the next section',
+      clear: (f) => {
+        f.startTakeoff = null;
+        f.startTakeoffLabel = null;
+      }
+    },
+    {
+      // Measured from the section's own plane, the way Fusion measures it, so
+      // ninety is straight out of the plane and is the tangent case exactly.
+      key: 'startAngle',
+      label: 'Start takeoff angle (deg)',
       type: 'expr',
-      showIf: (f) => f.startCondition === 'tangent'
+      showIf: (f) => f.startCondition === 'direction'
+    },
+    {
+      key: 'startWeight',
+      label: (f) => (f.startCondition === 'direction' ? 'Start takeoff weight' : 'Start weight'),
+      type: 'expr',
+      showIf: leans('startCondition')
     },
     { key: 'endCondition', label: 'End', type: 'select', options: CONDITIONS },
     {
-      key: 'endWeight',
-      label: 'End weight',
+      key: '__endTakeoff',
+      label: 'End takeoff direction',
+      type: 'pick',
+      pick: 'endTakeoff',
+      showIf: (f) => f.endCondition === 'direction',
+      summary: (f) => f.endTakeoffLabel || 'Towards the section before it',
+      clear: (f) => {
+        f.endTakeoff = null;
+        f.endTakeoffLabel = null;
+      }
+    },
+    {
+      key: 'endAngle',
+      label: 'End takeoff angle (deg)',
       type: 'expr',
-      showIf: (f) => f.endCondition === 'tangent'
+      showIf: (f) => f.endCondition === 'direction'
+    },
+    {
+      key: 'endWeight',
+      label: (f) => (f.endCondition === 'direction' ? 'End takeoff weight' : 'End weight'),
+      type: 'expr',
+      showIf: leans('endCondition')
     },
     {
       key: '__rails',
@@ -6364,6 +6419,8 @@ function startLoft() {
     endCondition: 'connected',
     startWeight: '1',
     endWeight: '1',
+    startAngle: '90',
+    endAngle: '90',
     closed: false
   };
   delete feature.sketch;
@@ -6925,6 +6982,19 @@ function planeSpecFromOption(value) {
   }
   return value;
 }
+
+/**
+ * The rows that are filled by pointing at something with a direction, and where
+ * each one puts what it took.
+ *
+ * A move goes along it and a loft's takeoff leans in it, but the question is
+ * the same and so are the things that can answer it, so it is asked once.
+ */
+const DIRECTION_PICKS = {
+  moveDirection: ['direction', 'directionLabel'],
+  startTakeoff: ['startTakeoff', 'startTakeoffLabel'],
+  endTakeoff: ['endTakeoff', 'endTakeoffLabel']
+};
 
 /** The way one of the three origin planes faces. */
 function planeNormal(name) {
@@ -12263,6 +12333,8 @@ const PICK_PROMPTS = {
   movePointTo: 'Click where to measure to.',
   movePivot: 'Click the point to turn about.',
   moveDirection: 'Click an edge, a flat face, or an origin plane.',
+  startTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
+  endTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
   embossFaces: 'Click the faces to emboss onto.',
   constructPath: 'Click the curve or edge to measure along.',
   groupFaces: 'Click the faces to group.',
@@ -13062,7 +13134,7 @@ function setEditPick(which) {
       'alignFrom',
       'alignTo',
       'silhouetteDir',
-      'moveDirection'
+      ...Object.keys(DIRECTION_PICKS)
     ].includes(which)
   );
   renderFields();
@@ -13344,8 +13416,23 @@ function pickIntoEdit(hit) {
       const record = (state.records || []).find((r) => r.id === hit.bodyId);
       const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
       if (!edge) return true;
+
+      // Chain Selection, which Fusion has on Sweep. A path round a part is
+      // rarely one edge: a rounded outline is straight, arc, straight, arc, and
+      // clicking each in turn is the work this saves. Off by the same tick box
+      // the blends use, for the case where one segment is genuinely all you
+      // want.
+      const chained =
+        f.chainPath === false
+          ? [edge.id]
+          : SEL.tangentEdgeRun(record.topology, [edge.id]);
       const was = f[key]?.edges || [];
-      f[key] = { edges: [...was, edgeReference(edge, record.topology)] };
+      const refs = chained
+        .map((id) => record.topology.edges.find((e) => e.id === id))
+        .filter(Boolean)
+        .map((e) => edgeReference(e, record.topology));
+      const added = refs.filter((r) => !was.some((x) => sameEdgeRef(x, r)));
+      f[key] = { edges: [...was, ...added] };
       renderFields();
       scheduleRebuild();
       return true;
@@ -13398,37 +13485,43 @@ function pickIntoEdit(hit) {
     if (at >= 0) f.bodies.splice(at, 1);
     else f.bodies.push(hit.bodyId);
     if (!f.bodies.length) f.bodies = 'all';
-  } else if (ed.pickInto === 'moveDirection') {
+  } else if (DIRECTION_PICKS[ed.pickInto]) {
     // An edge lies along its own direction; a flat face gives the way it
-    // faces. Anything else has no one direction to mean.
+    // faces. Anything else has no one direction to mean. A move goes along it;
+    // a loft's takeoff leans in it.
+    const [key, labelKey] = DIRECTION_PICKS[ed.pickInto];
     const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    let dir = null;
+    let what = null;
     if (hit.kind === 'edge') {
       const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
       if (!edge?.dir) {
         setStatus('That edge is curved, so it does not point one way.');
         return true;
       }
-      f.direction = [...edge.dir];
-      f.directionLabel = 'Along a model edge';
+      dir = [...edge.dir];
+      what = 'Along a model edge';
     } else if (hit.kind === 'face' && hit.faceId !== null) {
       const face = record?.topology?.faces[hit.faceId];
       if (!face?.planar) {
         setStatus('That face is curved, so it does not face one way.');
         return true;
       }
-      f.direction = [...face.normal];
-      f.directionLabel = 'Out from a flat face';
+      dir = [...face.normal];
+      what = 'Out from a flat face';
     } else if (hit.kind === 'plane') {
       const n = planeNormal(hit.planeName);
       if (!n) return true;
-      f.direction = n;
-      f.directionLabel = `Along the ${hit.planeName} normal`;
+      dir = n;
+      what = `Along the ${hit.planeName} normal`;
     } else {
       return true;
     }
+    f[key] = dir;
+    f[labelKey] = what;
     ed.pickInto = null;
     restorePlanes();
-    setStatus(`${f.directionLabel}: ${f.direction.map((n) => round(n, 3)).join(', ')}.`);
+    setStatus(`${what}: ${dir.map((n) => round(n, 3)).join(', ')}.`);
   } else if (
     ed.pickInto === 'movePointFrom' ||
     ed.pickInto === 'movePointTo' ||

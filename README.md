@@ -289,7 +289,10 @@ predictable where they do not.
 
 **Sweep** takes profiles and a path, both by pointing: click the profiles,
 then click the curve to follow, which can be a chain of sketch curves or a chain
-of model edges. Then
+of model edges. One click on a model edge takes the whole run that carries on
+smoothly from it, because a path round a part is rarely one edge: a rounded
+outline is straight, arc, straight, arc. Turn that off when one segment is
+genuinely all you want. Then
 
 | | |
 |---|---|
@@ -311,7 +314,7 @@ to a tip. Then
 
 | | |
 |---|---|
-| Start and End | **Connected**, or **Tangent** with a weight, so an end leaves square to its own plane |
+| Start and End | **Connected**, **Tangent** with a weight so an end leaves square to its own plane, or **Direction** at a stated takeoff angle to that plane |
 | Guide rails | Sketch curves the intermediate sections are pulled out to meet |
 | Closed loop | Joins the last section back to the first |
 | Operation | The same set as Extrude |

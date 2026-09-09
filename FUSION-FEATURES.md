@@ -90,7 +90,7 @@ thin extrude.
 | Profile / Body | profile or planar face; a solid for Solid Sweep | partial |
 | Path | | has |
 | Guide Rail | scales and orients the profile along the path | has |
-| Chain Selection | pick tangentially connected geometry as one | **missing** |
+| Chain Selection | pick tangentially connected geometry as one | has, v2.41.0, on the path; on by a tick box |
 | Distance | fraction of the path, 0 to 1 | has |
 | Taper Angle, Twist Angle | | has |
 | Extent | Perpendicular To Path, Full Extents | **missing** |
@@ -104,16 +104,30 @@ thin extrude.
 | Option | Values | Anvil |
 |---|---|---|
 | Profiles | sketch, edge or face, in an order you can change | has, v2.38.0 |
-| End condition (per profile) | Free, Direction, Tangent, Smooth, Sharp, Point Tangent | partial — connected and tangent only |
+| End condition (per profile) | Free, Direction, Tangent, Smooth, Sharp, Point Tangent | partial — connected, tangent, and Direction as of v2.41.0 |
 | Guide Type | **Rail**, **Centerline** | partial — rails only |
 | Rails / Guide | any number of rails; one centerline | has (rails) |
 | Chain Selection | adjacent edges taken as one profile | **missing** |
 | Closed | join the first and last profile into a loop | has |
-| Takeoff Weight / Takeoff Angle | with the Direction end condition | **missing** |
+| Takeoff Weight / Takeoff Angle | with the Direction end condition | has, v2.41.0 |
 | Tangency Weight | with Tangent, Smooth or Point Tangent | has (start and end weight) |
 | Tangent Edges | Merge, Keep | **missing** |
 | Operation / Objects To Cut | | partial |
 | Analysis tab | None, Zebra, Curvature Map, Isocurve | **missing** here |
+
+The Direction end condition takes a picked direction as well as an angle, and
+that is not a flourish. Which way to lean has to be given rather than inferred:
+two sections stacked on one axis have no preferred side, so a guess from where
+they sit comes out as no lean at all for the commonest loft there is, and every
+value of the angle would look like it did nothing. Failing a picked direction
+the line to the neighbouring section is used, which is right for sections that
+are offset from each other and honest about doing nothing when they are not.
+
+The angle is measured from the section's own plane the way Fusion measures it,
+so ninety degrees is straight out of the plane and reproduces the tangent case
+exactly. That is pinned by a test, because if the two disagree then the angle
+is being measured off the wrong thing and every value of it is wrong by the
+same amount.
 
 Fusion also maps matching corners between closed sections with the same number
 of corners, so the orientation is worked out rather than guessed. Worth knowing:

@@ -3181,6 +3181,72 @@ async function run() {
     assert(held > plain, `tangent should hold its size longer: ${held} against ${plain}`);
   });
 
+  test('loft: a takeoff angle of ninety is exactly the tangent case', () => {
+    // Fusion measures the takeoff angle from the section's own plane, so
+    // ninety degrees is straight out of it, which is what tangent already
+    // means. If the two disagree the angle is being measured from the wrong
+    // thing, and every value of it is wrong by the same amount.
+    const tangent = rebuild(
+      loftDoc(10, { startCondition: 'tangent', startWeight: '1' }).doc
+    ).bodies[0].solid.volume();
+    const square = rebuild(
+      loftDoc(10, {
+        startCondition: 'direction',
+        startWeight: '1',
+        startAngle: '90'
+      }).doc
+    ).bodies[0].solid.volume();
+    near(square, tangent, tangent * 0.001, 'ninety degrees is straight out of the plane');
+  });
+
+  test('loft: the takeoff leans in the direction it was given, and needs one', () => {
+    // Which way to lean has to be given rather than inferred. Two sections
+    // stacked on one axis have no preferred side, so a guess from where they
+    // sit would come out as nothing at all for the commonest loft there is,
+    // and every value of the angle would look like it did nothing.
+    const at = (deg, extra) =>
+      rebuild(
+        loftDoc(10, {
+          startCondition: 'direction',
+          startWeight: '1',
+          startAngle: String(deg),
+          ...extra
+        }).doc
+      );
+
+    const square = at(90, {}).bodies[0].solid.volume();
+
+    // Coaxial sections and no direction given: honest about having nothing to
+    // work with rather than pretending.
+    const guessed = at(40, {}).bodies[0].solid.volume();
+    near(guessed, square, square * 0.001, 'no direction and no offset means no lean');
+
+    // Given one, the angle bites.
+    const leaned = at(40, { startTakeoff: [1, 0, 0] });
+    assert(leaned.errors.length === 0, JSON.stringify(leaned.errors));
+    assert(leaned.bodies.length === 1, 'still one body');
+    assert(
+      Math.abs(leaned.bodies[0].solid.volume() - square) > square * 0.01,
+      `leaning over should change the shape: ${leaned.bodies[0].solid.volume().toFixed(1)} ` +
+        `against ${square.toFixed(1)}`
+    );
+
+    // And leaning the other way leans the other way. The sections are square
+    // and symmetric about the axis, so leaning in X or in Y gives congruent
+    // shapes and the volume cannot tell them apart. Where the part reaches to
+    // can.
+    const reach = (res) => {
+      const bb = res.bodies[0].solid.boundingBox();
+      return [bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]].map((n) => +n.toFixed(2));
+    };
+    const inX = reach(leaned);
+    const inY = reach(at(40, { startTakeoff: [0, 1, 0] }));
+    assert(
+      inX[0] === inY[1] && inX[1] === inY[0] && inX[0] !== inX[1],
+      `leaning in Y is leaning in X turned a quarter: ${JSON.stringify(inX)} against ${JSON.stringify(inY)}`
+    );
+  });
+
   test('loft: still lofts when nothing extra is asked for', () => {
     // The plain path has to keep working with all the new settings absent,
     // which is what an older file looks like.

@@ -265,6 +265,12 @@ export function normalizeLoft(f) {
   if (!f.endCondition) f.endCondition = 'connected';
   if (f.startWeight === undefined) f.startWeight = '1';
   if (f.endWeight === undefined) f.endWeight = '1';
+  // Takeoff angle, measured from the section's own plane the way Fusion
+  // measures it, so ninety degrees is straight out of the plane and is the
+  // tangent case exactly. A loft made in this session always writes both, so an
+  // absent one is an old document, and an old document only had tangent.
+  if (f.startAngle === undefined) f.startAngle = '90';
+  if (f.endAngle === undefined) f.endAngle = '90';
   return f;
 }
 
@@ -1961,9 +1967,14 @@ export function rebuild(doc, options = {}) {
   }
 
   /**
-   * Add a section just off each end so the loft leaves that end square to its
-   * own plane instead of setting off straight for the next one. The weight is
+   * Add a section just off each end so the loft leaves that end the way it was
+   * asked to instead of setting off straight for the next one. The weight is
    * how far off, as a fraction of the gap to the neighbouring section.
+   *
+   * Tangent leaves square to the section's own plane. Direction leaves at a
+   * stated angle to that plane, which is Fusion's takeoff angle and is measured
+   * the same way: ninety degrees is straight out of the plane, so a direction
+   * condition at ninety is the tangent case exactly.
    */
   function withEndConditions(feature, scope, loops) {
     if (loops.length < 2) return loops;
@@ -1976,36 +1987,92 @@ export function rebuild(doc, options = {}) {
         a.plane.origin[2] - b.plane.origin[2]
       ) || 1;
 
-    const shifted = (sec, towards, dist) => {
+    const shifted = (sec, towards, dist, degrees, takeoff) => {
       const n = sec.plane.n;
-      // Off along the section's own normal, towards its neighbour.
-      const sign =
-        (towards.plane.origin[0] - sec.plane.origin[0]) * n[0] +
-        (towards.plane.origin[1] - sec.plane.origin[1]) * n[1] +
-        (towards.plane.origin[2] - sec.plane.origin[2]) * n[2] >= 0
-          ? 1
-          : -1;
+      const to = [
+        towards.plane.origin[0] - sec.plane.origin[0],
+        towards.plane.origin[1] - sec.plane.origin[1],
+        towards.plane.origin[2] - sec.plane.origin[2]
+      ];
+      // Along the section's own normal, towards its neighbour.
+      const sign = to[0] * n[0] + to[1] * n[1] + to[2] * n[2] >= 0 ? 1 : -1;
+      let dir = [n[0] * sign, n[1] * sign, n[2] * sign];
+
+      if (degrees !== undefined && Math.abs(degrees - 90) > 1e-6) {
+        // Lean it over, in the plane holding the normal and the picked
+        // direction. Which way to lean has to be given rather than inferred:
+        // two sections stacked on one axis have no preferred side, so a guess
+        // from their positions comes out as nothing at all for the commonest
+        // loft there is, and the angle would look like it did nothing.
+        //
+        // Failing a picked direction, the line to the neighbour is used, which
+        // is right for sections that are offset from each other.
+        const hint = takeoff && Math.hypot(...takeoff) > 1e-9 ? takeoff : to;
+        const along = hint[0] * dir[0] + hint[1] * dir[1] + hint[2] * dir[2];
+        const flat = [
+          hint[0] - dir[0] * along,
+          hint[1] - dir[1] * along,
+          hint[2] - dir[2] * along
+        ];
+        const len = Math.hypot(flat[0], flat[1], flat[2]);
+        if (len > 1e-9) {
+          const rad = (degrees * Math.PI) / 180;
+          const s = Math.sin(rad);
+          const c = Math.cos(rad);
+          dir = [
+            dir[0] * s + (flat[0] / len) * c,
+            dir[1] * s + (flat[1] / len) * c,
+            dir[2] * s + (flat[2] / len) * c
+          ];
+        }
+      }
+
       return {
         contour: sec.contour,
         plane: {
           ...sec.plane,
           origin: [
-            sec.plane.origin[0] + n[0] * dist * sign,
-            sec.plane.origin[1] + n[1] * dist * sign,
-            sec.plane.origin[2] + n[2] * dist * sign
+            sec.plane.origin[0] + dir[0] * dist,
+            sec.plane.origin[1] + dir[1] * dist,
+            sec.plane.origin[2] + dir[2] * dist
           ]
         }
       };
     };
 
-    if (feature.endCondition === 'tangent') {
+    const leans = (which) => ['tangent', 'direction'].includes(feature[which]);
+    const angleFor = (which, key) =>
+      feature[which] === 'direction' ? safeEval(feature[key], scope, 90) : 90;
+
+    if (leans('endCondition')) {
       const w = Math.max(0.01, Math.min(0.9, safeEval(feature.endWeight, scope, 1) * 0.25));
       const last = out[out.length - 1];
-      out.splice(out.length - 1, 0, shifted(last, out[out.length - 2], gap(last, out[out.length - 2]) * w));
+      const prev = out[out.length - 2];
+      out.splice(
+        out.length - 1,
+        0,
+        shifted(
+          last,
+          prev,
+          gap(last, prev) * w,
+          angleFor('endCondition', 'endAngle'),
+          feature.endTakeoff
+        )
+      );
     }
-    if (feature.startCondition === 'tangent') {
+    if (leans('startCondition')) {
       const w = Math.max(0.01, Math.min(0.9, safeEval(feature.startWeight, scope, 1) * 0.25));
-      out.splice(1, 0, shifted(out[0], out[1], gap(out[0], out[1]) * w));
+      out.splice(
+        1,
+        0,
+        shifted(
+          out[0],
+          out[1],
+          gap(out[0], out[1]) * w,
+          angleFor('startCondition', 'startAngle'),
+          feature.startTakeoff
+        )
+      );
     }
     return out;
   }
