@@ -383,7 +383,7 @@ only comes out smaller than the plain part and fillets only comes out bigger.
 | Option | Values | Anvil |
 |---|---|---|
 | Move Object | Components, Bodies, Faces, **Sketch Objects** | partial — bodies and faces, v2.42.0 |
-| Move Type | **Free Move**, Translate, Rotate, Point to Point, **Point to Position** | partial — three of five |
+| Move Type | **Free Move**, Translate, Rotate, Point to Point, Point to Position | partial — four of five. Free Move is explicitly not captured parametrically in Fusion either |
 | Direction | Component XYZ, Design XYZ, Pick Direction (along an edge or axis) | has, v2.36.0. An edge, a flat face or an origin plane, plus one distance, and a row to flip it |
 | Set Pivot | centre of rotation within the selection | has, v2.36.0. Clicked in the canvas, snapping to corners and hole centres the same way point to point does; typing three numbers is still there |
 | X/Y/Z Distance, X/Y/Z Angle | | has |
@@ -448,7 +448,7 @@ broken.
 |---|---|---|
 | View Direction | the direction the silhouette is taken from | has |
 | Target Body | | has |
-| Operation | Split Faces Only, Split Shelled Body, Split Solid Body | partial — Anvil's single behaviour covers both body cases. **Split Faces Only** is the real gap, and it needs a face split along the computed silhouette curve, so it is not a quick win |
+| Operation | Split Faces Only, Split Shelled Body, Split Solid Body | has, v2.60.0. Anvil's single body behaviour covers both body cases, and Split Faces Only is its own setting |
 
 ### Scale — *pending* (Anvil: factor or per-axis, about the middle, the origin, or a point)
 

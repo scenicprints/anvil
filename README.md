@@ -253,7 +253,7 @@ dialog's or the document's, so a profile picked into a dialog looks picked.
 | Scale | Uniform or per axis, about the part, the origin, or a point |
 | Align | A face of one body put flat against another |
 | Delete Face | A round hole filled back in |
-| Silhouette Split | Parted at the outline seen from a direction |
+| Silhouette Split | Parted at the outline seen from a direction, into two bodies or into one body with the faces split there |
 | Split Face | A face divided in two, with the shape left alone |
 | Mirror, Combine | Plane and bodies both picked in the canvas |
 
@@ -460,7 +460,8 @@ than after you press OK, and so is a move square to the face's own normal,
 which would slide it along inside its own plane and change nothing.
 
 On bodies it translates, turns about a stated axis through a stated point, takes a
-place on the model to another place, or goes one distance along a direction
+place on the model to another place or to **a typed coordinate**, or goes one
+distance along a direction
 picked off the model: an edge lies along its own line, a flat face gives the way
 it faces. The pivot a rotate turns about is clicked rather than typed, snapping
 to corners and hole centres the same way point to point does, and typing three

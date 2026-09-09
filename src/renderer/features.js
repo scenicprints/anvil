@@ -4583,6 +4583,16 @@ export function rebuild(doc, options = {}) {
       return m;
     }
 
+    if (feature.moveType === 'position') {
+      // Point to Position: the same shift as point to point, with the far end
+      // typed rather than picked. It is how a part is put at a coordinate
+      // somebody has been given rather than at a place on another part.
+      const a = feature.fromPoint;
+      if (!a) return m.identity();
+      const to = feature.toPosition || [0, 0, 0];
+      return m.makeTranslation(to[0] - a[0], to[1] - a[1], to[2] - a[2]);
+    }
+
     if (feature.moveType === 'points') {
       // Both ends or nothing. A missing point used to read as the origin, so
       // picking only the "from" flung the part across to 0, 0, 0 before the
@@ -5833,6 +5843,19 @@ export function rebuild(doc, options = {}) {
         out.push(b);
         continue;
       }
+      // Fusion's Split Faces Only: the part stays one body and only its faces
+      // are parted at the silhouette. Each half is marked as its own geometry
+      // before they go back together, so the faces either side of the seam
+      // carry different names and are not welded into one again. It is the
+      // same trick Split Face uses, which is what makes a draft or a press
+      // pull able to take one side of a moulded part.
+      if (feature.operation === 'faces') {
+        const nearSide = K.tagOriginal(keep, `${feature.id}:near`, ks);
+        const farSide = K.tagOriginal(rest, `${feature.id}:far`, ks);
+        out.push({ ...b, solid: K.union(nearSide, farSide, ks) });
+        continue;
+      }
+
       out.push({ ...b, solid: keep });
       out.push({
         id: `${feature.id}:${out.length}`,

@@ -3904,6 +3904,7 @@ function moveFields() {
         ['translate', 'Translate'],
         ['rotate', 'Rotate'],
         ['points', 'Point to point'],
+        ['position', 'Point to a position'],
         ['direction', 'Along a direction']
       ]
     },
@@ -4006,6 +4007,18 @@ function moveFields() {
         f.fromPoint = null;
       }
     },
+    {
+      key: '__fromPickPos',
+      label: 'Point on the part',
+      type: 'pick',
+      pick: 'movePointFrom',
+      showIf: isType('position'),
+      summary: (f) => (f.fromPoint ? f.fromPoint.map((n) => round(n, 2)).join(', ') : 'Nothing yet'),
+      clear: (f) => {
+        f.fromPoint = null;
+      }
+    },
+    pointField('toPosition', 'Put it at (x, y, z)', isType('position')),
     {
       key: '__toPick',
       label: 'To',
@@ -4386,6 +4399,18 @@ function silhouetteFields() {
       clear: (f) => {
         f.bodies = 'all';
       }
+    },
+    {
+      // Fusion's Operation. Splitting the faces only leaves one body with a
+      // seam round it at the parting line, which is what a draft or a press
+      // pull needs to be able to take one side of a moulded part.
+      key: 'operation',
+      label: 'Result',
+      type: 'select',
+      options: [
+        ['split', 'Two bodies'],
+        ['faces', 'One body, faces split at the line']
+      ]
     },
     {
       key: '__note',
@@ -5565,6 +5590,7 @@ function startFeatureDialog(type) {
       ry: '0',
       rz: '0',
       copy: false,
+      toPosition: [0, 0, 0],
       moveObject: 'bodies',
       faces: [],
       direction: null,
@@ -6968,6 +6994,7 @@ function startSilhouetteSplit() {
     id: uid('f'),
     type: 'silhouetteSplit',
     direction: null,
+    operation: 'split',
     bodies: bodySelectionOrAll()
   };
   openFeatureEditor(feature, 'Silhouette Split', silhouetteFields());

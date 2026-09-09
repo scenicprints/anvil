@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.59.0**. 565 tests.
+Current version: **2.60.0**. 567 tests.
 
 **Everything on this roadmap has shipped.** Batches 11 to 20b, and all four
 workspaces in Batch 21: Render, Animation, Simulation and Generative Design.

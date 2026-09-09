@@ -4748,6 +4748,53 @@ async function run() {
     near((bb.min[2] + bb.max[2]) / 2, 7, 1e-3, 'along z');
   });
 
+  test('move: point to a position puts that point exactly there', () => {
+    // The same shift as point to point with the far end typed rather than
+    // picked, which is how a part goes to a coordinate somebody handed you
+    // rather than to a place on another part.
+    const doc = newDocument();
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '10', depth: '10', height: '10', centered: true },
+      op: 'new'
+    });
+    doc.features.push({
+      id: uid('f'),
+      type: 'move',
+      bodies: 'all',
+      moveType: 'position',
+      // A corner of the box, which has to end up at the coordinate given.
+      fromPoint: [5, 5, 5],
+      toPosition: [100, -20, 3]
+    });
+    const bb = rebuild(doc).bodies[0].solid.boundingBox();
+    near(bb.max[0], 100, 1e-3, 'the corner landed on x');
+    near(bb.max[1], -20, 1e-3, 'and on y');
+    near(bb.max[2], 3, 1e-3, 'and on z');
+
+    // No point picked is no move, not a jump to the origin: the dialog opens
+    // in that state and the part would leave the moment it did.
+    const idle = newDocument();
+    idle.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '10', depth: '10', height: '10', centered: true },
+      op: 'new'
+    });
+    idle.features.push({
+      id: uid('f'),
+      type: 'move',
+      bodies: 'all',
+      moveType: 'position',
+      fromPoint: null,
+      toPosition: [100, 0, 0]
+    });
+    near(rebuild(idle).bodies[0].solid.boundingBox().max[0], 5, 1e-6, 'nothing picked, no move');
+  });
+
   test('move: a copy leaves the original standing where it was', () => {
     const mk = (extra) => {
       const doc = newDocument();
@@ -5660,6 +5707,56 @@ async function run() {
     const vols = out.bodies.map((b) => b.solid.volume()).sort((a, b) => a - b);
     near(vols[0] + vols[1], whole, whole * 0.01, 'the halves make the whole');
     near(vols[0], vols[1], whole * 0.02, 'and they are equal');
+  });
+
+  test('silhouette split: faces only leaves one body with a seam round it', () => {
+    // Fusion's Split Faces Only. The part stays one body and only its faces
+    // are parted at the line, which is what a draft or a press pull needs to
+    // be able to take one side of a moulded part.
+    const build = (extra) => {
+      const doc = newDocument();
+      // A sphere, whose silhouette seen down Z is its equator: the one shape
+      // where the parting line is certainly flat.
+      doc.features.push(prim('sphere', { diameter: '30', centered: true, x: '0', y: '0', z: '0' }));
+      doc.features.push({
+        id: uid('f'),
+        type: 'silhouetteSplit',
+        bodies: 'all',
+        direction: { plane: 'XY' },
+        ...extra
+      });
+      return rebuild(doc);
+    };
+
+    const two = build({});
+    assert(two.bodies.length === 2, `parting gives two bodies, got ${two.bodies.length}`);
+    const whole = two.bodies.reduce((sum, b) => sum + b.solid.volume(), 0);
+    two.dispose();
+
+    const one = build({ operation: 'faces' });
+    assert(one.errors.length === 0, JSON.stringify(one.errors));
+    assert(one.bodies.length === 1, `faces only leaves one body, got ${one.bodies.length}`);
+    near(one.bodies[0].solid.volume(), whole, whole * 0.001, 'and the same part, not a smaller one');
+
+    // The seam has to actually be there. Counted against the same sphere with
+    // no split rather than against a number: how many faces a tessellated
+    // sphere reads as is the topology's business, and pinning it here would
+    // make this test fail the day that changes for a reason of its own.
+    const plain = (() => {
+      const d = newDocument();
+      d.features.push(prim('sphere', { diameter: '30', centered: true, x: '0', y: '0', z: '0' }));
+      const r = rebuild(d);
+      const n = buildTopology(K.meshData(r.bodies[0].solid), topologyOptions(r.bodies[0])).faces
+        .length;
+      r.dispose();
+      return n;
+    })();
+    const topo = buildTopology(K.meshData(one.bodies[0].solid), topologyOptions(one.bodies[0]));
+    assert(
+      topo.faces.length > plain,
+      `the seam parts the surface: ${topo.faces.length} faces against ${plain} unsplit`
+    );
+    one.dispose();
   });
 
   test('silhouette split: a bumpy silhouette is refused, not guessed at', () => {
