@@ -1465,6 +1465,65 @@ export class Viewport {
     this.invalidate();
   }
 
+  /**
+   * Draw the tangent handles at a picked cage point.
+   *
+   * A second set of marks in a colour of their own, and that is the whole
+   * reason they are separate objects rather than more cage points: a handle
+   * that cannot be told apart from a control point is worse than no handle,
+   * because every drag becomes a guess about what is about to move.
+   */
+  setTangentHandles(handles) {
+    if (!handles?.length) {
+      if (this.tangentMarks) this.tangentMarks.visible = false;
+      this.tangentHandles = null;
+      this.invalidate();
+      return;
+    }
+    this.tangentHandles = handles;
+
+    const flat = new Float32Array(handles.length * 3);
+    handles.forEach((h, i) => {
+      flat[i * 3] = h.at[0];
+      flat[i * 3 + 1] = h.at[1];
+      flat[i * 3 + 2] = h.at[2];
+    });
+    if (!this.tangentMarks) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(flat, 3));
+      this.tangentMarks = new THREE.Points(
+        geom,
+        new THREE.PointsMaterial({
+          color: 0x2f7fbf,
+          size: 9,
+          sizeAttenuation: false,
+          depthTest: false
+        })
+      );
+      this.tangentMarks.renderOrder = 7;
+      this.overlayGroup.add(this.tangentMarks);
+    } else {
+      this.tangentMarks.geometry.dispose();
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(flat, 3));
+      this.tangentMarks.geometry = geom;
+    }
+    this.tangentMarks.visible = true;
+    this.invalidate();
+  }
+
+  /** Which tangent handle is under the pointer, if any. */
+  pickTangentHandle(clientX, clientY) {
+    if (!this.tangentHandles || !this.tangentMarks?.visible) return null;
+    const rc = this.raycastRay(clientX, clientY);
+    rc.params.Points = { threshold: this.pixelSize() * 9 };
+    const hits = rc.intersectObject(this.tangentMarks, false);
+    if (!hits.length) return null;
+    let best = hits[0];
+    for (const h of hits) if (h.distance < best.distance) best = h;
+    return best.index === undefined ? null : this.tangentHandles[best.index];
+  }
+
   /** Which cage point is under the pointer, if any. */
   pickCagePoint(clientX, clientY) {
     if (!this.cagePoints || !this.cageMarks?.visible) return null;

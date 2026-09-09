@@ -932,15 +932,23 @@ revolve, sweep and loft into a T-Spline. Anvil has every one.
 | Convert to a solid | has |
 | Mirror-Internal / Circular-Internal symmetry | has |
 | Edit By Curve (drive edges with a curve) | has, as `formByCurve` |
-| **Tangent handles** | **missing** |
-| **Snap vertices to objects** | **missing** |
+| Tangent handles | has, v2.69.0. Shown at one picked point only, since with several there is no one tangent to take hold of. Dragging one slides that neighbour along the line it already lies on, so the direction stays and the pull changes |
+| Snap vertices to objects | has, v2.69.0, on the same corners and hole centres point to point uses. Never onto the form's own surface, which would chase itself |
 | Display Mode (box, control frame, smooth) | has. All three, per form, on the undo stack |
-| **Control points and surface points** as separate things to grab | **missing** |
+| Control points and surface points as separate things to grab | has, v2.69.0, as the Drag row. Grabbing the surface says where the surface is to go and solves back for the control point that puts it there |
 
 Anvil also has `makeUniform`, which Fusion does not list.
 
-Two gaps, and both are about *how you grab a point* rather than what the cage
-can do: tangent handles, and snapping a vertex onto other geometry.
+All three of these arrived together in v2.69.0, because they are one want: a
+cage edited by dragging what you can see rather than by typing into a dialog.
+
+Grabbing the surface needed the Catmull-Clark limit mask, and the version of
+that formula that gets quoted, over edge midpoints and face centroids, is an
+approximation that only improves as the mesh is refined. On a cube cage it puts
+the corner half as far out again as the surface really is. The exact mask is
+over the vertex, its neighbours and the far corner of each quad across from it,
+at n squared, 4 and 1 over n(n+5), which on a regular vertex is the bicubic
+B-spline mask 16, 4, 1 over 36.
 
 Display Mode was listed here as missing and is not: `cmdFormDisplay` carries box,
 control frame and smooth, per form and on the undo stack. Checked against the

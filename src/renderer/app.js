@@ -764,10 +764,14 @@ function refreshHighlight() {
  *
  * Worked out once per rebuild, because it walks every edge of every body.
  */
-function modelSnapPoints() {
-  if (state.snapPointsFor === state.result && state.snapPoints) return state.snapPoints;
+function modelSnapPoints(skipBody) {
+  if (!skipBody && state.snapPointsFor === state.result && state.snapPoints) return state.snapPoints;
   const out = [];
   for (const rec of state.records || []) {
+    // A point being dragged must not snap to the surface it is itself making.
+    // It would chase itself: every move changes the shape, which moves the
+    // thing it was aiming at.
+    if (skipBody && rec.id === skipBody) continue;
     const topo = rec.topology;
     if (!topo) continue;
     for (const e of topo.edges) {
@@ -786,6 +790,7 @@ function modelSnapPoints() {
       if (f.centre) out.push({ at: f.centre, label: 'Middle of the face' });
     }
   }
+  if (skipBody) return out;
   state.snapPoints = out;
   state.snapPointsFor = state.result;
   return out;
@@ -801,9 +806,9 @@ const SNAP_RANK = {
 };
 
 /** The place in the model nearest the pointer, or nothing within reach. */
-function snapModelPoint(clientX, clientY) {
+function snapModelPoint(clientX, clientY, opts = {}) {
   let best = null;
-  for (const c of modelSnapPoints()) {
+  for (const c of modelSnapPoints(opts.skipBody)) {
     const s = state.vp.worldToScreen(c.at[0], c.at[1], c.at[2]);
     if (!s || s.behind) continue;
     const d = Math.hypot(s.clientX - clientX, s.clientY - clientY);
@@ -19387,6 +19392,10 @@ const addv = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const mulv = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const distance3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const unitv = (a) => {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
 
 /**
  * Where along a line the pointer's ray comes nearest to it.
@@ -19464,6 +19473,13 @@ function newEditForm(body) {
     mode: 'multi',
     space: 'world',
     filter: 'all',
+    // What the marks stand for and what a drag moves. A control point is not on
+    // the shape: it is a weight pulling on it, and on anything rounded it sits
+    // a long way off. Grabbing the surface instead puts the mark where the
+    // shape is and works backwards to the control point that puts it there.
+    grab: 'control',
+    tangents: true,
+    snap: true,
     soft: { extent: 'none', transition: 'smooth', distance: 15, faces: 2, weight: 1 },
     vertices: new Set(),
     drag: null
@@ -19513,6 +19529,7 @@ function endEditForm() {
   state.editForm = null;
   state.vp.setGizmo(null);
   state.vp.setCagePoints(null);
+  state.vp.setTangentHandles(null);
   hideInspector();
   setStatus('Done shaping.');
 }
@@ -19545,12 +19562,50 @@ function refreshEditForm() {
   // Points that no longer exist go: a cage can lose points to a weld.
   for (const v of [...ed.vertices]) if (!cage.points[v]) ed.vertices.delete(v);
 
-  state.vp.setCagePoints(cage.points, ed.vertices);
+  state.vp.setCagePoints(grabPoints(cage, ed), ed.vertices);
+  state.vp.setTangentHandles(tangentHandles(cage, ed));
   if (!ed.vertices.size) {
     state.vp.setGizmo(null);
     return;
   }
   state.vp.setGizmo(gizmoFrame(cage, ed), ed.mode);
+}
+
+/** The points the marks stand on: the cage itself, or the surface it makes. */
+function grabPoints(cage, ed) {
+  return ed.grab === 'surface' ? FM.limitPoints(cage) : cage.points;
+}
+
+/**
+ * The tangent handles at a single picked point.
+ *
+ * One point only. A tangent handle says which way the surface leaves this
+ * vertex and how hard, and with several points picked there is no one answer to
+ * either; showing a cloud of them would be a worse tool than showing none.
+ *
+ * Each handle sits partway along a cage edge, and dragging it slides that
+ * neighbour along the same line. That is what a tangent handle is: the
+ * direction stays, the pull changes.
+ */
+function tangentHandles(cage, ed) {
+  if (!ed.tangents || ed.vertices.size !== 1) return null;
+  const v = [...ed.vertices][0];
+  const p = cage.points[v];
+  if (!p) return null;
+  const adj = FM.adjacency(cage);
+  const out = [];
+  for (const k of adj.edgesAt[v] || []) {
+    const e = adj.edges.get(k);
+    const nb = e.a === v ? e.b : e.a;
+    const q = cage.points[nb];
+    if (!q) continue;
+    out.push({
+      vertex: v,
+      neighbour: nb,
+      at: [p[0] + (q[0] - p[0]) * 0.45, p[1] + (q[1] - p[1]) * 0.45, p[2] + (q[2] - p[2]) * 0.45]
+    });
+  }
+  return out.length ? out : null;
 }
 
 /** Where the manipulator sits, and which way its axes run. */
@@ -19568,6 +19623,15 @@ function gizmoFrame(cage, ed) {
         })()
       : null;
   const f = FM.selectionFrame(cage, verts, ed.space, camera);
+  // Grabbing the surface puts the manipulator on the surface too. Left on the
+  // cage it would sit off in space beside the thing being dragged, which is
+  // the confusion this mode exists to end.
+  if (ed.grab === 'surface' && verts.length) {
+    const L = FM.limitPoints(cage);
+    const at = [0, 0, 0];
+    for (const v of verts) for (let d = 0; d < 3; d++) at[d] += L[v][d] / verts.length;
+    return { origin: at, x: f.x, y: f.y, z: f.z };
+  }
   return { origin: f.origin, x: f.x, y: f.y, z: f.z };
 }
 
@@ -19581,6 +19645,22 @@ function gizmoFrame(cage, ed) {
 function editFormPointerDown(e) {
   const ed = editingForm();
   if (!ed) return false;
+
+  /*
+   * A tangent handle gets first refusal, ahead of the manipulator.
+   *
+   * They overlap: handles are only shown with one point picked, which is
+   * exactly when the manipulator is sitting on that point, and a handle
+   * partway along an edge often lies on an arrow. Being within a few pixels of
+   * a mark the size of a full stop is a far more specific thing to have meant
+   * than being somewhere along an arrow as long as your thumb, so that is the
+   * one that wins.
+   */
+  const tangent = state.vp.pickTangentHandle(e.clientX, e.clientY);
+  if (tangent) {
+    beginTangentDrag(tangent, e);
+    return true;
+  }
 
   const handle = state.vp.pickGizmo(e.clientX, e.clientY);
   if (handle) {
@@ -19705,6 +19785,23 @@ function editFormPointerMove(e) {
   const ed = editingForm();
   if (!ed?.drag) return false;
   const d = ed.drag;
+  if (d.handle.kind === 'tangent') {
+    const t = closestOnLine(state.vp.pointerRay(e.clientX, e.clientY), d.tangent.from, d.tangent.axis);
+    // The neighbour stays on its own side of the vertex. Dragged through it the
+    // edge would turn inside out, which is not a shorter tangent but a
+    // different surface, and not one anybody dragged towards.
+    const along = Math.max(t, 1e-3);
+    const at = addv(d.tangent.from, mulv(d.tangent.axis, along));
+    state.doc.forms[ed.form] = Object.assign(
+      FM.transformPoints(d.before, d.weights, () => at),
+      { name: d.before.name }
+    );
+    d.moved = true;
+    rebuildAll();
+    refreshEditForm();
+    return true;
+  }
+
   const now = pointOnHandle(d.handle, d.frame, e);
   const axis = d.handle.axis >= 0 ? [d.frame.x, d.frame.y, d.frame.z][d.handle.axis] : d.frame.z;
 
@@ -19742,14 +19839,73 @@ function editFormPointerMove(e) {
   }
   if (!transform) return true;
 
-  state.doc.forms[ed.form] = Object.assign(
-    FM.transformPoints(d.before, d.weights, transform),
-    { name: d.before.name }
-  );
+  /*
+   * Fusion's Snap To Objects, and the case it is for: a form that has to sit
+   * on a part, where by eye is never quite on it and a gap of a tenth is a
+   * print that does not fit.
+   *
+   * Only while moving, only with one point picked, and only onto other bodies:
+   * a point snapping to the surface it is itself making would chase itself.
+   * The pointer decides what is near, not the point, because what is being
+   * aimed at is what is under the cursor.
+   */
+  if (ed.snap && d.verts.length === 1 && (d.handle.kind === 'move' || d.handle.kind === 'movePlane')) {
+    const at = snapModelPoint(e.clientX, e.clientY, { skipBody: ed.bodyId });
+    if (at) {
+      const from = d.before.points[d.verts[0]];
+      const here = transform(from, d.verts[0]);
+      // Near in pixels is already settled; this is the last check that the
+      // point being dragged is the one that arrives, not some other one.
+      if (distance3(here, at.at) < snapReach()) {
+        transform = FM.translation(sub3(at.at, from));
+        setStatus(`Snapped to ${at.label.toLowerCase()}.`);
+      }
+    }
+  }
+
+  const move = ed.grab === 'surface' ? FM.transformLimitPoints : FM.transformPoints;
+  state.doc.forms[ed.form] = Object.assign(move(d.before, d.weights, transform), {
+    name: d.before.name
+  });
   d.moved = true;
   rebuildAll();
   refreshEditForm();
   return true;
+}
+
+/** How far off a snap point still counts, in model units at this zoom. */
+function snapReach() {
+  return state.vp.pixelSize() * 16;
+}
+
+/**
+ * Start a drag on a tangent handle.
+ *
+ * Only the one neighbour moves and only along the line it already lies on, so
+ * everything the drag needs is that line and where on it the pointer went down.
+ */
+function beginTangentDrag(handle, e) {
+  const ed = editingForm();
+  const cage = state.doc.forms[ed.form];
+  const from = cage.points[handle.vertex];
+  const to = cage.points[handle.neighbour];
+  const axis = unitv(sub3(to, from));
+  ed.drag = {
+    handle: { kind: 'tangent', axis: -1 },
+    tangent: { ...handle, from, axis },
+    frame: { origin: from, x: axis, y: axis, z: axis },
+    verts: [handle.neighbour],
+    weights: new Map([[handle.neighbour, 1]]),
+    before: cage,
+    start: { t: closestOnLine(state.vp.pointerRay(e.clientX, e.clientY), from, axis) },
+    moved: false,
+    pointerId: e.pointerId
+  };
+  try {
+    state.vp.canvas.setPointerCapture(e.pointerId);
+  } catch {
+    /* some pointers cannot be captured, and the drag still works in the canvas */
+  }
 }
 
 /** Let go: one undo entry for the whole drag, not one per frame. */
@@ -19945,6 +20101,34 @@ function editFormFields() {
       options: SELECT_FILTERS,
       get: get('filter'),
       set: set('filter')
+    },
+    {
+      // The one thing about box modelling everybody has to be told: a control
+      // point is not on the shape. Offering the surface as a thing to grab is
+      // how the tool says so rather than leaving it to be discovered.
+      key: 'grab',
+      label: 'Drag',
+      type: 'select',
+      options: [
+        ['control', 'Control points, off the surface'],
+        ['surface', 'The surface itself']
+      ],
+      get: get('grab'),
+      set: set('grab')
+    },
+    {
+      key: 'tangents',
+      label: 'Show tangent handles',
+      type: 'bool',
+      get: get('tangents'),
+      set: set('tangents')
+    },
+    {
+      key: 'snap',
+      label: 'Snap to the model',
+      type: 'bool',
+      get: get('snap'),
+      set: set('snap')
     },
     {
       key: 'soft.extent',
@@ -20943,6 +21127,12 @@ window.anvilDev = {
   axisDragAmount,
   pullTarget,
   edgeReference,
+  // Shaping a form is all drags, and where a control point has to go to put the
+  // surface somewhere is arithmetic a probe should check directly rather than
+  // aim a gizmo arrow at.
+  form: FM,
+  refreshEditForm,
+  snapModelPoint,
   // The parameter file readers, so a probe can put a table out and read it back
   // without going through a save dialog it cannot answer.
   expr: { parametersToCsv, parametersFromCsv },

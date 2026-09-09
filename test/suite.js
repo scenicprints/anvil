@@ -14282,6 +14282,87 @@ async function run() {
     assert(one.size === 3, `a corner has two neighbours plus itself, got ${one.size}`);
   });
 
+  test('form: a limit point is where the surface actually is', () => {
+    // The one thing about box modelling everybody has to be told: a control
+    // point is not on the shape. A cube cage makes a rounded blob, and every
+    // corner of the cage sits well outside it.
+    const plane = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+    const cage = FM.boxCage(plane, [20, 20, 20], [2, 2, 2]);
+    const limit = FM.limitPoints(cage);
+    assert(limit.length === cage.points.length, 'one per point');
+
+    const corner = cage.points.findIndex((p) => p.every((v) => Math.abs(v) > 9));
+    assert(corner >= 0, 'the cage has corners');
+    const outer = Math.hypot(...cage.points[corner]);
+    const inner = Math.hypot(...limit[corner]);
+    assert(inner < outer - 1, `the surface is inside the cage, ${inner} against ${outer}`);
+
+    // And it is the surface, not an approximation of it: subdividing far enough
+    // has to arrive at the same place.
+    const deep = FM.subdivided(cage, 5);
+    let nearest = Infinity;
+    for (const p of deep.points) {
+      nearest = Math.min(
+        nearest,
+        Math.hypot(p[0] - limit[corner][0], p[1] - limit[corner][1], p[2] - limit[corner][2])
+      );
+    }
+    assert(nearest < 0.005, `subdividing lands on the limit point, off by ${nearest}`);
+
+    /*
+     * And it lands exactly. A cube cage's corner has valence three, and the
+     * mask over the vertex, its three neighbours and the far corner of each of
+     * its three quads comes to exactly three quarters of the way in.
+     *
+     * The version of this formula that gets quoted uses edge midpoints and face
+     * centroids and gives 8.75 here, which is only an approximation that
+     * improves as the mesh is refined. On a coarse cage, which is every cage
+     * anybody actually drags, it is half as far out again as the surface is.
+     */
+    for (const v of limit[corner]) near(Math.abs(v), 7.5, 1e-9, 'exactly three quarters in');
+  });
+
+  test('form: dragging the surface solves back to the control point', () => {
+    // Grabbing the surface means saying where the surface is to go and letting
+    // the cage work out what puts it there. The test is the round trip: ask for
+    // a move of exactly 5, and the limit point has to arrive at exactly 5.
+    const plane = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], n: [0, 0, 1] };
+    const cage = FM.boxCage(plane, [20, 20, 20], [2, 2, 2]);
+    const before = FM.limitPoints(cage);
+    const v = 0;
+    const weights = new Map([[v, 1]]);
+    const moved = FM.transformLimitPoints(cage, weights, FM.translation([5, 0, 0]));
+
+    const after = FM.limitPoints(moved);
+    near(after[v][0], before[v][0] + 5, 1e-6, 'the surface went exactly where it was sent');
+    near(after[v][1], before[v][1], 1e-6, 'and nowhere else');
+
+    // The control point had to move further than the surface did, which is the
+    // whole reason this mode exists: dragging the cage by 5 does not move the
+    // shape by 5.
+    const cageMove = moved.points[v][0] - cage.points[v][0];
+    assert(cageMove > 6, `the control point moved further, by ${cageMove.toFixed(2)}`);
+  });
+
+  test('form: the rim of an open cage is a spline in its own right', () => {
+    // A boundary vertex's limit is worked out along the rim alone: nothing
+    // inside the patch has any say. Getting that wrong pulls the edge of an
+    // open form inward, which is exactly where it would be seen.
+    const grid = FM.planeCage(FXY, 40, 40, 4, 4);
+    const limit = FM.limitPoints(grid);
+    // The cage is flat, so nothing should leave the plane, and a straight run
+    // of collinear rim points has nothing to pull it sideways either.
+    for (let v = 0; v < grid.points.length; v++) {
+      near(limit[v][2], 0, 1e-9, `point ${v} stays in the plane`);
+    }
+    // And the rim is a spline, so it does not go through its own control
+    // points: the corner pulls in to (4V + the two along the rim) / 6, which on
+    // a 40 by 40 grid in four is (80 + 20 + 10) / 6.
+    const corner = grid.points.findIndex((p) => p[0] > 19 && p[1] > 19);
+    near(limit[corner][0], 110 / 6, 1e-9, 'the corner of the rim pulls in');
+    near(limit[corner][1], 110 / 6, 1e-9, 'by the same on both sides');
+  });
+
   test('edit form: moving points moves only what was weighted', () => {
     const grid = FM.planeCage(FXY, 40, 40, 4, 4);
     const chosen = [0, 1];

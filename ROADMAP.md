@@ -28,20 +28,6 @@ building that thing badly and then building it again.
 `FUSION-FEATURES.md` is the inventory these come from. Anything not listed here
 is either built or recorded there with the reason it is not.
 
-### Batch 23: direct manipulation in Form
-
-**Tangent handles, vertex snapping to model geometry, and control points and
-surface points as separate things to grab.**
-
-All three are the same want: a cage that can be edited by dragging what you can
-see rather than by typing into a dialog. The Form workspace has the cage, the
-subdivision, and every command that changes its shape. What it does not have is
-the on-screen handles.
-
-One batch because they share the handle machinery and the hit testing, and
-because two of the three are meaningless without the third: a tangent handle
-you cannot tell apart from a control point is a worse tool than no handle.
-
 ### Batch 24: external components
 
 **Edit In Place, Break Link, Update Components, Derived Design Features, and

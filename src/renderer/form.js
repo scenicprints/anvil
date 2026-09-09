@@ -2466,6 +2466,150 @@ export function softWeights(cage, chosen, opts = {}, adj = adjacency(cage)) {
  * One place, so live symmetry, soft weighting and the three kinds of transform
  * are decided once rather than in each of the manipulator's handles.
  */
+/**
+ * Where each cage point ends up on the surface itself.
+ *
+ * A control point is not on the shape. It is a weight pulling on it, and on a
+ * rounded form it can sit a long way off, which is the one thing about box
+ * modelling that everybody has to be told. The limit point is where that
+ * vertex's corner of the surface actually lands however many times it is
+ * subdivided, and Catmull-Clark has a closed form for it, so it does not have
+ * to be found by subdividing and looking.
+ *
+ * The mask is the vertex, its neighbours, and the far corner of each quad
+ * across from it, at n squared, 4 and 1 over n(n+5). Not the edge midpoints and
+ * face centroids, which is the version that gets quoted and is only an
+ * approximation that improves as the mesh is refined: on a coarse cage it puts
+ * a cube's corner half as far out again as the surface really is. On a regular
+ * vertex the mask above is exactly the bicubic B-spline one, 16, 4 and 1 over
+ * 36, which is the check worth remembering.
+ *
+ * On the rim the surface is a cubic B-spline along the boundary and nothing
+ * inside it has any say, so that is worked out along the rim alone. Getting
+ * that wrong pulls the edge of an open form inward, which is exactly where it
+ * would be noticed.
+ */
+export function limitPoints(cage, adj = adjacency(cage)) {
+  const P = cage.points;
+  const open = new Set();
+  for (const e of adj.edges.values()) if (e.faces.length === 1) open.add(e.key);
+
+  return P.map((p, v) => {
+    const keys = adj.edgesAt[v] || [];
+    if (!keys.length) return [p[0], p[1], p[2]];
+
+    const rim = keys.filter((k) => open.has(k));
+    if (rim.length) {
+      // A point where more than two boundary runs meet is not on one spline,
+      // so there is no one curve to place it on and it stays where it is.
+      if (rim.length !== 2) return [p[0], p[1], p[2]];
+      let sum = mul(p, 4);
+      for (const k of rim) {
+        const e = adj.edges.get(k);
+        sum = add(sum, P[e.a === v ? e.b : e.a]);
+      }
+      return mul(sum, 1 / 6);
+    }
+
+    const n = keys.length;
+    const faces = adj.facesAt[v] || [];
+    // The valence has to be the same on both counts, or this is not the
+    // ordinary interior case the mask is for.
+    if (faces.length !== n) return [p[0], p[1], p[2]];
+
+    let round = [0, 0, 0];
+    for (const k of keys) {
+      const e = adj.edges.get(k);
+      round = add(round, P[e.a === v ? e.b : e.a]);
+    }
+
+    let across = [0, 0, 0];
+    for (const fi of faces) {
+      const f = cage.faces[fi];
+      const at = f.indexOf(v);
+      if (at < 0) return [p[0], p[1], p[2]];
+      if (f.length === 4) {
+        across = add(across, P[f[(at + 2) % 4]]);
+        continue;
+      }
+      // Not a quad, so there is no one corner across from this one. The
+      // average of everything in the face that is not this vertex or beside it
+      // is the same point on a quad and a reasonable stand-in elsewhere; a
+      // triangle has nothing left, and its centre is the nearest thing.
+      const far = f.filter(
+        (w, i) => i !== at && i !== (at + 1) % f.length && i !== (at + f.length - 1) % f.length
+      );
+      const pool = far.length ? far : f;
+      let c = [0, 0, 0];
+      for (const w of pool) c = add(c, P[w]);
+      across = add(across, mul(c, 1 / pool.length));
+    }
+
+    return mul(add(add(mul(p, n * n), mul(round, 4)), across), 1 / (n * (n + 5)));
+  });
+}
+
+/**
+ * Move the surface rather than the cage.
+ *
+ * The drag says where the limit points are to go; this works out where the
+ * control points have to be for them to land there. One pass is not enough
+ * because moving a control point moves its neighbours' limit points too, so it
+ * is iterated: each round moves every point by what its own limit point is
+ * still short by, scaled by how much of its own movement reaches the surface.
+ *
+ * That scale is the vertex's own weight in the limit rule, n/(n+5) inside and
+ * 2/3 on the rim; nothing else in the mask carries this vertex.
+ *
+ * Dividing by that weight is Jacobi iteration on the limit operator. It lands
+ * exactly in one round when a single point is moving, and settles in a few when
+ * a soft selection moves a patch at once; the rounds are cheap because a cage
+ * is hundreds of points, not the millions its surface has.
+ */
+export function transformLimitPoints(cage, weights, transform, rounds = 8) {
+  const adj = adjacency(cage);
+  const open = new Set();
+  for (const e of adj.edges.values()) if (e.faces.length === 1) open.add(e.key);
+
+  const selfWeight = (v) => {
+    const keys = adj.edgesAt[v] || [];
+    if (!keys.length) return 1;
+    const rim = keys.filter((k) => open.has(k));
+    if (rim.length) return rim.length === 2 ? 2 / 3 : 1;
+    const n = keys.length;
+    if ((adj.facesAt[v] || []).length !== n) return 1;
+    // Nothing but the n squared term carries this vertex: the neighbours and
+    // the corners across are other points.
+    return n / (n + 5);
+  };
+
+  const start = limitPoints(cage, adj);
+  const want = new Map();
+  for (const [v, w] of weights) {
+    if (!(w > 0)) continue;
+    const from = start[v];
+    const to = transform(from, v);
+    want.set(v, add(from, mul(sub(to, from), w)));
+  }
+  if (!want.size) return cloneCage(cage);
+
+  let out = cloneCage(cage);
+  for (let round = 0; round < rounds; round++) {
+    const now = limitPoints(out, adj);
+    const moved = new Map();
+    let worst = 0;
+    for (const [v, target] of want) {
+      const gap = sub(target, now[v]);
+      worst = Math.max(worst, len(gap));
+      moved.set(v, add(out.points[v], mul(gap, 1 / selfWeight(v))));
+    }
+    for (const [v, p] of mirrorMoves(out, moved)) out.points[v] = p;
+    if (worst < 1e-9) break;
+  }
+  out.name = cage.name;
+  return out;
+}
+
 export function transformPoints(cage, weights, transform) {
   const out = cloneCage(cage);
   const moved = new Map();
