@@ -1845,6 +1845,54 @@ since undo hands back a document parsed afresh.
 
 ---
 
+## Making a photograph of a part
+
+Four things, and the order they matter in is not the order they look like they
+matter in.
+
+**The environment does most of the work.** What makes a part look real is almost
+never the lights, it is what its surfaces have to reflect: a steel bracket lit by
+three lamps in an empty void reads as grey plastic, because a mirror with nothing
+in front of it is grey. So there is a studio, built out of a handful of emissive
+planes and turned into an environment map: a soft gradient shell, a big softbox
+overhead and a little to one side, two dimmer fill panels, and a low strip that
+puts the bright line along a bottom edge. Built rather than loaded, because an
+HDR file is a few hundred kilobytes to ship, to keep in the installer, and to be
+somebody's copyright.
+
+**The shadow is what puts the part somewhere.** A part floating in a void with no
+contact shadow reads as a drawing however good the lighting is. There is a floor
+under it that draws nothing but the shadow, so the background stays whatever it
+was set to.
+
+That took a real fix. The working view's lights sit about a unit from the origin,
+because for shading a directional light is a direction and nothing else. A shadow
+is not: the shadow camera stands at the light's position and looks at its target,
+and at a unit and a half from the origin that camera is *inside* a part sixty
+millimetres across. The light is moved out along its own direction for the
+render, which leaves the shading untouched and gives the shadow camera something
+to see.
+
+**The tone mapping is what stops a highlight going flat.** ACES rolls off the way
+film does. Without it a lit edge on metal clips to white and takes the shape of
+the part with it.
+
+**The materials come last**, because a good material in an empty room still looks
+like nothing. Metalness is a switch and not a dial: what separates brushed
+aluminium from polished steel is roughness, and what separates a printed part
+from a moulded one is roughness too. The plastics carry a clear coat instead,
+which is the thin shiny layer over a diffuse colour that a moulded or painted
+part actually has, and that needs a physical material, so a finish that wants one
+gets a material of its own for the length of the render.
+
+Passes are accumulated with the camera jittered by a fraction of a pixel and the
+light allowed to wander, which is anti-aliasing and a soft shadow edge from the
+same loop: a light that moves a little between passes is a light with a size.
+
+Everything is put back afterwards. `demo-render.js` checks that off the pixels
+rather than by looking, because every one of these can be wired up correctly and
+still produce nothing.
+
 ## Reading a Fusion archive
 
 An `.f3d` is a zip. The geometry inside it is in `Breps.BlobParts` as `.smb`
@@ -1885,8 +1933,11 @@ otherwise.
 ## What is not here
 
 **Not modelling at all**, and each its own application rather than a missing
-button: CAM and toolpaths, drawings, and simulation. Rendering is flat shading
-with feature edges, not a photoreal renderer.
+button: CAM and toolpaths, drawings, and simulation.
+
+The working view is flat shading with feature edges, deliberately: the shape is
+the subject there and a reflection is something to see past. Render makes a
+photograph instead, and the two are a switch on the same dialog.
 
 Of Fusion's Sketch tab, nothing is missing. Of its Inspect panel, Fastener
 Stack, Display Component Colors and Find Similar Components are not modelling

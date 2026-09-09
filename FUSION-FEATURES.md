@@ -1089,9 +1089,9 @@ output fit an assembly rather than merely be strong.
 |---|---|
 | Appearance | has |
 | Scene settings / environmental lighting | partial |
-| **Point Light** | **missing** |
-| **Spot Light** | **missing** |
-| **Photometric Light** | **missing** |
+| Point Light | **missing**, and less needed than it was: v2.76.0 lights a render from an environment, which is what a studio actually is. A named lamp you can place is still not here |
+| Spot Light | **missing** |
+| Photometric Light | **missing** |
 | Dielectric priority for overlapping transparent volumes | **missing** |
 | Insert canvas (image) | has |
 | Decal | has |

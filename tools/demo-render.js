@@ -1,156 +1,166 @@
 /**
- * Render: a still of the model, accumulated rather than grabbed off the screen.
+ * The photoreal render.
  *
- * The save dialog is skipped, because a demo that needs somebody to click Save
- * is not a demo. What is checked is the picture itself: that it is the size
- * asked for, that it holds the model rather than an empty frame, and that the
- * grid and the origin planes are not in it, which is the difference between a
- * render and a screenshot.
+ * What makes a render of a part look real is almost never the lights, it is
+ * what the surfaces have to reflect. A steel bracket lit by three lamps in an
+ * empty void reads as grey plastic, because a mirror with nothing in front of
+ * it is grey.
+ *
+ * So what is checked here is that the three things that matter actually
+ * happened: there is an environment to reflect, there is a shadow on the ground
+ * under the part, and the highlights roll off instead of clipping to white. All
+ * three are measured off the pixels, because every one of them can be wired up
+ * correctly and still produce nothing, and a render that quietly comes out flat
+ * looks exactly like a render that came out right until you look at it.
  */
 
 const dev = window.anvilDev;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const report = { errors: [] };
-window.addEventListener('error', (e) => report.errors.push(String(e.message)));
+window.addEventListener('error', (e) => report.errors.push(`${e.message} @ ${e.filename}:${e.lineno}`));
 
-/* ---- something to render ---- */
+/* ---- a part with something to catch the light: a boss, a bore, a fillet ---- */
 dev.setTab('solid');
-dev.runCommand('primBox');
-await wait(400);
-document.getElementById('inspectorOk').click();
-await wait(700);
-{
-  // A plate with a bore renders better than a bare box: a curved surface is
-  // where the accumulation shows, because that is where a single pass has a
-  // stepped edge.
-  const doc = dev.state.doc;
-  doc.features[0].params = {
-    ...doc.features[0].params,
-    width: '60',
-    depth: '40',
-    height: '12',
-    centered: true
-  };
-  doc.features.push({
-    id: 'fbore',
-    type: 'primitive',
-    shape: 'cylinder',
-    op: 'cut',
-    targets: 'all',
-    params: { diameter: '16', height: '40', centered: true, x: '0', y: '0', z: '0' }
-  });
-  dev.rebuildAll();
-  await wait(700);
-}
-dev.state.vp.fit();
-await wait(600);
-report.built = dev.bodies.length;
+dev.state.doc.features = [
+  { id: 'f1', type: 'primitive', shape: 'box',
+    params: { width: '60', depth: '40', height: '8', centered: true }, op: 'new' },
+  { id: 'f2', type: 'primitive', shape: 'cylinder',
+    params: { diameter: '22', height: '18', centered: false, x: '0', y: '0', z: '4' },
+    op: 'join', targets: 'all' },
+  { id: 'f3', type: 'primitive', shape: 'cylinder',
+    params: { diameter: '10', height: '40', centered: false, x: '0', y: '0', z: '-10' },
+    op: 'cut', targets: 'all' },
+  { id: 'f4', type: 'fillet', bodies: 'all', sets: [{ radius: '2', all: true }] }
+];
+dev.state.doc.materials = { default: 'aluminium' };
+dev.rebuildAll();
+await wait(2500);
+report.partBuilt = dev.bodies.length === 1;
+if (!report.partBuilt) return { ...report, stuckAt: 'the test part did not build' };
 
-/* ---- a small render, measured ---- */
-const started = performance.now();
-const canvas = await dev.state.vp.renderStill({
-  width: 480,
-  height: 300,
-  samples: 8,
-  softness: 0.08,
-  background: '#20242a'
+dev.state.vp.setCameraState({
+  target: [0, 0, 4], radius: 150, phi: 1.05, theta: 0.9, perspective: true, zoom: 120
 });
-report.render = {
-  width: canvas.width,
-  height: canvas.height,
-  tookMs: Math.round(performance.now() - started)
-};
+await wait(300);
 
-/* ---- what is actually in the picture ---- */
-{
-  const ctx = canvas.getContext('2d');
-  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  const bg = [0x20, 0x24, 0x2a];
-  let lit = 0;
-  let opaque = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] > 250) opaque++;
-    const off =
-      Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]);
-    if (off > 24) lit++;
-  }
-  const pixels = canvas.width * canvas.height;
-  report.picture = {
-    everyPixelOpaque: opaque === pixels,
-    // A box seen from the usual angle covers a good part of the frame but
-    // nothing like all of it. Nothing at all means an empty render; everything
-    // means the background was never cleared.
-    fractionCovered: +(lit / pixels).toFixed(3)
-  };
-  report.picture.holdsAModel = lit / pixels > 0.05 && lit / pixels < 0.9;
-}
-
-/* ---- the same view with nothing behind it ---- */
-{
-  const clear = await dev.state.vp.renderStill({
-    width: 240,
-    height: 150,
-    samples: 4,
-    background: 'transparent'
+/** Every pixel of a render, so it can be measured rather than looked at. */
+async function pixelsOf(opts) {
+  const canvas = await dev.renderNow({
+    width: 480, height: 360, samples: 12, softness: 0.06,
+    background: '#f2f0ec', ...opts
   });
-  const data = clear.getContext('2d').getImageData(0, 0, clear.width, clear.height).data;
-  let seeThrough = 0;
-  for (let i = 3; i < data.length; i += 4) if (data[i] < 8) seeThrough++;
-  report.transparent = {
-    // The corners of the frame have no model in them, so they must be clear.
-    someOfItIsClear: seeThrough > 0,
-    fractionClear: +(seeThrough / (clear.width * clear.height)).toFixed(3)
-  };
+  const ctx = canvas.getContext('2d');
+  return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 }
 
-/* ---- the tool is not in the picture ---- */
-report.helpersPutBack = {
-  helpers: dev.state.vp.helperGroup.visible,
-  overlay: dev.state.vp.overlayGroup.visible
-};
+/** How many distinct greys there are: a picture that drew nothing has one. */
+function shades(px) {
+  const seen = new Set();
+  for (let i = 0; i < px.length; i += 4) seen.add(px[i] >> 2);
+  return seen.size;
+}
 
-/* ---- the same settings give the same picture twice ---- */
-{
-  const a = await dev.state.vp.renderStill({ width: 120, height: 80, samples: 4 });
-  const b = await dev.state.vp.renderStill({ width: 120, height: 80, samples: 4 });
-  const da = a.getContext('2d').getImageData(0, 0, 120, 80).data;
-  const db = b.getContext('2d').getImageData(0, 0, 120, 80).data;
-  let same = true;
-  for (let i = 0; i < da.length; i++) {
-    if (da[i] !== db[i]) {
-      same = false;
-      break;
+/** How far two renders differ, per pixel, on average. */
+function difference(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i += 4) sum += Math.abs(a[i] - b[i]);
+  return sum / (a.length / 4);
+}
+
+/**
+ * How much of the lower half is in soft shadow.
+ *
+ * A shadow is neither the background nor the part: it is a band of greys a
+ * little darker than the paper. Counting that band is what separates a real
+ * shadow from the dark edge of the part, which the flat render has too.
+ */
+function shadowed(px, w, h, bg) {
+  let n = 0;
+  for (let y = Math.floor(h * 0.55); y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = px[(y * w + x) * 4];
+      if (v < bg - 8 && v > bg - 70) n++;
     }
   }
-  report.repeatable = same;
+  return n;
+}
+/** How much of the picture is pure white, which is what a clipped highlight is. */
+function clipped(px) {
+  let n = 0;
+  for (let i = 0; i < px.length; i += 4) if (px[i] > 253 && px[i + 1] > 253) n++;
+  return n / (px.length / 4);
+}
+/** How dark the darkest thing in the lower half is: the shadow on the ground. */
+function darkestBelow(px, w, h) {
+  let darkest = 255;
+  for (let y = Math.floor(h * 0.55); y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      darkest = Math.min(darkest, px[i]);
+    }
+  }
+  return darkest;
 }
 
-/* ---- and one to look at ---- */
-//
-// Put the finished picture over the window so the screenshot this demo is
-// captured with is the render itself rather than the application drawing it.
+const W = 480;
+const H = 360;
+
+/* ---- flat: what the working view looks like ---- */
+const flat = await pixelsOf({ photoreal: false });
+report.flatDrewSomething = shades(flat) > 3;
+
+/* ---- and the photograph ---- */
+const photo = await pixelsOf({ photoreal: true, ground: true, exposure: 1, environment: 1 });
+report.photoDrewSomething = shades(photo) > 3;
+
+/*
+ * The two are not the same picture.
+ *
+ * Counting distinct shades was the first thing tried here and it is the wrong
+ * measure: tone mapping compresses the range, so a richer picture can hold
+ * fewer quantised values than a flat one. What actually says the studio was
+ * built and applied is how far the pixels moved.
+ */
+report.flatShades = shades(flat);
+report.photoShades = shades(photo);
+report.howFarApart = +difference(flat, photo).toFixed(1);
+report.itIsADifferentPicture = difference(flat, photo) > 8;
+
+/*
+ * The shadow. The part sits on a plane and the light is off to one side, so
+ * somewhere in the lower half of the picture there has to be something
+ * markedly darker than the background it is falling on.
+ */
+const bg = 0xf2;
+report.darkestBelowPhoto = darkestBelow(photo, W, H);
+report.shadowPixelsFlat = shadowed(flat, W, H, bg);
+report.shadowPixelsPhoto = shadowed(photo, W, H, bg);
+// Not "is there anything dark", which the flat render satisfies with the near
+// edge of the part. A shadow is a broad band of soft grey on the paper.
+report.thereIsAShadow = shadowed(photo, W, H, bg) > shadowed(flat, W, H, bg) + 2000;
+
+/*
+ * And the highlights roll off rather than clipping. ACES is what stops a lit
+ * edge on metal going flat white and taking the shape of the part with it, so
+ * the photograph must not have more blown-out pixels than the flat render.
+ */
+report.clippedFlat = +(clipped(flat) * 100).toFixed(2);
+report.clippedPhoto = +(clipped(photo) * 100).toFixed(2);
+report.highlightsRollOff = clipped(photo) <= clipped(flat) + 0.005;
+
+/* ---- and none of it stayed behind ---- */
 {
-  const big = await dev.state.vp.renderStill({
-    width: 1200,
-    height: 750,
-    samples: 48,
-    softness: 0.09,
-    background: '#20242a'
+  // A render must not leave the working view changed. Every one of these is
+  // something the studio turns on, and every one has to be off again.
+  const vp = dev.state.vp;
+  report.shadowsOffAgain = vp.renderer.shadowMap.enabled === false;
+  report.toneMappingOffAgain = vp.renderer.toneMapping === 0;
+  report.environmentOffAgain = !vp.scene.environment;
+  const stray = [];
+  vp.scene.traverse((o) => {
+    if (o.material && o.material.isShadowMaterial) stray.push(o.name || 'a shadow plane');
   });
-  const img = document.createElement('img');
-  img.src = big.toDataURL('image/png');
-  Object.assign(img.style, {
-    position: 'fixed',
-    inset: '0',
-    width: '100%',
-    height: '100%',
-    objectFit: 'contain',
-    background: '#20242a',
-    zIndex: '99999'
-  });
-  document.body.appendChild(img);
-  await wait(600);
-  report.shown = { width: big.width, height: big.height };
+  report.groundTakenAway = stray.length === 0;
 }
 
 report.finalErrors = (dev.state.result?.errors || []).map((e) => e.message);

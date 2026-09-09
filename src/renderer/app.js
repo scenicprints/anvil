@@ -9827,7 +9827,11 @@ function cmdRender() {
     samples: '48',
     softness: '0.08',
     background: '#20242a',
-    finish: true
+    finish: true,
+    photoreal: true,
+    ground: true,
+    exposure: '1',
+    environment: '1'
   };
 
   showInspector(
@@ -9872,10 +9876,49 @@ function cmdRender() {
       },
       { key: 'finish', label: 'Use what each body is made of', type: 'bool', value: kept.finish },
       {
+        /*
+         * The switch between a photograph and a diagram.
+         *
+         * Both are worth having. A photograph is what goes on a listing or in a
+         * message to somebody who is going to hold the thing; a flat render
+         * with clean edges is what goes in a document next to a dimension,
+         * where a reflection is something to see past.
+         */
+        key: 'photoreal',
+        label: 'Look',
+        type: 'select',
+        value: kept.photoreal === false ? 'flat' : 'photo',
+        options: [
+          ['photo', 'A photograph: studio light, reflections, a shadow'],
+          ['flat', 'Flat, the way the working view looks']
+        ]
+      },
+      {
+        key: 'ground',
+        label: 'Stand it on a surface',
+        type: 'bool',
+        value: kept.ground !== false,
+        showIf: (f) => f.photoreal !== 'flat'
+      },
+      {
+        key: 'exposure',
+        label: 'Exposure',
+        type: 'expr',
+        value: kept.exposure ?? '1',
+        showIf: (f) => f.photoreal !== 'flat'
+      },
+      {
+        key: 'environment',
+        label: 'How bright the room is',
+        type: 'expr',
+        value: kept.environment ?? '1',
+        showIf: (f) => f.photoreal !== 'flat'
+      },
+      {
         key: '__note',
         label: '',
         type: 'note',
-        text: 'More passes means less noise and a cleaner edge, and takes longer in proportion. Nothing of the tool is in the picture: no grid, no planes, no manipulator.'
+        text: 'More passes means less noise, a cleaner edge and a softer shadow, and takes longer in proportion. Nothing of the tool is in the picture: no grid, no planes, no manipulator.'
       }
     ],
     async (v) => {
@@ -9894,7 +9937,11 @@ function cmdRender() {
           height,
           samples: Math.round(safeEval(v.samples, scope, 48)),
           softness: safeEval(v.softness, scope, 0.08),
-          background: v.background
+          background: v.background,
+          photoreal: v.photoreal !== 'flat',
+          ground: v.ground !== false,
+          exposure: safeEval(v.exposure, scope, 1),
+          environment: safeEval(v.environment, scope, 1)
         });
       } catch (err) {
         undo?.();
@@ -9929,6 +9976,41 @@ function cmdRender() {
  * because the working view is deliberately matt, so the shape is the subject
  * and not the finish.
  */
+/*
+ * What each material is actually like, as numbers a renderer understands.
+ *
+ * Metalness is not a dial between plastic and metal: it is a switch, and half
+ * of it is not a thing that exists. What separates brushed aluminium from
+ * polished steel is roughness, and what separates a printed part from a moulded
+ * one is roughness too. So the metals differ from each other only in how rough
+ * they are, and the plastics carry a clear coat instead, which is the thin shiny
+ * layer over a diffuse colour that a moulded or painted part actually has.
+ */
+const RENDER_FINISH = {
+  aluminium: { metalness: 1, roughness: 0.34 },
+  steel: { metalness: 1, roughness: 0.28 },
+  stainless: { metalness: 1, roughness: 0.2 },
+  brass: { metalness: 1, roughness: 0.26 },
+  titanium: { metalness: 1, roughness: 0.42 },
+  // A printed part is matt and slightly rough whatever it is made of: the layer
+  // lines scatter far more light than the polymer does.
+  pla: { metalness: 0, roughness: 0.62, clearcoat: 0.15, clearcoatRoughness: 0.5 },
+  petg: { metalness: 0, roughness: 0.42, clearcoat: 0.4, clearcoatRoughness: 0.3 },
+  abs: { metalness: 0, roughness: 0.58, clearcoat: 0.2, clearcoatRoughness: 0.45 },
+  nylon: { metalness: 0, roughness: 0.7, clearcoat: 0.05, clearcoatRoughness: 0.6 },
+  // Resin comes off the printer glossy, which is most of why it photographs
+  // better than filament does.
+  resin: { metalness: 0, roughness: 0.18, clearcoat: 0.8, clearcoatRoughness: 0.1 }
+};
+
+/**
+ * Give every body the finish of what it is made of, and hand back the undo.
+ *
+ * This is what makes the Material command worth more than a number on a mass
+ * report: steel renders as metal because it is metal. Put back afterwards,
+ * because the working view is deliberately matt, so the shape is the subject
+ * and not the finish.
+ */
 function applyRenderFinish() {
   const mats = state.doc.materials || {};
   const was = [];
@@ -9936,16 +10018,62 @@ function applyRenderFinish() {
     const entry = state.vp.bodies?.get(record.id);
     if (!entry?.mat) continue;
     const name = mats.byBody?.[record.id] || mats.default || 'pla';
-    was.push({ mat: entry.mat, metalness: entry.mat.metalness, roughness: entry.mat.roughness });
-    const metal = ['aluminium', 'steel', 'stainless', 'brass', 'titanium'].includes(name);
-    entry.mat.metalness = metal ? 0.85 : 0.05;
-    entry.mat.roughness = metal ? 0.32 : name === 'resin' ? 0.25 : 0.55;
-    entry.mat.needsUpdate = true;
+    const want = RENDER_FINISH[name] || RENDER_FINISH.pla;
+
+    /*
+     * A clear coat needs a physical material and the working view uses a
+     * standard one, so a finish that wants one gets a material of its own for
+     * the length of the render.
+     *
+     * Swapped rather than made the everyday material: a physical material costs
+     * more to draw on every frame, and what it buys is a thin shiny layer that
+     * is worth having in a photograph and is noise in a working view.
+     */
+    const wantsCoat = (want.clearcoat ?? 0) > 0;
+    const original = entry.mat;
+    let mat = original;
+    if (wantsCoat && !original.isMeshPhysicalMaterial) {
+      mat = new THREE.MeshPhysicalMaterial({
+        color: original.color.clone(),
+        side: original.side,
+        flatShading: original.flatShading,
+        transparent: original.transparent,
+        opacity: original.opacity
+      });
+      entry.mesh.material = mat;
+      entry.mat = mat;
+    }
+
+    was.push({
+      entry,
+      original,
+      swapped: mat !== original,
+      mat,
+      metalness: mat.metalness,
+      roughness: mat.roughness,
+      envMapIntensity: mat.envMapIntensity
+    });
+
+    mat.metalness = want.metalness;
+    mat.roughness = want.roughness;
+    if (mat.isMeshPhysicalMaterial) {
+      mat.clearcoat = want.clearcoat ?? 0;
+      mat.clearcoatRoughness = want.clearcoatRoughness ?? 0.3;
+    }
+    mat.envMapIntensity = 1;
+    mat.needsUpdate = true;
   }
   return () => {
     for (const w of was) {
+      if (w.swapped) {
+        w.entry.mesh.material = w.original;
+        w.entry.mat = w.original;
+        w.mat.dispose();
+        continue;
+      }
       w.mat.metalness = w.metalness;
       w.mat.roughness = w.roughness;
+      w.mat.envMapIntensity = w.envMapIntensity;
       w.mat.needsUpdate = true;
     }
     state.vp.invalidate();
@@ -22801,6 +22929,16 @@ window.anvilDev = {
   mesh: { unzip },
   asm: { readASM },
   insertF3D,
+  // A render is a dialog and then a file dialog, neither of which a probe can
+  // answer, so the picture-making itself is reachable on its own.
+  renderNow: async (opts) => {
+    const undo = applyRenderFinish();
+    try {
+      return await state.vp.renderStill(opts);
+    } finally {
+      undo();
+    }
+  },
   // The parameter file readers, so a probe can put a table out and read it back
   // without going through a save dialog it cannot answer.
   expr: { parametersToCsv, parametersFromCsv },

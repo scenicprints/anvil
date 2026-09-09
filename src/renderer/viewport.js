@@ -53,6 +53,75 @@ function baseColourOf(rec, fresh = false) {
   return fresh ? SOLID_COLOUR : 0xe0dcd2;
 }
 
+/*
+ * A studio, built rather than loaded.
+ *
+ * What makes a render of a part look real is almost never the lights, it is
+ * what the surfaces have to reflect. A steel bracket lit by three lamps in an
+ * empty void reads as grey plastic, because a mirror with nothing in front of
+ * it is grey. Give it a softbox above and two panels either side and it reads
+ * as steel, with no change to the lighting at all.
+ *
+ * Built here out of a handful of emissive planes rather than loaded from an HDR
+ * file. An environment map is a few hundred kilobytes that would have to be
+ * shipped, kept in the installer, and be somebody's copyright; this is thirty
+ * lines and it is the same studio every time.
+ */
+function studioScene() {
+  const scene = new THREE.Scene();
+
+  // The room itself, seen from the inside: a soft gradient from a warm ceiling
+  // to a darker floor, which is what stops the underside of a part going black.
+  const shell = new THREE.Mesh(
+    new THREE.SphereGeometry(60, 32, 16),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      uniforms: {
+        top: { value: new THREE.Color(0xf6f4ef) },
+        bottom: { value: new THREE.Color(0x3c3a36) }
+      },
+      vertexShader: `
+        varying float vH;
+        void main() {
+          vH = normalize(position).y * 0.5 + 0.5;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 top;
+        uniform vec3 bottom;
+        varying float vH;
+        void main() {
+          gl_FragColor = vec4(mix(bottom, top, smoothstep(0.0, 1.0, vH)), 1.0);
+        }
+      `
+    })
+  );
+  scene.add(shell);
+
+  const panel = (w, h, x, y, z, strength) => {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(strength, strength, strength) })
+    );
+    m.position.set(x, y, z);
+    m.lookAt(0, 0, 0);
+    scene.add(m);
+  };
+
+  // The key: a big softbox overhead and a little to one side, which is where
+  // a light goes in every product photograph ever taken.
+  panel(40, 40, 12, 45, 18, 6);
+  // Two fill panels, dimmer, to keep the sides from going flat.
+  panel(30, 30, -40, 8, 20, 1.4);
+  panel(30, 30, 20, 6, -40, 1.1);
+  // And a strip low down, which is what puts the bright line along a bottom
+  // edge that says the part has a shape.
+  panel(50, 8, 0, -14, 40, 0.9);
+
+  return scene;
+}
+
 const UP = new THREE.Vector3(0, 0, 1);
 
 /**
@@ -1040,6 +1109,173 @@ export class Viewport {
    * The helpers, the grid and the origin planes go away for the duration. A
    * render is a picture of the part, not of the tool it was made in.
    */
+  /**
+   * Turn the viewport into a studio for the length of a render.
+   *
+   * Four things, and the order they matter in is not the order they are
+   * written. The environment does most of the work; the shadow is what puts the
+   * part on a surface rather than in space; the tone mapping is what stops a
+   * highlight going flat white; the materials are last because a good material
+   * in an empty room still looks like nothing.
+   *
+   * Everything is put back. A render must not leave the working view changed,
+   * and the way to be sure of that is to hand back the undo from the same place
+   * that did the changing.
+   */
+  _beginPhotoreal(opts = {}) {
+    const undo = [];
+
+    /* -------- what there is to reflect -------- */
+    if (!this._studio) {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      pmrem.compileEquirectangularShader();
+      const scene = studioScene();
+      this._studio = pmrem.fromScene(scene, 0.04).texture;
+      pmrem.dispose();
+      scene.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
+    }
+    const hadEnv = this.scene.environment;
+    const hadIntensity = this.scene.environmentIntensity;
+    this.scene.environment = this._studio;
+    this.scene.environmentIntensity = Number.isFinite(opts.environment) ? opts.environment : 1;
+    undo.push(() => {
+      this.scene.environment = hadEnv;
+      this.scene.environmentIntensity = hadIntensity;
+    });
+
+    /* -------- a shadow, and something to catch it -------- */
+    const box = new THREE.Box3();
+    this.bodyGroup.traverse((o) => {
+      if (o.isMesh) box.expandByObject(o);
+    });
+    const ground = opts.ground !== false && !box.isEmpty() ? this._shadowGround(box, undo) : null;
+
+    const hadShadows = this.renderer.shadowMap.enabled;
+    const hadShadowType = this.renderer.shadowMap.type;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    undo.push(() => {
+      this.renderer.shadowMap.enabled = hadShadows;
+      this.renderer.shadowMap.type = hadShadowType;
+    });
+
+    if (!box.isEmpty()) {
+      const size = box.getSize(new THREE.Vector3()).length() || 100;
+      const mid = box.getCenter(new THREE.Vector3());
+      let key = null;
+      this.scene.traverse((o) => {
+        if (o.isDirectionalLight && (!key || o.intensity > key.intensity)) key = o;
+      });
+      if (key) {
+        const was = key.castShadow;
+        const wasAt = key.position.clone();
+        key.castShadow = true;
+
+        /*
+         * Move the light out to where it can see the part.
+         *
+         * The working view's lights sit a unit or so from the origin, because
+         * for shading a directional light is a direction and nothing else. A
+         * shadow is not: the shadow camera stands at the light's position and
+         * looks at its target, and at a unit and a half from the origin that
+         * camera is inside a part sixty millimetres across, which renders a
+         * shadow of the inside of the boss and nothing else.
+         *
+         * Moved along its own direction, so the shading is untouched.
+         */
+        const dir = key.position.clone().normalize();
+        key.position.copy(mid).addScaledVector(dir, size * 3);
+        // How far the light may wander for a soft shadow, in the part's own
+        // units. A fixed number is either nothing on a big part or a smear on
+        // a small one.
+        this._shadowJitter = size * 0.05;
+        // The shadow camera has to be fitted to the part. Left at its defaults
+        // it either misses the model entirely or spreads its resolution over a
+        // hundred metres of nothing, and the shadow arrives as a grey smear.
+        key.shadow.mapSize.set(2048, 2048);
+        key.shadow.camera.near = 0.1;
+        key.shadow.camera.far = size * 6;
+        key.shadow.camera.left = -size;
+        key.shadow.camera.right = size;
+        key.shadow.camera.top = size;
+        key.shadow.camera.bottom = -size;
+        key.shadow.bias = -0.0006;
+        key.shadow.normalBias = size * 0.002;
+        key.target.position.copy(mid);
+        key.target.updateMatrixWorld();
+        key.shadow.camera.updateProjectionMatrix();
+        undo.push(() => {
+          key.castShadow = was;
+          key.position.copy(wasAt);
+          this._shadowJitter = 0;
+        });
+      }
+    }
+
+    this.bodyGroup.traverse((o) => {
+      if (!o.isMesh) return;
+      const wasCast = o.castShadow;
+      const wasReceive = o.receiveShadow;
+      o.castShadow = true;
+      o.receiveShadow = true;
+      undo.push(() => {
+        o.castShadow = wasCast;
+        o.receiveShadow = wasReceive;
+      });
+    });
+    if (ground) undo.push(() => this.scene.remove(ground));
+
+    /* -------- how bright is bright -------- */
+    const hadTone = this.renderer.toneMapping;
+    const hadExposure = this.renderer.toneMappingExposure;
+    // ACES rolls a highlight off the way film does. Without it a lit edge on
+    // metal clips to flat white and takes the shape of the part with it.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = Number.isFinite(opts.exposure) ? opts.exposure : 1;
+    undo.push(() => {
+      this.renderer.toneMapping = hadTone;
+      this.renderer.toneMappingExposure = hadExposure;
+    });
+
+    return () => {
+      for (const back of undo.reverse()) back();
+      this.invalidate();
+    };
+  }
+
+  /**
+   * A floor under the part, which shows nothing but the shadow.
+   *
+   * A part floating in a void with no contact shadow reads as a drawing however
+   * good the lighting is: the eye takes the shadow as the evidence that the
+   * thing is somewhere. A shadow material draws only what falls on it, so the
+   * background stays whatever it was set to.
+   */
+  _shadowGround(box, undo) {
+    const size = box.getSize(new THREE.Vector3()).length() || 100;
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(size * 12, size * 12),
+      new THREE.ShadowMaterial({ opacity: 0.32 })
+    );
+    ground.position.set(
+      (box.min.x + box.max.x) / 2,
+      (box.min.y + box.max.y) / 2,
+      // A hair below the lowest point, or the floor and the part fight over the
+      // same pixels and the shadow comes out in stripes.
+      box.min.z - size * 0.001
+    );
+    ground.receiveShadow = true;
+    this.scene.add(ground);
+    undo.push(() => {
+      ground.geometry.dispose();
+      ground.material.dispose();
+    });
+    return ground;
+  }
+
   async renderStill(opts = {}) {
     const width = Math.max(64, Math.round(opts.width || 1600));
     const height = Math.max(64, Math.round(opts.height || 1000));
@@ -1051,6 +1287,11 @@ export class Viewport {
       colorSpace: THREE.SRGBColorSpace
     });
 
+    // Everything that makes it a photograph rather than a diagram, and the way
+    // back afterwards. The working view stays matt on purpose: the shape is the
+    // subject there, and a reflection is something to see past.
+    const undoLook = opts.photoreal === false ? null : this._beginPhotoreal(opts);
+
     // What the picture is of, and nothing else.
     const hidHelpers = this.helperGroup.visible;
     const hidOverlay = this.overlayGroup.visible;
@@ -1058,10 +1299,6 @@ export class Viewport {
     this.overlayGroup.visible = false;
 
     const camera = this.camera.clone();
-    const lights = [];
-    this.scene.traverse((o) => {
-      if (o.isDirectionalLight) lights.push({ light: o, home: o.position.clone() });
-    });
 
     const oldTarget = this.renderer.getRenderTarget();
     const oldClear = new THREE.Color();
@@ -1071,6 +1308,14 @@ export class Viewport {
     else {
       this.renderer.setClearColor(new THREE.Color(opts.background || '#20242a'), 1);
     }
+
+    // Where each light sits now, which is after the studio has moved the key
+    // one out to where it can cast a shadow. Read before that and every pass
+    // would put it straight back.
+    const lights = [];
+    this.scene.traverse((o) => {
+      if (o.isDirectionalLight) lights.push({ light: o, home: o.position.clone() });
+    });
 
     const sum = new Float32Array(width * height * 4);
     const frame = new Uint8Array(width * height * 4);
@@ -1088,11 +1333,15 @@ export class Viewport {
       camera.setViewOffset(width, height, jx * width, jy * height, width, height);
       camera.updateProjectionMatrix();
 
+      // A light that moves a little between passes is a light with a size, and
+      // a light with a size casts a shadow with a soft edge. How far it may
+      // move is in the part's own units when there is a shadow to soften.
+      const wander = softness * (this._shadowJitter || 1) * 2;
       for (const { light, home } of lights) {
         light.position.set(
-          home.x + (rand2(i, 2) - 0.5) * softness * 2,
-          home.y + (rand2(i, 3) - 0.5) * softness * 2,
-          home.z + (rand2(i, 4) - 0.5) * softness * 2
+          home.x + (rand2(i, 2) - 0.5) * wander,
+          home.y + (rand2(i, 3) - 0.5) * wander,
+          home.z + (rand2(i, 4) - 0.5) * wander
         );
       }
 
@@ -1108,6 +1357,7 @@ export class Viewport {
     }
 
     for (const { light, home } of lights) light.position.copy(home);
+    undoLook?.();
     this.renderer.setRenderTarget(oldTarget);
     this.renderer.setClearColor(oldClear, oldAlpha);
     this.helperGroup.visible = hidHelpers;

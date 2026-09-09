@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.75.0**. 583 tests in the window, plus 55 checks of the
+Current version: **2.76.0**. 583 tests in the window, plus 55 checks of the
 library, profiles and the version counter in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
@@ -39,8 +39,10 @@ not built. Reading it back after the library shipped, the honest summary is:
   on an ordinary morning would be dismissed without reading, and then it would
   not be read on the morning it mattered.
 - **Deliberately not here**, and recorded as such in `README.md`: CAM and
-  toolpaths, drawings, simulation study types, a photoreal renderer with real
-  lights, and generative design's study and explore machinery.
+  toolpaths, drawings, simulation study types, and generative design's study and
+  explore machinery. Photoreal rendering *is* here since v2.76.0: environment
+  lighting, a contact shadow, filmic tone mapping and real finishes. What is
+  still missing there is named lamps you can place.
 - **Conveniences**, all built in v2.74.0: a thin extrude that builds its wall
   from open curves with a tangent chain, several flanges in one sheet-metal
   feature with per-row settings, ground-to-parent, and the four Inspect
