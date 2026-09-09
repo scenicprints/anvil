@@ -508,8 +508,8 @@ are the cells; you choose which cells to keep.
 |---|---|---|
 | Select Tools | planes, surfaces, bodies | has |
 | Select Cells | | has |
-| Operation | Join, Cut, Intersect, New Body, New Component | has, v2.31.0, less New Component |
-| Objects To Cut | Auto-Select, # Bodies | **missing** |
+| Operation | Join, Cut, Intersect, New Body, New Component | has, v2.45.0 |
+| Objects To Cut | Auto-Select, # Bodies | has, v2.45.0 |
 
 ### Delete Face — *pending* (Anvil has it)
 
@@ -580,7 +580,7 @@ with the degree editable on a control-point spline.
 |---|---|
 | Linetype (convert geometry to another line type) | partial — `toggleConstruction` already converts what is selected between normal and construction, and switches the mode for new geometry when nothing is selected. The gap is that there are only two types to convert between |
 | Construction | has |
-| Centerline | **missing**. Nothing in the source mentions one. Marked "has" here originally, wrongly |
+| Centerline | has, v2.36.0. This row was the one the cross-check found marked "has" when nothing in the source mentioned one; it is built now |
 | Look At (turn the camera square to the sketch plane) | has, v2.31.0. Also works on a selected flat face |
 | Sketch Grid on/off | has |
 | Snap on/off | has |

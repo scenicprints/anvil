@@ -14517,7 +14517,18 @@ function boundaryFillFields() {
       text: 'Every cell is kept unless some are named below. Cells are numbered from zero in the order they were cut.'
     },
     { key: 'cells', label: 'Keep only', type: 'text' },
-    { key: 'op', label: 'Operation', type: 'select', options: OP_OPTIONS }
+    {
+      key: 'op',
+      label: 'Operation',
+      type: 'select',
+      options: EXTRUDE_OP_OPTIONS,
+      get: (f) => f.op || 'new',
+      set: (f, v) => {
+        f.op = v;
+        if (v === 'component') ensureFeatureComponent(f);
+      }
+    },
+    TARGETS_FIELD
   ];
 }
 
