@@ -3809,6 +3809,76 @@ async function run() {
     res.dispose();
   });
 
+  test('full round: a flat top becomes a half cylinder and no flat is left', () => {
+    // A bar 10 wide. Rounding its top face away has to give a half cylinder of
+    // radius 5: any other radius leaves a flat in the middle or overshoots the
+    // sides, which is why there is no radius to type.
+    const doc = newDocument();
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'box',
+      params: { width: '10', depth: '40', height: '20', centered: true },
+      op: 'new'
+    });
+    let res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = topo.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    const ref = faceReference(top);
+    res.dispose();
+
+    doc.features.push({ id: uid('f'), type: 'fullRound', bodies: 'all', faces: [ref] });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+
+    // The box less the two corners the round cut off, plus the half cylinder
+    // that replaced them: 10 by 40 by 20, minus a 10 by 5 by 40 slab, plus half
+    // a cylinder of radius 5 and length 40.
+    const want = 10 * 40 * 20 - 10 * 5 * 40 + (Math.PI * 25 * 40) / 2;
+    near(res.bodies[0].solid.volume(), want, want * 0.01, 'a bar with a half round on it');
+
+    // And nothing flat is left on top, which is the whole difference between
+    // this and filleting the two edges at some smaller radius.
+    const after = buildTopology(K.meshData(res.bodies[0].solid));
+    const flatOnTop = after.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    assert(!flatOnTop, 'the flat is gone entirely');
+    near(K.boundingBox(res.bodies[0].solid).max[2], 10, 0.05, 'and the height is unchanged');
+    res.dispose();
+  });
+
+  test('full round: faces it cannot round are refused with the reason', () => {
+    // A wedge, whose sloping side is not parallel to anything, so no one radius
+    // reaches both sides of the top. Guessing one would leave a shape nobody
+    // asked for and no way to see why.
+    const doc = newDocument();
+    doc.features.push({
+      id: uid('f'),
+      type: 'primitive',
+      shape: 'cylinder',
+      params: { diameter: '20', height: '20' },
+      op: 'new'
+    });
+    let res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const curved = topo.faces.find((f) => !f.planar);
+    const ref = faceReference(curved);
+    // Measured against the part as it stands, not against pi r squared h: a
+    // tessellated cylinder is a few tenths of a percent short of the formula,
+    // and a tolerance loose enough to swallow that is loose enough to swallow a
+    // real change too.
+    const before = res.bodies[0].solid.volume();
+    res.dispose();
+
+    doc.features.push({ id: uid('f'), type: 'fullRound', bodies: 'all', faces: [ref] });
+    res = rebuild(doc);
+    assert(
+      res.errors.some((e) => /curved already/.test(e.message)),
+      `expected a word about it being curved, got ${JSON.stringify(res.errors)}`
+    );
+    near(res.bodies[0].solid.volume(), before, 1e-6, 'and nothing happened to it');
+    res.dispose();
+  });
+
   test('fillet: the rule can take the outside corners, the inside ones, or both', () => {
     // Fusion calls a convex edge a round and a concave one a fillet, and its
     // Rule Fillet filters on exactly that. On a printed part "rounds only" is

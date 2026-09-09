@@ -357,6 +357,12 @@ tangent points where the circular fillet put them and runs the curvature out to
 nothing at both ends instead, so there is no line to see. **Tangency weight** is
 how hard that curve is pulled toward the corner.
 
+**Full Round** rounds a flat face away entirely, from the face on one side to
+the face on the other, which is what the top of a rib or a handle wants. There
+is no radius to type: it is whatever makes the round meet both sides, and any
+other value would leave a flat in the middle. The two sides are found from the
+face itself, and if they are not parallel it says so rather than guessing.
+
 **Shell** puts the wall inside, outside or
 straddling the original surface, and one click on the mouth takes the whole run
 of faces that carry on smoothly from it. **Draft** tapers one side of the neutral plane

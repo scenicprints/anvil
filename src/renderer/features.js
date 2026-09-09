@@ -1131,6 +1131,10 @@ export function rebuild(doc, options = {}) {
           bodies = doEdgeBlend(feature, bodies, scope, scopeObj, errors);
           break;
 
+        case 'fullRound':
+          bodies = doFullRound(feature, bodies, scope, scopeObj, errors);
+          break;
+
         case 'shell':
           bodies = doShell(feature, bodies, scope, scopeObj, errors);
           break;
@@ -4421,6 +4425,112 @@ export function rebuild(doc, options = {}) {
           : K.difference(solid, prism, ks);
       }
       out[out.indexOf(b)] = { ...b, solid };
+    }
+    return out;
+  }
+
+  /**
+   * Fusion's Full Round Fillet: a flat face between two others replaced by a
+   * round that runs from one to the other, with no flat left in the middle.
+   *
+   * The radius is not asked for and cannot be. It is whatever makes the round
+   * touch both sides, which is half the distance between them, and a full round
+   * of any other radius would leave a flat or overshoot.
+   *
+   * It falls out of the ordinary fillet exactly. Round both edges of the centre
+   * face at half the gap and the two arcs share an axis: each sits half the gap
+   * in from its own side and half the gap below the top, which is the same
+   * line. So the two sweeps are one cylinder and their union is the full round,
+   * with nothing left of the face between.
+   *
+   * Fusion asks for the centre face and both sides. The sides are the faces
+   * across the centre face's two longest edges, so they are found rather than
+   * asked for, and when they are not a pair the answer is a refusal with the
+   * reason rather than a guess.
+   */
+  function doFullRound(feature, bodies, scope, ks, errs) {
+    const targets = pickBodies(feature, bodies);
+    if (!targets.length) return bodies;
+
+    const out = bodies.slice();
+    for (const b of targets) {
+      const topo = buildTopology(K.meshData(b.solid));
+      const faces = resolveFaceRefs(topo, feature.faces || []);
+      if (!faces.length) {
+        errs.push({
+          feature: feature.id,
+          message: (feature.faces || []).length
+            ? 'The face this full round was applied to is no longer on the model'
+            : 'Click the flat face to round away'
+        });
+        continue;
+      }
+
+      let solid = b.solid;
+      let did = 0;
+      for (const face of faces) {
+        if (!face.planar) {
+          errs.push({
+            feature: feature.id,
+            message: 'A full round replaces a flat face. That one is curved already.'
+          });
+          continue;
+        }
+        const id = topo.faces.indexOf(face);
+        // The two longest edges of the face, which on the strip a full round is
+        // for are the two sides of it. The short ends are where it stops.
+        const mine = topo.edges
+          .filter((e) => e.faceA === id || e.faceB === id)
+          .sort((p, q) => (q.length || 0) - (p.length || 0));
+        if (mine.length < 2) {
+          errs.push({ feature: feature.id, message: 'That face has no two sides to round between' });
+          continue;
+        }
+        const [e1, e2] = mine;
+        const sideOf = (e) => topo.faces[e.faceA === id ? e.faceB : e.faceA];
+        const s1 = sideOf(e1);
+        const s2 = sideOf(e2);
+        if (!s1?.planar || !s2?.planar) {
+          errs.push({
+            feature: feature.id,
+            message: 'A full round needs a flat face either side of the one it replaces'
+          });
+          continue;
+        }
+        // Facing away from each other is what makes them a pair with a gap
+        // between them. Anything else has no single radius that touches both.
+        const dot =
+          s1.normal[0] * s2.normal[0] + s1.normal[1] * s2.normal[1] + s1.normal[2] * s2.normal[2];
+        if (dot > -0.98) {
+          errs.push({
+            feature: feature.id,
+            message: 'The two faces either side are not parallel, so no one radius reaches both'
+          });
+          continue;
+        }
+        // How far apart, measured from one plane to the other.
+        const gap = Math.abs(
+          (s2.centre[0] - s1.centre[0]) * s1.normal[0] +
+            (s2.centre[1] - s1.centre[1]) * s1.normal[1] +
+            (s2.centre[2] - s1.centre[2]) * s1.normal[2]
+        );
+        const r = gap / 2;
+        if (!(r > 1e-6)) {
+          errs.push({ feature: feature.id, message: 'Those two faces have no gap between them' });
+          continue;
+        }
+
+        const tools = buildEdgeTools(topo, [e1, e2], r, 'fillet', ks, {});
+        if (!tools.applied) {
+          errs.push({ feature: feature.id, message: 'That face will not take a full round' });
+          continue;
+        }
+        if (tools.cut) solid = K.difference(solid, tools.cut, ks);
+        if (tools.addBack) solid = K.union(solid, tools.addBack, ks);
+        if (tools.blends) solid = K.union(solid, tools.blends, ks);
+        did++;
+      }
+      if (did) out[out.indexOf(b)] = { ...b, solid };
     }
     return out;
   }
@@ -8575,6 +8685,7 @@ export const FEATURE_LABELS = {
   fillet: 'Fillet',
   chamfer: 'Chamfer',
   shell: 'Shell',
+  fullRound: 'Full Round Fillet',
   offsetFace: 'Press Pull',
   loft: 'Loft',
   sweep: 'Sweep',

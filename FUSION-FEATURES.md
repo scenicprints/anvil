@@ -256,7 +256,7 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 
 | Option | Values | Anvil |
 |---|---|---|
-| Type | Fillet, Rule Fillet, **Full Round Fillet** | partial — rule fillet added v2.48.0, full round still missing |
+| Type | Fillet, Rule Fillet, Full Round Fillet | has. Rule fillet v2.48.0, full round v2.50.0 as its own command |
 | Selection sets | several, each with its own radius and settings | has |
 | Radius Type | Constant, Chord Length, Variable, Asymmetric | has, v2.37.0, plus a hold-line type Fusion does not have |
 | Continuity | Tangent (G1), Curvature (G2) | has, v2.37.0 |
@@ -266,7 +266,25 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 | Corner Type | Rolling Ball, Setback | **missing** |
 | Rule | All Edges, **Between Faces/Features** (rule fillet) | partial — All Edges, v2.48.0 |
 | Round/Fillets | Rounds and Fillets, Rounds Only, Fillets Only (rule fillet) | has, v2.48.0 |
-| Center Faces / Side 1 / Side 2 | full round fillet | **missing** |
+| Center Faces / Side 1 / Side 2 | full round fillet | partial — the centre face is picked, the two sides are found from it |
+
+Full Round Fillet is its own command rather than a type on the fillet dialog,
+because it takes a face and not edges and has no radius to type. The radius is
+whatever makes the round meet both sides, which is half the distance between
+them; any other value leaves a flat in the middle or overshoots.
+
+It falls out of the ordinary fillet exactly. Round both edges of the centre
+face at half the gap and the two arcs share an axis: each sits half the gap in
+from its own side and half the gap below the top, which is the same line. So
+the two sweeps are one cylinder and their union is the full round, with nothing
+left of the face between. The test checks that nothing flat is left on top,
+because that is the whole difference between this and filleting the two edges
+at some smaller radius.
+
+Fusion asks for the centre face and both sides. The sides are the faces across
+the centre face's two longest edges, so they are found rather than asked for,
+and where they are not a parallel pair the answer is a refusal naming the
+reason rather than a guess.
 
 Asymmetric and G2 both shipped in v2.37.0 and both live in the same place, the
 two dimensional corner profile every fillet is swept from. Asymmetric is a

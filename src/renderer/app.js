@@ -1716,6 +1716,9 @@ async function runCommand(cmd) {
     case 'shell':
       startShell();
       break;
+    case 'fullRound':
+      startFullRound();
+      break;
     case 'pressPull':
       startPressPull();
       break;
@@ -11733,6 +11736,61 @@ function startEdgeBlend(kind) {
   }
 }
 
+/**
+ * A flat face rounded away entirely, from the face on one side to the face on
+ * the other. Fusion's Full Round Fillet.
+ *
+ * No radius: it is whatever makes the round touch both sides, and any other
+ * value would leave a flat in the middle or overshoot. That is the whole
+ * difference between this and an ordinary fillet, so there is nothing to type.
+ */
+function startFullRound() {
+  if (state.sketcher.active) finishSketch();
+  if (!state.result?.bodies.length) {
+    setStatus('There is nothing to round yet.');
+    return;
+  }
+  const picked = selectedFaceRefs();
+  const [bodyId, faces] = picked.size
+    ? [...picked][0]
+    : [state.result.bodies[0].id, []];
+  const feature = {
+    id: uid('f'),
+    type: 'fullRound',
+    bodies: [bodyId],
+    faces
+  };
+  openFeatureEditor(feature, 'Full Round Fillet', fullRoundFields());
+  if (!faces.length) {
+    setEditPick('fullRoundFaces');
+    setStatus('Click the flat face to round away.');
+  }
+}
+
+function fullRoundFields() {
+  return [
+    {
+      key: '__faces',
+      label: 'Face to round away',
+      type: 'pick',
+      pick: 'fullRoundFaces',
+      summary: (f) => {
+        const n = (f.faces || []).length;
+        return n ? `${n} face${n === 1 ? '' : 's'}` : 'Nothing yet';
+      },
+      clear: (f) => {
+        f.faces = [];
+      }
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The radius is whatever makes the round meet both faces either side, which is half the distance between them, so there is nothing to type. The two sides are found from the face itself; if they are not parallel it says so rather than guessing.'
+    }
+  ];
+}
+
 function startShell() {
   if (state.sketcher.active) finishSketch();
   const faceRefs = selectedFaceRefs();
@@ -12448,6 +12506,7 @@ const PICK_PROMPTS = {
   movePointTo: 'Click where to measure to.',
   movePivot: 'Click the point to turn about.',
   moveFaces: 'Click the faces to move.',
+  fullRoundFaces: 'Click the flat face to round away.',
   alignRegion: 'Click the flat region of the mesh to lay down.',
   moveDirection: 'Click an edge, a flat face, or an origin plane.',
   startTakeoff: 'Click an edge, a flat face, or an origin plane to lean towards.',
@@ -13468,6 +13527,21 @@ function pickIntoEdit(hit) {
         if (!f[key].some((x) => sameFaceRef(x, r))) f[key].push(r);
       }
     }
+    if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
+  } else if (ed.pickInto === 'fullRoundFaces') {
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = record?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    if (!face.planar) {
+      setStatus('A full round replaces a flat face. That one is curved already.');
+      return true;
+    }
+    f.faces = f.faces || [];
+    const ref = faceReference(face);
+    const at = f.faces.findIndex((x) => sameFaceRef(x, ref));
+    if (at >= 0) f.faces.splice(at, 1);
+    else f.faces.push(ref);
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
   } else if (ed.pickInto === 'moveFaces') {
     // Any face at all, curved included: a round boss pushed along its own axis
@@ -19333,6 +19407,8 @@ function describeFeature(feature) {
       return { title: 'Chamfer', fields: blendFieldsFor(feature, 'chamfer') };
     case 'shell':
       return { title: 'Shell', fields: shellFields() };
+    case 'fullRound':
+      return { title: 'Full Round Fillet', fields: fullRoundFields() };
     case 'draft':
       return { title: 'Draft', fields: draftFields() };
     case 'patternRect':
