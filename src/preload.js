@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('anvil', {
   addProfile: (name) => ipcRenderer.invoke('profiles:add', name),
   removeProfile: (id) => ipcRenderer.invoke('profiles:remove', id),
   recents: () => ipcRenderer.invoke('profiles:recents'),
+  setProfilePicture: (id, bytes) => ipcRenderer.invoke('profiles:setPicture', { id, bytes }),
+  profilePicture: (id) => ipcRenderer.invoke('profiles:picture', id),
+  clearProfilePicture: (id) => ipcRenderer.invoke('profiles:clearPicture', id),
   // A file that is only a placeholder until something touches it reads slowly
   // rather than failing, so the window is told to say so instead of looking
   // like it has hung.

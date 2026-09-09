@@ -1458,9 +1458,75 @@ table.params .starbtn:hover {
  * machine with two.
  */
 #profilename {
-  opacity: 0.55;
+  display: flex;
+  align-items: center;
+  opacity: 0.75;
   padding-right: 10px;
 }
 #profilename:empty {
   display: none;
+}
+
+/*
+ * A profile's face, or the initial standing in for one.
+ *
+ * The fallback is not decoration: most profiles will never have a picture, and
+ * a blank where the others have a face reads as something failing to load
+ * rather than as somebody who did not choose one.
+ */
+.profileface {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #d84b1e;
+  color: #fff;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+.profileface img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* One profile in the list of them. */
+.profilerow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  margin: 2px 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.profilerow:hover {
+  border-color: #6b665c;
+}
+.profilerow.chosen {
+  border-color: #d84b1e;
+  background: rgba(216, 75, 30, 0.12);
+}
+.profilewords {
+  min-width: 0;
+}
+.profilerowname {
+  font-weight: 600;
+}
+/* A library path is long and the name above it is the part that matters. */
+.profilewords .hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
 }

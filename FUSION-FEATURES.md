@@ -1023,17 +1023,18 @@ disk. Recording it all anyway, because most of it has a local meaning.
 | Open designs | has |
 | Edit a design | has |
 | Rename designs | has, v2.70.0, in the Library menu. The lock moves with the file |
+| Profiles, and a picture for each | has, v2.72.0. Not an account: a name, a library folder and a face. The face is there because two profiles are two libraries, and picking the wrong one saves an evening's work into the wrong body of work |
 | Move designs | n/a — folders on disk |
-| Copy designs | **missing** as a command |
+| Copy designs | has, v2.70.0, as Save a copy: it writes the copy and leaves you working in this one, which is the opposite ending to Save As |
 | Move to Trash / delete | n/a |
-| **Update designs** (pull newer versions of referenced components) | **missing**, follows external references |
+| Update designs (pull newer versions of referenced components) | has, v2.70.0, as Update what is derived |
 | **Open older versions** | partial — Anvil keeps versions in the document |
 | **View design history and related data** | partial — versions exist, no history view |
 | Export designs | has (STL, STEP, 3MF, DXF) |
-| Insert designs into another | **missing**, follows external references |
+| Insert designs into another | has: Insert Component takes a copy, Insert Derive keeps the link |
 | Add the active design to an assembly | **missing** |
-| Import a new version of an existing design | **missing** |
-| Recover designs | **missing** — no crash recovery |
+| Import a new version of an existing design | has, as Update what is derived, which re-reads the file and re-applies what was taken from it |
+| Recover designs | **missing** — no crash recovery, and the one real gap left in this table. Nothing is written between saves, so a crash costs everything since the last one |
 | Convert a design's type (parametric or direct) | has (direct modelling mode) |
 | Upload designs / web client / component tab | n/a — cloud |
 | Supported file formats | partial — see the import and export lists |

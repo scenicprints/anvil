@@ -572,12 +572,81 @@ async function noteInIndex(file, doc) {
 /* Profiles, projects and recents, over the wire                     */
 /* ---------------------------------------------------------------- */
 
+/*
+ * Profile pictures.
+ *
+ * Kept as files beside the profile store rather than as base64 inside it. A
+ * store that has to stay legible in a text editor is one of the few things
+ * standing between somebody and a broken install they cannot fix by hand, and a
+ * wall of base64 is the end of that.
+ *
+ * On this machine and not in the library, because a profile is a per-machine
+ * thing: the library holds parts, and an application's own furniture does not
+ * belong in a folder somebody put their work in.
+ */
+const pictureDir = () => path.join(app.getPath('userData'), 'pictures');
+const picturePath = (id) => path.join(pictureDir(), `${String(id).replace(/[^A-Za-z0-9_-]/g, '')}.png`);
+
+async function pictureFor(id) {
+  try {
+    const buf = await fs.readFile(picturePath(id));
+    return `data:image/png;base64,${buf.toString('base64')}`;
+  } catch {
+    // No picture is the ordinary case, not a failure. Nobody has to have one.
+    return null;
+  }
+}
+
 ipcMain.handle('profiles:list', async () => ({
-  profiles: profiles.profiles.map((p) => ({ id: p.id, name: p.name, root: p.root })),
+  profiles: await Promise.all(
+    profiles.profiles.map(async (p) => ({
+      id: p.id,
+      name: p.name,
+      root: p.root,
+      picture: await pictureFor(p.id)
+    }))
+  ),
   active: profiles.active,
   // Asked once at startup, and only worth asking when there is a choice.
   ask: profiles.profiles.length > 1
 }));
+
+/**
+ * Set a profile's picture, from bytes the window has already made square.
+ *
+ * The scaling happens up there because that is where there is a canvas to do it
+ * with, and because it means nothing arrives here that has to be trusted to be
+ * a sensible size: a cap on the bytes is the last word either way.
+ */
+ipcMain.handle('profiles:setPicture', async (_e, opts) => {
+  const id = opts?.id;
+  if (!profiles.profiles.some((p) => p.id === id)) {
+    return { ok: false, error: 'There is no profile by that name' };
+  }
+  const bytes = opts?.bytes;
+  if (!bytes?.length) return { ok: false, error: 'That picture came through empty' };
+  if (bytes.length > 512 * 1024) {
+    return { ok: false, error: 'That picture is too big even after being scaled down' };
+  }
+  try {
+    await fs.mkdir(pictureDir(), { recursive: true });
+    await writeAtomicBytes(picturePath(id), Buffer.from(bytes));
+    return { ok: true, picture: await pictureFor(id) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('profiles:picture', async (_e, id) => ({ picture: await pictureFor(id) }));
+
+ipcMain.handle('profiles:clearPicture', async (_e, id) => {
+  try {
+    await fs.unlink(picturePath(id));
+  } catch {
+    /* there was none, which is where we wanted to get to */
+  }
+  return { ok: true };
+});
 
 ipcMain.handle('profiles:use', async (_e, id) => {
   profiles = PROFILES.use(profiles, id);
@@ -594,8 +663,19 @@ ipcMain.handle('profiles:add', async (_e, name) => {
 });
 
 ipcMain.handle('profiles:remove', async (_e, id) => {
+  const before = profiles.profiles.length;
   profiles = PROFILES.remove(profiles, id);
   saveProfiles();
+  // Only once it has actually gone. The last profile will not be removed, and
+  // deleting the picture of one that is still there would be a puzzle nobody
+  // could work out from the outside.
+  if (profiles.profiles.length < before) {
+    try {
+      await fs.unlink(picturePath(id));
+    } catch {
+      /* it had none */
+    }
+  }
   return { ok: true, active: activeProfile() };
 });
 

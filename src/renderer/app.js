@@ -1929,6 +1929,12 @@ async function runCommand(cmd) {
     case 'addProfile':
       cmdAddProfile();
       break;
+    case 'profilePicture':
+      cmdProfilePicture();
+      break;
+    case 'clearProfilePicture':
+      cmdClearProfilePicture();
+      break;
     case 'openFromLibrary':
       cmdOpenFromLibrary();
       break;
@@ -2635,9 +2641,9 @@ async function askWhichProfile() {
     return;
   }
   return new Promise((resolve) => {
-    promptChoice(
+    promptProfiles(
       'Which profile',
-      got.profiles.map((p) => [p.id, p.root ? `${p.name} — ${p.root}` : `${p.name} — no library yet`]),
+      got.profiles.map((p) => ({ ...p, active: p.id === got.active })),
       async (id) => {
         if (id) await window.anvil.useProfile?.(id);
         const now = await window.anvil.library?.();
@@ -2659,8 +2665,109 @@ async function showProfileName(profile) {
   state.profile = profile || null;
   const el2 = document.getElementById('profilename');
   if (!el2) return;
+  el2.innerHTML = '';
+  if (!profile) return;
+
   const got = await window.anvil.profiles?.();
-  el2.textContent = (got?.profiles?.length || 0) > 1 ? profile?.name || '' : '';
+  const several = (got?.profiles?.length || 0) > 1;
+  const mine = got?.profiles?.find((p) => p.id === profile.id) || profile;
+
+  // The picture stands on its own. Somebody who has set one has said which
+  // face is theirs, and repeating the name beside it is the caption on a
+  // photograph of the person reading it.
+  if (mine.picture) el2.appendChild(profileFace(mine, 22));
+  else if (several) el2.appendChild(document.createTextNode(mine.name || ''));
+  el2.title = mine.name || '';
+}
+
+/**
+ * Give this profile a picture.
+ *
+ * Squared and scaled down here rather than kept as it came. A photograph off a
+ * phone is four thousand pixels across and several megabytes, and what it is
+ * wanted for is a circle the size of a fingernail: keeping the original would
+ * mean carrying that around for ever to throw away every time it is drawn.
+ *
+ * Cropped from the middle to a square, because the shape it is shown in is a
+ * square and squeezing a portrait into one makes everybody look wrong.
+ */
+async function cmdProfilePicture() {
+  const lib = await window.anvil.library?.();
+  const id = lib?.profile?.id;
+  if (!id) {
+    setStatus('There is no profile to set a picture for.');
+    return;
+  }
+
+  const res = await window.anvil.importBinary('image');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+
+  let bitmap;
+  try {
+    bitmap = await imageOf(res.bytes);
+  } catch (err) {
+    setStatus(`Could not read that image: ${err.message}`);
+    return;
+  }
+
+  const bytes = await squareThumbnail(bitmap.url, 128);
+  if (!bytes) {
+    setStatus('That image could not be scaled down.');
+    return;
+  }
+  const done = await window.anvil.setProfilePicture?.(id, bytes);
+  if (!done?.ok) {
+    setStatus(done?.error || 'That picture could not be saved.');
+    return;
+  }
+  showProfileName({ ...lib.profile, picture: done.picture });
+  setStatus(`Picture set for ${lib.profile.name}.`);
+}
+
+/** Take the picture off again. */
+async function cmdClearProfilePicture() {
+  const lib = await window.anvil.library?.();
+  if (!lib?.profile?.id) return;
+  await window.anvil.clearProfilePicture?.(lib.profile.id);
+  showProfileName({ ...lib.profile, picture: null });
+  setStatus(`${lib.profile.name} is back to an initial.`);
+}
+
+/** An image cropped square from the middle and scaled to a given size. */
+async function squareThumbnail(url, size) {
+  const img = new Image();
+  try {
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('not an image this can read'));
+      img.src = url;
+    });
+  } catch {
+    return null;
+  }
+  const side = Math.min(img.naturalWidth, img.naturalHeight);
+  if (!side) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(
+    img,
+    (img.naturalWidth - side) / 2,
+    (img.naturalHeight - side) / 2,
+    side,
+    side,
+    0,
+    0,
+    size,
+    size
+  );
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) return null;
+  return Array.from(new Uint8Array(await blob.arrayBuffer()));
 }
 
 /** Make another profile, and go and work in it. */
@@ -2685,9 +2792,9 @@ async function cmdSwitchProfile() {
     setStatus('There is only one profile. Add another from the Library menu.');
     return;
   }
-  promptChoice(
+  promptProfiles(
     'Work as',
-    got.profiles.map((p) => [p.id, p.root ? `${p.name} — ${p.root}` : `${p.name} — no library yet`]),
+    got.profiles.map((p) => ({ ...p, active: p.id === got.active })),
     async (id) => {
       if (!id) return;
       await window.anvil.useProfile?.(id);
@@ -6795,7 +6902,9 @@ const RIBBON_MENUS = {
     ['saveCopy', 'Save a copy elsewhere'],
     ['chooseLibrary', 'Choose the library folder'],
     ['switchProfile', 'Work as another profile'],
-    ['addProfile', 'Add a profile']
+    ['addProfile', 'Add a profile'],
+    ['profilePicture', 'Set this profile a picture'],
+    ['clearProfilePicture', 'Take the picture off']
   ],
   rectangle: [
     ['tool:rectangle', 'Two Point Rectangle'],
@@ -21816,6 +21925,86 @@ function promptText(title, initial, cb) {
 }
 
 /**
+ * Choose a profile, with the pictures.
+ *
+ * A dropdown of names would do the job and is what this was, and it is exactly
+ * the wrong shape for the one question where a picture is worth having: two
+ * names that read alike belong to two libraries, and picking the wrong one
+ * means saving an evening's work into the wrong body of work. A face is
+ * recognised before a word is read.
+ */
+function promptProfiles(title, profiles, cb) {
+  const modal = $('#modal');
+  $('#modalTitle').textContent = title;
+  const body = $('#modalBody');
+  body.innerHTML = '';
+
+  let picked = profiles.find((p) => p.active)?.id || profiles[0]?.id || null;
+  const rows = [];
+  for (const p of profiles) {
+    const row = document.createElement('button');
+    row.className = 'profilerow';
+    row.type = 'button';
+    row.appendChild(profileFace(p, 40));
+
+    const words = document.createElement('div');
+    words.className = 'profilewords';
+    const name = document.createElement('div');
+    name.className = 'profilerowname';
+    name.textContent = p.name;
+    const where = document.createElement('div');
+    where.className = 'hint';
+    // Which library, because that is what choosing a profile actually chooses.
+    where.textContent = p.root || 'No library folder yet';
+    words.appendChild(name);
+    words.appendChild(where);
+    row.appendChild(words);
+
+    row.addEventListener('click', () => {
+      picked = p.id;
+      for (const r of rows) r.el.classList.toggle('chosen', r.id === picked);
+    });
+    // A double click is the answer and the OK in one, which is what everybody
+    // tries first on a list of things to pick from.
+    row.addEventListener('dblclick', () => {
+      picked = p.id;
+      closeModal(picked);
+    });
+    rows.push({ id: p.id, el: row });
+    body.appendChild(row);
+  }
+  for (const r of rows) r.el.classList.toggle('chosen', r.id === picked);
+
+  modal.classList.remove('hidden');
+  modalResolve = cb;
+  $('#modalOk').onclick = () => closeModal(picked);
+}
+
+/**
+ * A profile's face, or the initial it falls back to.
+ *
+ * The fallback is not decoration. Most profiles will never have a picture set,
+ * and a row that is blank where the others have a face reads as something
+ * failing to load rather than as somebody who did not choose one.
+ */
+function profileFace(profile, size) {
+  const wrap = document.createElement('span');
+  wrap.className = 'profileface';
+  wrap.style.width = `${size}px`;
+  wrap.style.height = `${size}px`;
+  wrap.style.fontSize = `${Math.round(size * 0.45)}px`;
+  if (profile?.picture) {
+    const img = document.createElement('img');
+    img.src = profile.picture;
+    img.alt = profile.name || '';
+    wrap.appendChild(img);
+  } else {
+    wrap.textContent = (profile?.name || '?').trim().charAt(0).toUpperCase();
+  }
+  return wrap;
+}
+
+/**
  * A list to tick things off, for when the answer is several of them.
  *
  * Grouped, because a derive offers bodies, sketches and parameters at once and
@@ -21938,6 +22127,11 @@ window.anvilDev = {
   // Deriving from another document goes through a file dialog no probe can
   // answer, so the parts either side of the dialog are reachable directly.
   derive: { contentsOfDocument, applyDerived, clearDerived, derivedFeatures, describeTaken },
+  // Setting a picture goes through a file dialog no probe can answer, so the
+  // squaring and the drawing either side of it are reachable directly.
+  squareThumbnail,
+  profileFace,
+  showProfileName,
   // The parameter file readers, so a probe can put a table out and read it back
   // without going through a save dialog it cannot answer.
   expr: { parametersToCsv, parametersFromCsv },

@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.71.0**. 583 tests in the window, plus 55 checks of the
+Current version: **2.72.0**. 583 tests in the window, plus 55 checks of the
 library, profiles and the version counter in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
@@ -27,8 +27,23 @@ too**, which closes out Category 1 and Category 2 of the Fusion inventory:
 
 **The library below is now built too**, in v2.71.0: profiles, projects, folders,
 the index, recents, search, the version counter, where you left off, and the
-placeholder handling. What is left is in `FUSION-FEATURES.md`, item by item,
-each with the reason it is not built.
+placeholder handling. Profile pictures followed in v2.72.0.
+
+What is left is in `FUSION-FEATURES.md`, item by item, each with the reason it is
+not built. Reading it back after the library shipped, the honest summary is:
+
+- **Crash recovery is the one real gap.** Nothing is written between saves, so a
+  crash costs everything since the last one. Everything else on the list is
+  either a whole discipline that was deliberately left out, or a convenience.
+- **Deliberately not here**, and recorded as such in `README.md`: CAM and
+  toolpaths, drawings, simulation study types, a photoreal renderer with real
+  lights, and generative design's study and explore machinery.
+- **Conveniences**: tangent chain as a way of picking a profile on thin extrude
+  and emboss, several flanges in one sheet-metal feature, ground-to-parent
+  (which needs nested components rather than effort), and four Inspect readings
+  Fusion has that Anvil does not.
+- **Mould-specific**: moving and fixing a parting line on draft, which matters
+  for injection tooling and not for a printed part.
 
 The sections after that are kept as the record of what was built and, more
 usefully, of what was learned building it.
@@ -42,7 +57,7 @@ whole thing rests on one decision: the library lives in a folder the user picks,
 and if that folder happens to be OneDrive or Drive then syncing is the cloud
 client's job, not Anvil's. Everything below follows from that.
 
-### Profiles — built, v2.71.0
+### Profiles — built, v2.71.0, pictures in v2.72.0
 
 A profile is a name and a library folder. It is not an account: no password, no
 server, nothing to reset. Anvil starts by asking which profile, or goes straight
@@ -57,6 +72,15 @@ folder set from before profiles existed, and losing it would have looked exactly
 like losing the library, since every derived link in every document would have
 stopped resolving by name on the next open. The old single-folder setting is read
 once and becomes the first profile's root.
+
+A profile can have a picture, and the picker shows it. That is not decoration:
+two profiles are two libraries, and picking the wrong one means an evening's work
+saved into the wrong body of work. A face is recognised before a word is read.
+Pictures are squared and scaled to 128 on the way in and kept as files beside the
+profile store, so the store stays legible in a text editor, which is one of the
+few things standing between somebody and a broken install they cannot fix by
+hand. Nobody has to have one, and a profile without one shows its initial rather
+than a gap that reads as something failing to load.
 
 ### Library layout
 
