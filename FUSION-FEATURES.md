@@ -151,10 +151,17 @@ that is the thing that makes a loft between two rectangles not twist.
 | Extent Type | To Next, Depth | has, v2.51.0 |
 | Depth | | has |
 | Flip Direction | | has |
-| Draft Angle + Draft Pull Direction + flip | | partial — angle and flip, v2.51.0. The pull direction is the sketch normal and is not separately settable |
+| Draft Angle + Draft Pull Direction + flip | | partial — angle and flip, v2.51.0. The pull direction is the sketch normal and is not separately settable. **Not in the shipped dialog** either, see below |
 | Fillet Radius | a fillet at the foot of the rib | **missing** — Anvil has this on Boss, not Rib. Boss builds its fillet into a revolved section, which a rib of any shape cannot use, so this wants the concave edges of the join found by provenance |
-| Start | Bottom, Top | **missing**, and still *pending*: it is not in the tooltip and I have not seen the dropdown flipped. Anvil's own Start is which side of the curve the thickness sits, which is a different question and is already there |
 | Direction of the wall | parallel to the sketch plane | has, v2.56.0, as a setting. **See the note below: Fusion's rib is not what this built first** |
+
+**The shipped dialog is five rows and Anvil has all five.** Kevin sent a
+screenshot of it: Profile, Thickness, Thickness Direction, Extent Type (To Next
+or Distance), Flip Direction. The Start row this file used to list is not there
+at all and has been deleted; it came from the reference page and does not
+appear in the command. Draft angle and fillet radius are not in that dialog
+either, so the rows for them are kept only as a note that the reference page
+mentions them.
 
 **The direction was wrong, and it took reading the tooltip to see it.** Fusion's
 Rib "is extruded in a direction parallel to the sketch plane" and "to the
@@ -652,6 +659,24 @@ One honest limit: a clipped solid is an open shell, because the cut leaves a
 hole rather than a capped face. Both sides are drawn while the slice is on, so
 you see the inside of the far shell where the cap would be, which reads as a cut
 part rather than a vanished one. A real cap wants stencil work.
+
+### Drawing gestures — has, v2.57.0
+
+Not a row on any Fusion reference page, and the thing that makes its sketcher
+feel quick. Two of them, both from a screenshot of Fusion mid-sketch.
+
+**Typing a size instead of aiming one.** Boxes beside the cursor while a shape
+is half made, and a value typed into one locks it so the axis snap stops pulling
+the point off what was just typed. Anvil had this on lines, rectangles and
+circles; arcs and polygons have it now too, saying radius or across-corners
+rather than length, which is the number anybody actually has for those.
+
+**An arc swept out of the end of a line.** Press on the end of the chain you are
+drawing and drag, and you get a tangent arc, and then you are back on lines from
+where it finished. Anvil had a Tangent Arc tool: stop, switch, click the end,
+click the finish, switch back. Four actions where this is one drag, and the
+chain broken in the middle of it. A press that does not move is still an
+ordinary next point, so the gesture costs nothing when it was not meant.
 
 ### Sketch lifecycle — *pending*
 

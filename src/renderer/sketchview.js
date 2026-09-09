@@ -125,7 +125,22 @@ const ENTRY_FIELDS = {
     { key: 'height', label: 'Height' }
   ],
   circle: [{ key: 'diameter', label: 'Diameter' }],
-  circleDia: [{ key: 'diameter', label: 'Diameter' }]
+  circleDia: [{ key: 'diameter', label: 'Diameter' }],
+  // An arc and a polygon are both a centre and then a point that sets how big
+  // and which way round. The same two boxes a line gets, saying radius rather
+  // than length, which is the number anybody actually has for an arc.
+  arc: [
+    { key: 'radius', label: 'Radius' },
+    { key: 'angle', label: 'Angle', unit: 'deg' }
+  ],
+  polygon: [
+    { key: 'diameter', label: 'Across corners' },
+    { key: 'angle', label: 'Angle', unit: 'deg' }
+  ],
+  polygonCirc: [
+    { key: 'diameter', label: 'Across flats' },
+    { key: 'angle', label: 'Angle', unit: 'deg' }
+  ]
 };
 
 /**
@@ -186,6 +201,9 @@ export class SketchEditor {
     // Where a press that started a shape went down, so releasing away from it
     // can stand in for the second click.
     this.dragDraw = null;
+    // The same, for a press on the end of a line chain: releasing away from it
+    // sweeps a tangent arc instead of placing the next point.
+    this.arcDrag = null;
     // Boxes for typing a size instead of aiming one, live while a shape is
     // half made. See beginEntry.
     this.entry = null;
@@ -247,6 +265,7 @@ export class SketchEditor {
     this.selectedRegions.clear();
     this.pending = null;
     this.dragDraw = null;
+    this.arcDrag = null;
     this.endEntry();
     this.band = null;
     this.hideBand();
@@ -259,6 +278,7 @@ export class SketchEditor {
     this.sketch = null;
     this.pending = null;
     this.dragDraw = null;
+    this.arcDrag = null;
     this.endEntry();
     this.band = null;
     this.hideBand();
@@ -565,12 +585,14 @@ export class SketchEditor {
     if (e.detail >= 2 && this.pending) {
       this.pending = null;
       this.dragDraw = null;
+      this.arcDrag = null;
       this.endEntry();
       this.rebuild();
       return true;
     }
 
     this.dragDraw = null;
+    this.arcDrag = null;
 
     const raw = this.screenToPlane(e.clientX, e.clientY);
     if (!raw) return false;
@@ -589,6 +611,27 @@ export class SketchEditor {
       const target = this.entryTarget({ x, y });
       this.applyTool(target, null, e);
       return true;
+    }
+
+    /*
+     * Press on the end of the line you are drawing and drag, and you get a
+     * tangent arc rather than another line, then you are back on lines. It is
+     * the gesture that makes a slotted outline one unbroken chain instead of
+     * four tool changes, and it is the thing a sketch feels slow without.
+     *
+     * Told apart from an ordinary next point purely by where the press landed:
+     * on the chain's own last point, which is a place a next point would never
+     * be put anyway.
+     */
+    if (this.tool === 'line' && this.pending?.points?.length) {
+      const last = this.pending.points[this.pending.points.length - 1];
+      const at = this.sketch.points[last];
+      const near = at && Math.hypot(at.x - x, at.y - y) < this.pixelScale() * 10;
+      const src = near ? this.tangentSourceAt(last) : null;
+      if (src) {
+        this.arcDrag = { from: last, src, x: e.clientX, y: e.clientY, ctrl: e.ctrlKey };
+        return true;
+      }
     }
 
     this.applyTool({ x, y }, snap, e);
@@ -649,6 +692,34 @@ export class SketchEditor {
     // Only the button that started the shape finishes it. A middle drag to pan
     // ends in a release too, and must not drop a corner where the pan stopped.
     if (!e || e.button !== 0) return;
+
+    // The arc swept out of the end of a line chain. A press that never moved
+    // is not one: it falls through and the chain carries on as lines, so the
+    // gesture costs nothing when it was not meant.
+    if (this.arcDrag) {
+      const arc = this.arcDrag;
+      this.arcDrag = null;
+      const moved = Math.abs(e.clientX - arc.x) + Math.abs(e.clientY - arc.y) > DRAG_DRAW_MIN;
+      const raw2 = moved ? this.screenToPlane(e.clientX, e.clientY) : null;
+      if (raw2 && this.pending) {
+        this.suppressAuto = arc.ctrl || e.ctrlKey;
+        const skip = new Set(this.pending.points || []);
+        const hit = this.snap(raw2, { skipPoints: skip });
+        const endIdx = this.resolvePoint({ x: hit.x, y: hit.y }, hit.snap);
+        if (endIdx !== arc.from) {
+          this.announce();
+          this.buildTangentArc(arc.from, arc.src, endIdx);
+          // Back on lines, carrying on from where the arc finished, so the
+          // chain is unbroken and the next click is an ordinary line again.
+          this.pending.points.push(endIdx);
+          this.pending.lastLine = null;
+          this.beginEntry('line', endIdx);
+          this.finishStep();
+        }
+      }
+      return;
+    }
+
     const start = this.dragDraw;
     this.dragDraw = null;
     if (!start || !this.pending) return;
@@ -1502,11 +1573,15 @@ export class SketchEditor {
         const idx = this.resolvePoint(pos, snap);
         this.pending = { tool: T, points: [idx] };
         this.maybeAnchor(idx, snap);
+        this.beginEntry(T, idx);
         return;
       }
       if (this.pending.points.length === 1) {
         const idx = this.resolvePoint(pos, snap);
         this.pending.points.push(idx);
+        // The radius is set. What is left is how far round it goes, and that
+        // is aimed rather than typed, so the boxes come down.
+        this.endEntry();
         return;
       }
       const c = this.pending.points[0];
@@ -1627,8 +1702,10 @@ export class SketchEditor {
         const idx = this.resolvePoint(pos, snap);
         this.pending = { tool: T, points: [idx] };
         this.maybeAnchor(idx, snap);
+        this.beginEntry(T, idx);
         return;
       }
+      this.endEntry();
       const c = this.sketch.points[this.pending.points[0]];
       // Inscribed puts the corners on the circle you drag out; circumscribed
       // puts the flats on it, which is the one that matters when the polygon
@@ -2724,6 +2801,13 @@ export class SketchEditor {
         return { diameter: Math.hypot(dx, dy) * 2 };
       case 'circleDia':
         return { diameter: Math.hypot(dx, dy) };
+      case 'arc':
+        return { radius: Math.hypot(dx, dy), angle: angleOf(dx, dy) };
+      case 'polygon':
+      case 'polygonCirc':
+        // buildPolygon reads the second point as the corner or the flat, so
+        // what the cursor is at is half of what the box asks for.
+        return { diameter: Math.hypot(dx, dy) * 2, angle: angleOf(dx, dy) };
       default:
         return {};
     }
@@ -2761,11 +2845,20 @@ export class SketchEditor {
     const dx = pos.x - a.x;
     const dy = pos.y - a.y;
 
-    if (this.entry.tool === 'line') {
-      const len = val('length') ?? Math.hypot(dx, dy);
+    if (this.entry.tool === 'line' || this.entry.tool === 'arc') {
+      const key = this.entry.tool === 'arc' ? 'radius' : 'length';
+      const len = val(key) ?? Math.hypot(dx, dy);
       const angDeg = val('angle') ?? angleOf(dx, dy);
       const ang = (angDeg * Math.PI) / 180;
       return { x: a.x + len * Math.cos(ang), y: a.y + len * Math.sin(ang) };
+    }
+
+    if (this.entry.tool === 'polygon' || this.entry.tool === 'polygonCirc') {
+      const d = val('diameter');
+      const angDeg = val('angle') ?? angleOf(dx, dy);
+      const ang = (angDeg * Math.PI) / 180;
+      const r = d === null ? Math.hypot(dx, dy) : d / 2;
+      return { x: a.x + r * Math.cos(ang), y: a.y + r * Math.sin(ang) };
     }
 
     // Which way the cursor points decides which corner, or which side of the

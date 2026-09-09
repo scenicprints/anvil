@@ -61,6 +61,17 @@ about it rather than about the sketch Y axis. Two centrelines is a question, so
 it asks. Only a line can be one; a circle has no single direction to be an axis
 in.
 
+**Type a size rather than aiming one.** While a shape is half made, boxes sit
+beside the cursor: length and angle on a line, width and height on a rectangle,
+diameter on a circle, radius and angle on an arc, across corners or across flats
+on a polygon. Typing into one locks it, so the axis snap stops pulling the point
+off the angle you just gave it.
+
+**An arc out of the end of a line.** Press on the end of the chain you are
+drawing and drag: you get a tangent arc, and then you are back on lines from
+where it finished, without leaving the tool. A press that does not move is still
+an ordinary next point.
+
 Where Fusion groups a family of tools under one button, so does this: the
 caret on Rectangle, Circle, Arc, Polygon, Slot and Spline opens the list.
 **Sides** and **Rho** sit beside them, because they belong to the tool in your
