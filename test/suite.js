@@ -13,6 +13,7 @@ import * as K from '../src/renderer/kernel.js';
 import {
   evaluate,
   resolveParameters,
+  resolveTextParameters,
   parametersToCsv,
   parametersFromCsv
 } from '../src/renderer/expr.js';
@@ -314,6 +315,46 @@ async function run() {
     near(evaluate('2 ^ 3 ^ 2'), 512, 1e-12, 'right associative power');
     near(evaluate('-5 + 2'), -3, 1e-12, 'unary minus');
     near(evaluate('10 / 4'), 2.5, 1e-12);
+  });
+
+  test('text parameters: words joined with plus, and numbers written out', () => {
+    const params = [
+      { name: 'version', kind: 'text', expr: '"Mk 3"' },
+      { name: 'wall', expr: '2.4' },
+      { name: 'label', kind: 'text', expr: '"Bracket " + version' },
+      { name: 'full', kind: 'text', expr: 'label + " at " + wall + "mm"' }
+    ];
+    const { text, errors } = resolveTextParameters(params);
+    assert(!Object.keys(errors).length, JSON.stringify(errors));
+    assert(text.label === 'Bracket Mk 3', `got "${text.label}"`);
+    // A number brought into text reads the way the value reads, not the way a
+    // float prints: 2.4 and not 2.4000000000000004.
+    assert(text.full === 'Bracket Mk 3 at 2.4mm', `got "${text.full}"`);
+
+    // A text parameter is not a number and must not be handed to the
+    // arithmetic parser, or every one of them files an error against a
+    // parameter that is perfectly correct.
+    const numeric = resolveParameters(params);
+    assert(!Object.keys(numeric.errors).length, JSON.stringify(numeric.errors));
+    near(numeric.scope.wall, 2.4, 1e-12, 'and the numbers still resolve');
+    assert(numeric.scope.label === undefined, 'text stays out of the number scope');
+  });
+
+  test('text parameters: the ways it can be wrong are all said', () => {
+    const bad = (expr, extra = []) =>
+      resolveTextParameters([{ name: 't', kind: 'text', expr }, ...extra]).errors.t || '';
+
+    assert(/not closed/.test(bad('"unfinished')), `got "${bad('"unfinished')}"`);
+    assert(/Unknown parameter/.test(bad('nosuchthing')), `got "${bad('nosuchthing')}"`);
+    assert(/joined with \+/.test(bad('"a" "b"')), `got "${bad('"a" "b"')}"`);
+
+    // A ring of names has no value to give, and recursing until the stack goes
+    // is not a way of saying so.
+    const ring = resolveTextParameters([
+      { name: 'a', kind: 'text', expr: 'b' },
+      { name: 'b', kind: 'text', expr: 'a' }
+    ]);
+    assert(/refers to itself/.test(ring.errors.a || ''), `got "${ring.errors.a}"`);
   });
 
   test('parameters: a table written out and read back is the same table', () => {

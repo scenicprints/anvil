@@ -12,7 +12,7 @@
 
 import * as THREE from './three.js';
 import * as K from './kernel.js';
-import { resolveParameters, safeEval } from './expr.js';
+import { resolveParameters, safeEval, evaluateText } from './expr.js';
 import {
   findRegions,
   regionToPolygons,
@@ -33,6 +33,7 @@ import {
 } from './meshbuild.js';
 import { resolveConstruction } from './construction.js';
 import { solveAssembly } from './assembly.js';
+import { textContours } from './textoutline.js';
 import { solveSketch } from './solver.js';
 import * as PL from './plastic.js';
 import * as CF from './configure.js';
@@ -257,6 +258,51 @@ export function normalizeSweep(f) {
   if (!f.profileScaling) f.profileScaling = 'scale';
   if (f.distance === undefined) f.distance = '1';
   return f;
+}
+
+/**
+ * Redraw any sketch text whose words come from a text parameter.
+ *
+ * Text is stored as traced outlines, because that is what a profile can be cut
+ * from, and the outlines are made when the text is typed. A text parameter
+ * changes the words afterwards, so the outlines have to be made again or the
+ * part keeps saying what it used to.
+ *
+ * Only when the words actually changed. Retracing costs a canvas raster per
+ * entity and the answer is usually the same one.
+ */
+function retraceTextEntities(sk, parameters, errors, feature) {
+  for (const ent of sk.entities || []) {
+    if (ent.type !== 'text' || !ent.textExpr) continue;
+    let words;
+    try {
+      words = evaluateText(ent.textExpr, parameters || []);
+    } catch (err) {
+      errors.push({
+        feature: feature?.id,
+        message: `Sketch text: ${err.message}`
+      });
+      continue;
+    }
+    if (words === ent.text) continue;
+    if (!String(words).trim()) {
+      errors.push({
+        feature: feature?.id,
+        message: 'Sketch text came out empty, so the outlines it had are kept'
+      });
+      continue;
+    }
+    const contours = textContours(words, ent);
+    if (!contours.length) {
+      errors.push({
+        feature: feature?.id,
+        message: `"${words}" produced no outline, so the text is left as it was`
+      });
+      continue;
+    }
+    ent.text = words;
+    ent.contours = contours;
+  }
 }
 
 /** Bring a loft up to the shape the dialog now works in. */
@@ -728,6 +774,13 @@ function globalRebuildKey(doc, scope) {
   }
   return JSON.stringify({
     params,
+    // Text parameters are not in the numeric scope, so a change to one moves
+    // nothing above and the whole run would be replayed from cache with the
+    // old words still traced into it. They belong here for exactly the reason
+    // the numbers do: nothing in the feature that reads one says that it does.
+    text: (doc.parameters || [])
+      .filter((p) => p.kind === 'text')
+      .map((p) => [p.name, p.expr]),
     // Which row is in force is part of what the model is built from, so a
     // switch has to throw the cache away like any other change.
     config: doc.configurations?.active || null,
@@ -1010,6 +1063,7 @@ export function rebuild(doc, options = {}) {
           const plane = planeForSketch(sk, scope, bodies, errors, feature);
           sketchPlanes[sk.id] = plane;
           resolveDimensionExprs(sk, scope);
+          retraceTextEntities(sk, doc.parameters, errors, feature);
           // A three dimensional sketch is reference geometry, not a solved
           // one. Every residual in the solver is written in two variables per
           // point, so running it on points that carry a third would quietly

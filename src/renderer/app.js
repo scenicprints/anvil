@@ -61,6 +61,8 @@ import {
 import { CONSTRUCTION_LABELS } from './construction.js';
 import {
   resolveParameters,
+  resolveTextParameters,
+  evaluateText,
   evaluate,
   safeEval,
   parametersToCsv,
@@ -1992,6 +1994,9 @@ async function runCommand(cmd) {
       break;
     case 'selectBySize':
       cmdSelectBySize();
+      break;
+    case 'selectByName':
+      cmdSelectByName();
       break;
     case 'isolate':
       cmdIsolate();
@@ -6067,6 +6072,7 @@ const RIBBON_MENUS = {
     ['selectSimilar', 'Select Similar'],
     ['selectSeedBoundary', 'Seed And Boundary'],
     ['selectBySize', 'Select By Size'],
+    ['selectByName', 'Select By Name'],
     ['createSelectionSet', 'Save As A Selection Set'],
     ['isolate', 'Isolate'],
     ['unisolate', 'Show All Again']
@@ -7234,7 +7240,16 @@ function askForText(current, cb) {
   showInspector(
     'Text',
     [
-      { key: 'text', label: 'Text', type: 'text', value: current.text || '' },
+      { key: 'text', label: 'Text', type: 'text', value: current.textExpr || current.text || '' },
+      {
+        key: '__textNote',
+        label: '',
+        type: 'note',
+        text:
+          'Plain words, or an expression in quotes joined with + to bring in a text parameter, ' +
+          'for example "Mk " + version. An expression is redrawn when the parameter changes; ' +
+          'plain words are left alone.'
+      },
       {
         key: 'font',
         label: 'Font',
@@ -7259,8 +7274,24 @@ function askForText(current, cb) {
       { key: 'italic', label: 'Italic', type: 'check', value: !!current.italic }
     ],
     (v) => {
+      // Told apart by whether it parses as a text expression. Plain words are
+      // the ordinary case and must not be made to look like a broken
+      // expression, so anything that does not parse is taken as itself.
+      let expr = null;
+      let words = v.text;
+      try {
+        const resolved = evaluateText(v.text, state.doc.parameters);
+        // A bare name that happens to be a parameter counts; a bare word that
+        // is not one throws and falls through to being plain words.
+        expr = v.text;
+        words = resolved;
+      } catch {
+        expr = null;
+        words = v.text;
+      }
       cb({
-        text: v.text,
+        text: words,
+        textExpr: expr,
         font: v.font,
         height: safeEval(v.height, scope, 10),
         align: v.align,
@@ -16595,6 +16626,48 @@ function cmdSeedAndBoundary() {
  * worth caring about and hundreds of chips; this is how the chips get dealt
  * with in one go instead of four hundred.
  */
+/**
+ * Choose bodies by what they are called.
+ *
+ * Fusion's Select By Name. It earns its place on an assembly rather than on one
+ * part: twenty bodies in the browser, six of them called something with
+ * "bracket" in it, and clicking each one in the tree is the alternative.
+ *
+ * A plain substring, not a pattern language. Anybody who wanted a regular
+ * expression here would be the only one, and one typed by accident would match
+ * nothing with no way to see why.
+ */
+function cmdSelectByName() {
+  const all = state.result?.bodies || [];
+  if (!all.length) {
+    setStatus('There are no bodies to choose from.');
+    return;
+  }
+  promptText('Bodies whose name contains', '', (text) => {
+    const needle = String(text || '').trim().toLowerCase();
+    if (!needle) return;
+    const hit = all.filter((b) => String(b.name || '').toLowerCase().includes(needle));
+    if (!hit.length) {
+      setStatus(`Nothing is called anything like "${text}".`);
+      return;
+    }
+    // Added to what is already chosen rather than replacing it, so two
+    // searches make one selection. Faces and edges are cleared, because a
+    // selection that is part bodies and part faces is one no command takes.
+    state.selection.faces.clear();
+    state.selection.edges.clear();
+    for (const b of hit) state.selection.bodies.add(b.id);
+    refreshHighlight();
+    state.vp.setSelection(state.selection.bodies);
+    renderTree();
+    setStatus(
+      `${hit.length} bod${hit.length === 1 ? 'y' : 'ies'} chosen: ${hit
+        .map((b) => b.name)
+        .join(', ')}.`
+    );
+  });
+}
+
 function cmdSelectBySize() {
   const record = soleRecord();
   if (!record) {
@@ -19358,7 +19431,7 @@ function renderParameters() {
   const hint = document.createElement('div');
   hint.className = 'hint';
   hint.textContent =
-    'Name a value here and any dimension can use it. Expressions may reference other parameters, for example wall * 2.';
+    'Name a value here and any dimension can use it. Expressions may reference other parameters, for example wall * 2. A Text parameter holds words instead, joined with +, and sketch text can be driven by one.';
   body.appendChild(hint);
 
   // Every keystroke rebuilds the part, which on a heavy one is the difference
@@ -19394,11 +19467,19 @@ function renderParameters() {
   state.parametersWaitingEl = waiting;
 
   const { scope, errors } = resolveParameters(state.doc.parameters);
+  const asText = resolveTextParameters(state.doc.parameters);
+  // One value column for two kinds. A text parameter has no number to show and
+  // a number has no string, so each row shows whichever it has.
+  const valueOf = (p) => {
+    if (p.kind === 'text') return asText.errors[p.name] ? 'error' : `"${asText.text[p.name]}"`;
+    return errors[p.name] ? 'error' : round(scope[p.name], 4);
+  };
+  const errorOf = (p) => (p.kind === 'text' ? asText.errors[p.name] : errors[p.name]);
 
   const table = document.createElement('table');
   table.className = 'params';
   table.innerHTML =
-    '<thead><tr><th></th><th>Name</th><th>Expression</th><th>Value</th><th></th></tr></thead>';
+    '<thead><tr><th></th><th>Name</th><th>Expression</th><th>Value</th><th></th><th></th></tr></thead>';
   const tbody = document.createElement('tbody');
 
   // Favourites first, and in the order they were made within each group. The
@@ -19439,6 +19520,27 @@ function renderParameters() {
     });
     tdName.appendChild(nameInput);
 
+    const tdKind = document.createElement('td');
+    const kindSel = document.createElement('select');
+    for (const [v, label] of [['number', 'Number'], ['text', 'Text']]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      if ((p.kind || 'number') === v) o.selected = true;
+      kindSel.appendChild(o);
+    }
+    kindSel.addEventListener('change', () => {
+      p.kind = kindSel.value === 'text' ? 'text' : undefined;
+      // The two kinds read expressions in different languages, so what was
+      // there almost never means anything in the other one. A sensible empty
+      // value of the new kind beats an error the moment the row is switched.
+      p.expr = p.kind === 'text' ? '""' : '10';
+      state.dirty = true;
+      renderParameters();
+      rebuildAll();
+    });
+    tdKind.appendChild(kindSel);
+
     const tdExpr = document.createElement('td');
     const exprInput = document.createElement('input');
     exprInput.type = 'text';
@@ -19452,18 +19554,30 @@ function renderParameters() {
       // the rebuild it will cause.
       if (state.autoCompute === false) markParametersWaiting();
       else scheduleRebuild();
-      const v = resolveParameters(state.doc.parameters);
-      tdVal.textContent = v.errors[p.name] ? 'error' : round(v.scope[p.name], 4);
-      tdVal.style.color = v.errors[p.name] ? '#e06c5f' : '';
+      let bad = null;
+      if (p.kind === 'text') {
+        try {
+          tdVal.textContent = `"${evaluateText(p.expr, state.doc.parameters)}"`;
+        } catch (err) {
+          bad = err.message;
+        }
+      } else {
+        const v = resolveParameters(state.doc.parameters);
+        bad = v.errors[p.name] || null;
+        if (!bad) tdVal.textContent = round(v.scope[p.name], 4);
+      }
+      if (bad) tdVal.textContent = 'error';
+      tdVal.style.color = bad ? '#e06c5f' : '';
+      tdVal.title = bad || '';
     });
     tdExpr.appendChild(exprInput);
 
     const tdVal = document.createElement('td');
     tdVal.className = 'v';
-    tdVal.textContent = errors[p.name] ? 'error' : round(scope[p.name], 4);
-    if (errors[p.name]) {
+    tdVal.textContent = valueOf(p);
+    if (errorOf(p)) {
       tdVal.style.color = '#e06c5f';
-      tdVal.title = errors[p.name];
+      tdVal.title = errorOf(p);
     }
 
     const tdDel = document.createElement('td');
@@ -19479,7 +19593,7 @@ function renderParameters() {
     });
     tdDel.appendChild(del);
 
-    tr.append(tdStar, tdName, tdExpr, tdVal, tdDel);
+    tr.append(tdStar, tdName, tdKind, tdExpr, tdVal, tdDel);
     tbody.appendChild(tr);
   });
 

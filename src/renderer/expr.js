@@ -287,9 +287,13 @@ export function referencedNames(source) {
  * Resolve a parameter table into a flat name -> value scope.
  * Parameters may reference each other in any order; cycles are reported.
  */
-export function resolveParameters(params) {
+export function resolveParameters(all) {
   const scope = {};
   const errors = {};
+  // Text parameters are not numbers and have their own resolver. Left in here
+  // they would each be handed to the arithmetic parser, fail, and file an
+  // error against a parameter that is perfectly correct.
+  const params = (all || []).filter((p) => p.kind !== 'text');
   const byName = new Map(params.map((p) => [p.name, p]));
   const state = new Map();
   const cyclic = new Set();
@@ -452,4 +456,89 @@ export function parametersFromCsv(text) {
     taken.push({ name, expr, comment: cells[2] || undefined });
   }
   return { taken, skipped };
+}
+
+/* ------------------------------------------------------------------ */
+/* Text parameters                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A named piece of text, joined with `+` the way Fusion joins its own.
+ *
+ * The grammar is deliberately small: quoted literals, other parameter names,
+ * and plus signs between them. Not the arithmetic parser with strings bolted
+ * on. A label on a part is `"Bracket " + version`, and anything that needs more
+ * than that is better typed out.
+ *
+ * A numeric parameter used in a text expression is written the way the value
+ * would read, trimmed of trailing zeroes, because `wall` reading "2.4" is what
+ * somebody means and "2.4000000000000004" is not.
+ */
+export function evaluateText(source, params, seen = new Set()) {
+  const src = String(source ?? '');
+  const out = [];
+  let i = 0;
+
+  while (i < src.length) {
+    while (i < src.length && /\s/.test(src[i])) i++;
+    if (i >= src.length) break;
+
+    if (src[i] === '"' || src[i] === "'") {
+      const quote = src[i++];
+      let lit = '';
+      while (i < src.length && src[i] !== quote) {
+        // A backslash escapes the next character, which is the only way to put
+        // a quote inside a quoted string.
+        if (src[i] === '\\' && i + 1 < src.length) i++;
+        lit += src[i++];
+      }
+      if (i >= src.length) throw new Error('A quote was opened and not closed');
+      i++;
+      out.push(lit);
+    } else {
+      const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+      if (!m) throw new Error(`Cannot read "${src.slice(i, i + 12)}"`);
+      i += m[0].length;
+      const name = m[0];
+      // A parameter that reads itself, directly or round a ring of others,
+      // has no value to give. Saying so beats recursing until the stack goes.
+      if (seen.has(name)) throw new Error(`${name} refers to itself`);
+      const p = (params || []).find((q) => q.name === name);
+      if (!p) throw new Error(`Unknown parameter "${name}"`);
+      if (p.kind === 'text') {
+        out.push(evaluateText(p.expr, params, new Set([...seen, name])));
+      } else {
+        const { scope } = resolveParameters((params || []).filter((q) => q.kind !== 'text'));
+        const v = scope[name];
+        out.push(Number.isFinite(v) ? String(Number(v.toFixed(6))) : '');
+      }
+    }
+
+    while (i < src.length && /\s/.test(src[i])) i++;
+    if (i < src.length) {
+      if (src[i] !== '+') throw new Error('Text is joined with +');
+      i++;
+    }
+  }
+
+  return out.join('');
+}
+
+/**
+ * Every text parameter resolved, and what went wrong with the ones that did
+ * not. Shaped like `resolveParameters` so the table can render both the same
+ * way.
+ */
+export function resolveTextParameters(params) {
+  const text = {};
+  const errors = {};
+  for (const p of (params || []).filter((q) => q.kind === 'text')) {
+    try {
+      text[p.name] = evaluateText(p.expr, params);
+    } catch (err) {
+      errors[p.name] = err.message;
+      text[p.name] = '';
+    }
+  }
+  return { text, errors };
 }

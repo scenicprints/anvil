@@ -586,7 +586,7 @@ with the degree editable on a control-point spline.
 
 | Option | Anvil |
 |---|---|
-| Linetype (convert geometry to another line type) | partial — `toggleConstruction` already converts what is selected between normal and construction, and switches the mode for new geometry when nothing is selected. The gap is that there are only two types to convert between |
+| Linetype (convert geometry to another line type) | has, v2.36.0. Normal, construction and centreline, converting what is selected and switching the mode for new geometry when nothing is |
 | Construction | has |
 | Centerline | has, v2.36.0. This row was the one the cross-check found marked "has" when nothing in the source mentioned one; it is built now |
 | Look At (turn the camera square to the sketch plane) | has, v2.31.0. Also works on a selected flat face |
@@ -1103,7 +1103,7 @@ does not carry here.
 | User parameters with name, expression, value and comment | has |
 | Model parameters listed per component and feature | partial |
 | Unit type per parameter | has |
-| **Text parameters**, joined with `+` | **missing** |
+| Text parameters, joined with `+` | has, v2.49.0 |
 | Name a parameter inline by typing `Width=50` into any field, which creates it and adds it to favourites | has, v2.37.0 |
 | Favourites | has, v2.37.0. A star per row, and favourites sort to the top of the table |
 | Automatic Compute off while editing several parameters | has, v2.29.0 |
@@ -1118,6 +1118,30 @@ second field almost always means "use wall here" and redefining it would move
 every other feature that reads it; and an expression that does not evaluate
 leaves the field as typed rather than putting a broken row on a table nobody is
 looking at.
+
+Text parameters shipped in v2.49.0 with a consumer, which is the only reason
+they are worth having: sketch text can be driven by one. A text parameter with
+nowhere to go would be a row in a table and nothing else.
+
+The awkward part is that text is stored as traced outlines, because that is
+what a profile can be cut from, and the outlines are made when the text is
+typed. Changing the parameter afterwards has to make them again, or the part
+goes on saying what it used to while the table says otherwise. So the rebuild
+re-traces any text whose words came out different, and only then, because a
+raster per entity is not free and the answer is usually the same one.
+
+Two things that had to be got right. Text parameters are kept out of the
+numeric scope: left in, each one is handed to the arithmetic parser, fails, and
+files an error against a parameter that is perfectly correct. And they are part
+of the rebuild cache key, because being out of the numeric scope means a change
+to one moves nothing the cache watches, and the whole run would replay with the
+old words still traced into it. That one was found by the demo, not by
+reasoning.
+
+The grammar is deliberately small: quoted literals, parameter names, and plus
+signs. A label on a part is `"Bracket " + mark`. A number brought into text
+reads the way the value reads rather than the way a float prints, so `wall`
+comes out "2.4" and not "2.4000000000000004".
 
 The CSV keeps expressions, not values. A table carried from one part to another
 is meant to carry the reasoning. The value is written as a fourth column that
@@ -1154,7 +1178,7 @@ canvas**.
 | Seed and boundary | has |
 | Selection priority filters | partial |
 | Selection filters | has |
-| **Select by name** | **missing** |
+| Select by name | has, v2.49.0. A plain substring against body names, not a pattern language |
 | Selection sets (name a selection and come back to it) | has, v2.38.0 |
 
 Anvil adds select similar and select tangent run, which Fusion carries as the

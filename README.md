@@ -584,6 +584,13 @@ the table. A name already in use is read rather than redefined, because typing
 expression that will not evaluate leaves the field as you typed it rather than
 putting a broken row somewhere you are not looking.
 
+A parameter can hold **words** instead of a number, joined with `+`: `"Bracket "
++ mark`. Sketch text can be driven by one, which is the only reason to have them
+at all, and it is the useful one: a mark number cut into forty brackets, changed
+once. Text is stored as traced outlines, so changing the parameter re-traces
+them, and only when the words actually came out different. Plain words typed
+into the text box stay plain words and are left alone.
+
 The table exports and imports as CSV. It keeps expressions, not the numbers they
 work out to, because a table carried from one part to another is meant to carry
 the reasoning; the values go in a fourth column for whoever opens the file in a
@@ -763,6 +770,11 @@ so a pocket comes whole however many faces it turns out to be made of.
 **Tangent Run** takes the whole of one smooth surface, stopping where there is
 a crease. **Select Similar** matches what was picked: pick one M3 bore and the
 other three come with it. **Grow**, **Shrink** and **Invert** do the obvious.
+
+**Select By Name** takes the bodies whose name contains what you type, which
+earns its place on an assembly: twenty bodies in the browser, six of them called
+something with "bracket" in it, and clicking each one in the tree is the
+alternative. A plain substring, not a pattern language.
 
 **Save as a selection set** names what is chosen and puts it in the browser to
 come back to. It stores references rather than positions, so a set saved before
