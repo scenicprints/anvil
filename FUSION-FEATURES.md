@@ -220,15 +220,34 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 |---|---|---|
 | Type | Fillet, **Rule Fillet**, **Full Round Fillet** | partial — first only |
 | Selection sets | several, each with its own radius and settings | has |
-| Radius Type | Constant, Chord Length, Variable, **Asymmetric** | partial — plus a hold-line type Fusion does not have |
-| Continuity | Tangent (G1), Curvature (G2) | **missing** |
+| Radius Type | Constant, Chord Length, Variable, Asymmetric | has, v2.37.0, plus a hold-line type Fusion does not have |
+| Continuity | Tangent (G1), Curvature (G2) | has, v2.37.0 |
 | Tangent Chain | select tangentially connected edges as one | has, v2.35.0, per set and on by default |
-| Tangency Weight | | **missing** |
+| Tangency Weight | | has, v2.37.0. How hard the G2 curve is pulled toward the corner |
 | Radius Points | radius and position along one edge (variable only) | has |
 | Corner Type | Rolling Ball, Setback | **missing** |
 | Rule | All Edges, Between Faces/Features (rule fillet) | **missing** |
 | Round/Fillets | Rounds and Fillets, Rounds Only, Fillets Only (rule fillet) | **missing** |
 | Center Faces / Side 1 / Side 2 | full round fillet | **missing** |
+
+Asymmetric and G2 both shipped in v2.37.0 and both live in the same place, the
+two dimensional corner profile every fillet is swept from. Asymmetric is a
+rational quadratic through the two tangent points with the corner as its
+control point, at a weight of sin(theta / 2), which is the value that
+reproduces the circular arc exactly when the two radii match: so switching a
+set to asymmetric and giving it the same radius twice changes nothing about the
+part, and the test pins that. G2 is a quintic whose first three control points
+lie on the line from one tangent point to the corner and whose last three lie
+on the line from the corner to the other. Three collinear control points at an
+end is exactly the condition for zero curvature there, and the faces it lands
+on are flat, so both sides read zero and there is no step to catch the light.
+Tangency weight is how hard that curve is pulled toward the corner.
+
+The rolling ball dropped at corners where several fillets meet is switched off
+for both. It is a ball: one radius, tangent to all three faces. An asymmetric
+blend is not a ball at all and a curvature continuous one has no single radius
+to give it, so a ball there would stand proud of the sweeps it is meant to
+join.
 
 Note: **Rule Fillet with the rule "All Edges" is Fusion's named way to round a
 whole part.** That is exactly what Anvil used to do silently when nothing was
@@ -314,6 +333,11 @@ draft leans a face about the line where it meets the neutral plane and a curved
 face has no such line. Taking one would have put a face in the list that could
 never move. For the same reason a curved face is now refused outright rather
 than taken and then silently skipped.
+
+Shell has it as of v2.37.0, and that one keeps the curves in the run: the mouth
+of a shelled part is usually one surface the topology holds as several, a
+rounded rim being the ordinary case, and opening a rounded face is a perfectly
+ordinary thing to want.
 
 Still to do: Sweep, Loft and thin Extrude have the same setting in Fusion and
 do not have it here.
@@ -415,7 +439,7 @@ parting-line work.
 | Object | Faces to remove, or a whole Body with no opening | has |
 | Direction | Inside, Outside, Both | has |
 | Inside Thickness / Outside Thickness | two values when the direction is Both | has, v2.29.0 |
-| Tangent Chain | | **missing** |
+| Tangent Chain | | has, v2.37.0. Curved faces are kept in the run here, unlike Draft: opening a rounded face is ordinary |
 
 ### Boundary Fill — partial
 
@@ -988,14 +1012,27 @@ does not carry here.
 | Model parameters listed per component and feature | partial |
 | Unit type per parameter | has |
 | **Text parameters**, joined with `+` | **missing** |
-| **Name a parameter inline** by typing `Width=50` into any field, which creates it and adds it to favourites | **missing** |
-| Favourites | **missing** |
+| Name a parameter inline by typing `Width=50` into any field, which creates it and adds it to favourites | has, v2.37.0 |
+| Favourites | has, v2.37.0. A star per row, and favourites sort to the top of the table |
 | Automatic Compute off while editing several parameters | has, v2.29.0 |
-| **Import and export parameters** | **missing** |
+| Import and export parameters | has, v2.37.0, as CSV |
 
-**Typing `Width=50` into a field to create the parameter there and then is the
-one to steal.** It removes the trip to a dialog entirely, and Anvil's fields
-already evaluate expressions, so the machinery is present.
+Typing `Width=50` into a field was the one to steal and it shipped in v2.37.0.
+The field is left reading the name rather than a copy of the number, or the
+parameter would be one nothing uses. Two refusals go with it, both of them
+cases where doing the obvious thing would be worse than nothing: a name already
+in use is read rather than redefined, because somebody typing `wall = 3` into a
+second field almost always means "use wall here" and redefining it would move
+every other feature that reads it; and an expression that does not evaluate
+leaves the field as typed rather than putting a broken row on a table nobody is
+looking at.
+
+The CSV keeps expressions, not values. A table carried from one part to another
+is meant to carry the reasoning. The value is written as a fourth column that
+nothing reads back, for the benefit of whoever opens the file in a spreadsheet.
+On import a name already in the document keeps its row and takes the new
+expression, so a revised table updates the part instead of filling it with
+duplicates that shadow each other.
 
 Automatic Compute is the other: Anvil rebuilds on every keystroke in the
 parameters table, which on a heavy part is the difference between editing five

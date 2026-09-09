@@ -656,6 +656,45 @@ ipcMain.handle('export:image', async (_e, { suggestedName, bytes }) => {
   }
 });
 
+/**
+ * Write a plain text file the document does not own: a parameter list, and
+ * whatever else turns out to want one.
+ *
+ * Separate from `export:mesh` because that names its filters after the three
+ * mesh formats, and separate from `doc:save` because writing one of these must
+ * never become the document's path.
+ */
+ipcMain.handle('export:text', async (_e, { suggestedName, ext, label, data }) => {
+  const res = await dialog.showSaveDialog(win, {
+    title: 'Export',
+    defaultPath: suggestedName,
+    filters: [{ name: label || String(ext).toUpperCase(), extensions: [ext] }]
+  });
+  if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+  try {
+    await fs.writeFile(res.filePath, String(data), 'utf8');
+    return { ok: true, path: res.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+/** Read one back. Same reasoning as above about not touching the document. */
+ipcMain.handle('import:text', async (_e, { ext, label }) => {
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Import',
+    filters: [{ name: label || String(ext).toUpperCase(), extensions: [ext] }],
+    properties: ['openFile']
+  });
+  if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+  try {
+    const text = await fs.readFile(res.filePaths[0], 'utf8');
+    return { ok: true, path: res.filePaths[0], text };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('export:mesh', async (_e, { suggestedName, ext, data }) => {
   const filters = {
     stl: [{ name: 'STL (binary)', extensions: ['stl'] }],

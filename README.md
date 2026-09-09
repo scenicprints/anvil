@@ -231,7 +231,7 @@ dialog's or the document's, so a profile picked into a dialog looks picked.
 | Hole | Type, extent, drill point, counterbore, countersink, tapped |
 | Thread | A real modelled ISO 60 degree thread, internal or external |
 | Primitives | Box, cylinder, cone, sphere, **torus**, **pipe** |
-| Fillet | Several edge sets, each constant, **variable**, by **chord length** or held to a line |
+| Fillet | Several edge sets, each constant, **variable**, **asymmetric**, by **chord length** or held to a line; any of them tangent or **curvature continuous** |
 | Chamfer | Equal, two distances, or distance and angle, in sets |
 | Shell | Inside, outside or both, with selected faces left open |
 | Draft | Faces tapered about a neutral plane, one side or two; one click takes the whole run of flats that carry on smoothly from it |
@@ -329,14 +329,26 @@ part" with an empty list, because it was the only way to say it, and they are
 given the flag that means it on load so they still come back rounded. Fillet and
 Chamfer hold several edge sets, each with its own size, so a part can be
 blended at three radii in one feature; a chamfer set is equal, two distances, or
-a distance and the angle it leans at. A fillet set is asked for in one of four
-ways. **Constant** and **variable radius** are the plain ones. **Chord length**
+a distance and the angle it leans at. A fillet set is asked for in one of five
+ways. **Constant** and **variable radius** are the plain ones. **Asymmetric**
+takes a radius on each face, so the blend runs out further one way than the
+other. **Chord length**
 asks how wide the blend reads across and lets the radius fall out of the angle
 each edge happens to sit at, so two edges at different angles come out the same
 width rather than the same radius. **Hold line** asks for an edge the blend has
 to run out on and takes the radius from the distance to it, which is how a
-fillet is made to die exactly at a step rather than near it. **Shell** puts the wall inside, outside or
-straddling the original surface. **Draft** tapers one side of the neutral plane
+fillet is made to die exactly at a step rather than near it.
+
+Any of them can be **curvature continuous**, which Fusion calls G2. A circular
+arc meets a flat face with a jump in curvature, from nothing to one over the
+radius, and on a shiny part that jump is a line you can see. G2 keeps the
+tangent points where the circular fillet put them and runs the curvature out to
+nothing at both ends instead, so there is no line to see. **Tangency weight** is
+how hard that curve is pulled toward the corner.
+
+**Shell** puts the wall inside, outside or
+straddling the original surface, and one click on the mouth takes the whole run
+of faces that carry on smoothly from it. **Draft** tapers one side of the neutral plane
 or both, which is the shape a moulded part has about its parting line.
 
 **Hole** has a type, an extent of distance, to an object, or all, a drill point
@@ -524,6 +536,21 @@ linkage asked for a position it cannot reach says so rather than half solving.
 Every numeric field takes an expression, including a sketch dimension, so
 `wall * 2` or `len / 2 - clearance` are valid, and they stay expressions in the
 saved file.
+
+You do not have to go to the dialog to make one. Type `Width = 50` into any
+dimension field and the parameter is made there and then, the field is left
+reading `Width`, and it is starred as a favourite. Favourites sort to the top of
+the table. A name already in use is read rather than redefined, because typing
+`wall = 3` into a second field almost always means "use wall here", and an
+expression that will not evaluate leaves the field as you typed it rather than
+putting a broken row somewhere you are not looking.
+
+The table exports and imports as CSV. It keeps expressions, not the numbers they
+work out to, because a table carried from one part to another is meant to carry
+the reasoning; the values go in a fourth column for whoever opens the file in a
+spreadsheet, and nothing reads them back. On import a name already in the
+document keeps its row and takes the new expression, so a revised table updates
+the part rather than filling it with duplicates.
 
 **Units.** A number can carry one, anywhere a number is taken: `2in`, `1.5 in`,
 `2"`, `1'`, `3cm`, `0.5m`, `10 thou`. They are multipliers into what the

@@ -10,7 +10,12 @@
 import * as THREE from '../src/renderer/three.js';
 import { initKernel } from '../src/renderer/kernel.js';
 import * as K from '../src/renderer/kernel.js';
-import { evaluate, resolveParameters } from '../src/renderer/expr.js';
+import {
+  evaluate,
+  resolveParameters,
+  parametersToCsv,
+  parametersFromCsv
+} from '../src/renderer/expr.js';
 import { solveSketch } from '../src/renderer/solver.js';
 import {
   findRegions,
@@ -308,6 +313,54 @@ async function run() {
     near(evaluate('2 ^ 3 ^ 2'), 512, 1e-12, 'right associative power');
     near(evaluate('-5 + 2'), -3, 1e-12, 'unary minus');
     near(evaluate('10 / 4'), 2.5, 1e-12);
+  });
+
+  test('parameters: a table written out and read back is the same table', () => {
+    const params = [
+      { name: 'wall', expr: '2.4' },
+      // A comma inside an expression is the reason the reader honours quotes.
+      // Split the line naively and this becomes two broken parameters.
+      { name: 'span', expr: 'max(wall * 3, 10)' },
+      { name: 'note', expr: 'span + wall', comment: 'clearance, both sides' }
+    ];
+    const csv = parametersToCsv(params);
+    assert(/^name,expression,comment,value\n/.test(csv), 'it writes a header');
+    assert(csv.includes('"max(wall * 3, 10)"'), 'and quotes what has a comma in it');
+
+    const { taken, skipped } = parametersFromCsv(csv);
+    assert(!skipped.length, `nothing should be skipped, got ${JSON.stringify(skipped)}`);
+    assert(taken.length === 3, `three back, got ${taken.length}`);
+    for (let i = 0; i < 3; i++) {
+      assert(taken[i].name === params[i].name, `name ${i}`);
+      assert(taken[i].expr === params[i].expr, `expression ${i}: got ${taken[i].expr}`);
+    }
+    assert(taken[2].comment === 'clearance, both sides', 'and the comment came back whole');
+
+    // And the whole point of keeping expressions rather than values: what comes
+    // back still works out to the same numbers.
+    const before = resolveParameters(params).scope;
+    const after = resolveParameters(taken).scope;
+    for (const k of Object.keys(before)) near(after[k], before[k], 1e-12, k);
+  });
+
+  test('parameters: a file that is not a parameter table says which lines it left', () => {
+    const { taken, skipped } = parametersFromCsv(
+      [
+        'name,expression',
+        'good,12',
+        '3bad,5', // a name cannot start with a digit
+        ',7', // no name at all
+        'empty,', // no expression
+        'also_good,good * 2'
+      ].join('\n')
+    );
+    assert(taken.length === 2, `two usable rows, got ${taken.length}`);
+    assert(skipped.length === 3, `three left, got ${JSON.stringify(skipped)}`);
+
+    // A file with no header must not lose its first row to one.
+    const noHeader = parametersFromCsv('wall,2\nspan,10');
+    assert(noHeader.taken.length === 2, `both rows kept, got ${noHeader.taken.length}`);
+    assert(noHeader.taken[0].name === 'wall', 'and the first one is still there');
   });
 
   test('expression: functions work in degrees', () => {
@@ -3023,6 +3076,77 @@ async function run() {
       mk([{ edges: [], all: true, radius: '4', chamferType: 'angle', angle: '45' }])
     ).bodies[0].solid.volume();
     near(at45, equal, equal * 0.001, 'forty five degrees is the symmetric case');
+  });
+
+  test('fillet: an asymmetric radius is the circle when both radii match', () => {
+    // The asymmetric arc is a different construction from the circular one: a
+    // rational quadratic rather than a swept arc. Giving it the same radius
+    // twice has to land back on the circle exactly, or every part that used a
+    // plain fillet would shift the day the type was touched.
+    const mk = (sets) => {
+      const doc = boxDoc(40, 40, 40);
+      doc.features.push({ id: uid('f'), type: 'fillet', bodies: 'all', edges: [], sets });
+      return rebuild(doc).bodies[0].solid.volume();
+    };
+
+    const circular = mk([{ edges: [], all: true, radius: '5', filletType: 'constant' }]);
+    const same = mk([
+      { edges: [], all: true, radius: '5', radius2: '5', filletType: 'asymmetric' }
+    ]);
+    near(same, circular, circular * 0.002, 'the same radius twice is the circle');
+
+    // And a bigger second radius runs the blend further out on that face, so
+    // more comes off. Between the two symmetric cases, because only one side
+    // of each blend grew.
+    const bigger = mk([
+      { edges: [], all: true, radius: '5', radius2: '9', filletType: 'asymmetric' }
+    ]);
+    const both = mk([{ edges: [], all: true, radius: '9', filletType: 'constant' }]);
+    assert(
+      bigger < circular && bigger > both,
+      `lopsided sits between the two even ones, got ${bigger.toFixed(0)} against ` +
+        `${circular.toFixed(0)} and ${both.toFixed(0)}`
+    );
+  });
+
+  test('fillet: a curvature continuous blend runs out flatter than a circular one', () => {
+    // G2 keeps the tangent points where G1 put them and changes only the curve
+    // between, which is pulled toward the corner. So it takes less material off
+    // than the circular arc of the same radius while covering the same width of
+    // face, and that is the difference the eye is being sold: no jump in
+    // curvature where the blend meets the flat.
+    const mk = (sets) => {
+      const doc = boxDoc(40, 40, 40);
+      doc.features.push({ id: uid('f'), type: 'fillet', bodies: 'all', edges: [], sets });
+      const res = rebuild(doc);
+      assert(res.errors.length === 0, `no errors, got ${JSON.stringify(res.errors)}`);
+      return res.bodies[0].solid;
+    };
+
+    const g1 = mk([{ edges: [], all: true, radius: '6', filletType: 'constant' }]);
+    const g2 = mk([
+      { edges: [], all: true, radius: '6', filletType: 'constant', continuity: 'G2', weight: '1' }
+    ]);
+    assert(
+      g2.volume() > g1.volume(),
+      `G2 keeps more of the corner, got ${g2.volume().toFixed(0)} against ${g1.volume().toFixed(0)}`
+    );
+    // Not so much more that it has stopped being a blend: the box is 64000.
+    assert(g2.volume() < 40 * 40 * 40, 'and it still takes material off');
+    assert(g2.genus() === 0, 'and leaves one solid lump with no holes in it');
+
+    // Tangency weight is the lever on that: pulled harder toward the corner,
+    // less comes off still.
+    const tight = mk([
+      { edges: [], all: true, radius: '6', filletType: 'constant', continuity: 'G2', weight: '1.2' }
+    ]);
+    const loose = mk([
+      { edges: [], all: true, radius: '6', filletType: 'constant', continuity: 'G2', weight: '0.5' }
+    ]);
+    assert(
+      tight.volume() > loose.volume(),
+      `more weight keeps more corner, got ${tight.volume().toFixed(0)} against ${loose.volume().toFixed(0)}`
+    );
   });
 
   test('fillet: several sets take their own radius in one feature', () => {

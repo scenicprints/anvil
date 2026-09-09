@@ -52,6 +52,29 @@ function cornerProfile(a, b, size, kind, segments, opts = {}) {
   const t = r / Math.tan(theta / 2);
   if (!Number.isFinite(t) || t <= 1e-9) return null;
 
+  // Asymmetric: a second radius measured on the other face, so the blend runs
+  // out further one way than the other. The two tangent points move apart and
+  // the arc between them stops being circular, which is the whole point.
+  const r2 = opts.size2 !== undefined && opts.size2 !== null ? opts.size2 : null;
+  const t2 = r2 !== null ? r2 / Math.tan(theta / 2) : t;
+  if (!Number.isFinite(t2) || t2 <= 1e-9) return null;
+
+  // Curvature continuous, which Fusion calls G2. A circular arc meets a flat
+  // face with a jump in curvature, from nothing to one over the radius, and on
+  // a shiny part that jump is a visible line. This runs the curvature to
+  // nothing at both ends instead, so there is no line to see.
+  if (opts.continuity === 'G2') {
+    return curvatureProfile(a, b, t, t2, segments, opts.weight);
+  }
+
+  // Different tangent distances means an elliptical arc rather than a circular
+  // one, and both are the same rational quadratic: the two tangent points, the
+  // corner as the control point, and a weight of sin(theta / 2), which is the
+  // value that reproduces the circle exactly when the distances match.
+  if (Math.abs(t2 - t) > 1e-9) {
+    return conicProfile(a, b, t, t2, theta, segments);
+  }
+
   const A = [a[0] * t, a[1] * t];
   const B = [b[0] * t, b[1] * t];
   const bis = norm2([a[0] + b[0], a[1] + b[1]]);
@@ -79,6 +102,81 @@ function cornerProfile(a, b, size, kind, segments, opts = {}) {
 function norm2(v) {
   const l = Math.hypot(v[0], v[1]) || 1;
   return [v[0] / l, v[1] / l];
+}
+
+/**
+ * The arc of an asymmetric fillet: tangent to both faces, at a different
+ * distance along each.
+ *
+ * A rational quadratic Bezier through the two tangent points with the corner
+ * itself as the control point. The corner is the origin here, which is what
+ * makes the numerator collapse to two terms. At a weight of sin(theta / 2) and
+ * equal distances this is the circular arc exactly, so switching a set to
+ * asymmetric and then giving it the same radius twice changes nothing about
+ * the part.
+ */
+function conicProfile(a, b, tA, tB, theta, segments) {
+  const A = [a[0] * tA, a[1] * tA];
+  const B = [b[0] * tB, b[1] * tB];
+  const w = Math.sin(theta / 2);
+  const steps = segments || arcSegments(Math.max(tA, tB), Math.PI - theta);
+  const pts = [[0, 0], A];
+  for (let i = 1; i < steps; i++) {
+    const s = i / steps;
+    const u = 1 - s;
+    const den = u * u + 2 * s * u * w + s * s;
+    pts.push([(u * u * A[0] + s * s * B[0]) / den, (u * u * A[1] + s * s * B[1]) / den]);
+  }
+  pts.push(B);
+  return pts;
+}
+
+/**
+ * The curve of a curvature continuous fillet.
+ *
+ * A quintic Bezier whose first three control points lie on the line from the
+ * near tangent point to the corner, and whose last three lie on the line from
+ * the corner to the far one. Three collinear control points at an end is
+ * exactly the condition for zero curvature there, and the faces it lands on
+ * are flat, so both sides read zero and there is no step.
+ *
+ * The tangent points are where the circular fillet of the same radius would
+ * have put them, so switching a set from G1 to G2 keeps the runout and changes
+ * only the shape between. Tangency weight is how hard the curve is pulled
+ * toward the corner: at 1 it sits close to the circular arc, below that it
+ * flattens and spreads, above it tightens.
+ */
+function curvatureProfile(a, b, tA, tB, segments, weight) {
+  const w = Number.isFinite(weight) && weight > 0 ? Math.min(weight, 1.2) : 1;
+  const A = [a[0] * tA, a[1] * tA];
+  const B = [b[0] * tB, b[1] * tB];
+  // Fractions of the way from each tangent point to the corner. Two of them,
+  // so the first three points are collinear and so are the last three.
+  const near = 0.4 * w;
+  const far = 0.8 * w;
+  const along = (P, f) => [P[0] * (1 - f), P[1] * (1 - f)];
+  const ctrl = [A, along(A, near), along(A, far), along(B, far), along(B, near), B];
+
+  const steps = segments || Math.max(8, arcSegments(Math.max(tA, tB), Math.PI / 2));
+  const pts = [[0, 0]];
+  for (let i = 0; i <= steps; i++) {
+    const s = i / steps;
+    // de Casteljau, which is short enough at degree five to write out plainly
+    // and is stable where the binomial form is not.
+    let cur = ctrl;
+    while (cur.length > 1) {
+      const next = [];
+      for (let j = 0; j < cur.length - 1; j++) {
+        next.push([
+          cur[j][0] + (cur[j + 1][0] - cur[j][0]) * s,
+          cur[j][1] + (cur[j + 1][1] - cur[j][1]) * s
+        ]);
+      }
+      cur = next;
+    }
+    pts.push(cur[0]);
+  }
+  return pts;
 }
 
 /* ------------------------------------------------------------------ */
@@ -318,7 +416,14 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
   }
 
   const blends = [];
-  if (kind === 'fillet' && !varying) {
+  // The ball is a rolling ball: one radius, tangent to all three faces. An
+  // asymmetric blend is not a ball at all, and a curvature continuous one has
+  // no single radius to give it, so dropping one at those corners would stand
+  // proud of the sweeps it is meant to join. Those corners are left as the
+  // sweeps make them.
+  const rollingBall =
+    kind === 'fillet' && !varying && opts.continuity !== 'G2' && opts.size2 == null;
+  if (rollingBall) {
     for (const [v, faceIds] of vertexFaces) {
       const planes = [...faceIds]
         .map((id) => topo.faces[id])

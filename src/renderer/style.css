@@ -870,6 +870,20 @@ table.params .v {
   font-size: 11px;
   white-space: nowrap;
 }
+/* The star is a mark, not a control to be drawn as one: no border, no ground,
+   and no width beyond the glyph, or every row grows a button. */
+table.params .starbtn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+table.params .starbtn:hover {
+  color: var(--ink-2);
+}
 
 /* ---------------- timeline ---------------- */
 

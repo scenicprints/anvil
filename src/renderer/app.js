@@ -58,7 +58,13 @@ import {
   limitByContact
 } from './assembly.js';
 import { CONSTRUCTION_LABELS } from './construction.js';
-import { resolveParameters, evaluate, safeEval } from './expr.js';
+import {
+  resolveParameters,
+  evaluate,
+  safeEval,
+  parametersToCsv,
+  parametersFromCsv
+} from './expr.js';
 import { entityRuns, interiorPoint, pointInPolygon, tessellate, chainPath } from './profile.js';
 import { buildTopology, basisFor } from './topology.js';
 import {
@@ -3599,15 +3605,43 @@ function blendFields(kind) {
             options: [
               ['constant', 'Constant radius'],
               ['variable', 'Variable radius'],
+              ['asymmetric', 'Asymmetric'],
               ['chord', 'Chord length'],
               ['hold', 'Hold line']
             ]
           });
           out.push({
             key: `sets.${i}.radius`,
-            label: `Set ${n} radius`,
+            label: (f) =>
+              typeOf(f) === 'asymmetric' ? `Set ${n} radius on face 1` : `Set ${n} radius`,
             type: 'expr',
-            showIf: (f) => typeOf(f) === 'constant' || typeOf(f) === 'variable'
+            showIf: (f) =>
+              ['constant', 'variable', 'asymmetric'].includes(typeOf(f))
+          });
+          out.push({
+            key: `sets.${i}.radius2`,
+            label: `Set ${n} radius on face 2`,
+            type: 'expr',
+            showIf: (f) => typeOf(f) === 'asymmetric'
+          });
+          out.push({
+            // A circular arc meets a flat face with a jump in curvature, and on
+            // a shiny part that jump is a visible line. G2 runs the curvature
+            // out to nothing at both ends instead.
+            key: `sets.${i}.continuity`,
+            label: `Set ${n} continuity`,
+            type: 'select',
+            options: [
+              ['G1', 'Tangent (G1)'],
+              ['G2', 'Curvature (G2)']
+            ],
+            showIf: (f) => typeOf(f) !== 'hold'
+          });
+          out.push({
+            key: `sets.${i}.weight`,
+            label: `Set ${n} tangency weight`,
+            type: 'expr',
+            showIf: (f) => f.sets[i]?.continuity === 'G2' && typeOf(f) !== 'hold'
           });
           out.push({
             key: `sets.${i}.endRadius`,
@@ -3674,8 +3708,11 @@ function blendFields(kind) {
           f.sets.push({
             edges: [],
             radius: kind === 'fillet' ? '2' : '1',
+            radius2: kind === 'fillet' ? '2' : '1',
             endRadius: null,
             filletType: 'constant',
+            continuity: 'G1',
+            weight: '1',
             chord: '2',
             holdEdges: [],
             chamferType: 'equal',
@@ -4506,6 +4543,19 @@ function shellFields() {
       },
       clear: (f) => {
         f.openFaces = [];
+      }
+    },
+    {
+      // The mouth of a shelled part is usually one surface that the topology
+      // happens to hold as several, a rounded rim being the ordinary case.
+      // Curved faces are kept here, unlike Draft: opening one is fine, it is
+      // only leaning one that has nothing to lean about.
+      key: 'tangentChain',
+      label: 'Follow tangent faces',
+      type: 'bool',
+      get: (f) => f.tangentChain !== false,
+      set: (f, v) => {
+        f.tangentChain = !!v;
       }
     },
     {
@@ -11237,7 +11287,10 @@ function startEdgeBlend(kind) {
       {
         edges,
         radius: kind === 'fillet' ? '2' : '1',
+        radius2: kind === 'fillet' ? '2' : '1',
         endRadius: null,
+        continuity: 'G1',
+        weight: '1',
         chamferType: 'equal',
         distance2: '1',
         angle: '45'
@@ -12480,6 +12533,19 @@ function renderFields() {
         refresh();
         scheduleRebuild();
       });
+      // Typing `Width = 50` names the parameter here rather than in the
+      // parameters dialog, which is Fusion's best small idea and the one thing
+      // in that list worth stealing outright. On commit, not on every
+      // keystroke, or typing the name would leave W, Wi and Wid behind it.
+      input.addEventListener('change', () => {
+        const made = parameterFromField(input.value);
+        if (!made) return;
+        input.value = made;
+        if (f.set) f.set(feature, made);
+        else setPath(feature, f.key, made);
+        refresh();
+        rebuildAll();
+      });
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') commitEdit();
       });
@@ -12758,17 +12824,22 @@ function pickIntoEdit(hit) {
     }
     f[key] = f[key] || [];
 
-    // Tangent Chain, which Draft has in Fusion and Shell does not. A moulded
-    // wall is one wall by eye and several faces in the topology once its
-    // corners have been rounded, and picking them one at a time is the work
-    // this saves. The run is cut back to the flats for the same reason a
-    // curved face is refused above: what is in the list is what will lean.
+    // Tangent Chain, which both of these have in Fusion. A wall is one wall by
+    // eye and several faces in the topology once its corners have been
+    // rounded, and picking them one at a time is the work this saves.
+    //
+    // For a draft the run is cut back to the flats, for the same reason a
+    // curved face is refused above: what is in the list is what will lean. A
+    // shell keeps the curves, because opening a rounded face is a perfectly
+    // ordinary thing to want.
     const chained =
-      key === 'faces' && f.tangentChain !== false
-        ? SEL.tangentRun(record.topology, [hit.faceId]).filter(
-            (i) => record.topology.faces[i]?.planar
-          )
-        : [hit.faceId];
+      f.tangentChain === false
+        ? [hit.faceId]
+        : key === 'faces'
+          ? SEL.tangentRun(record.topology, [hit.faceId]).filter(
+              (i) => record.topology.faces[i]?.planar
+            )
+          : SEL.tangentRun(record.topology, [hit.faceId]);
     const refs = chained
       .map((i) => record.topology.faces[i])
       .filter(Boolean)
@@ -18417,11 +18488,30 @@ function renderParameters() {
   const table = document.createElement('table');
   table.className = 'params';
   table.innerHTML =
-    '<thead><tr><th>Name</th><th>Expression</th><th>Value</th><th></th></tr></thead>';
+    '<thead><tr><th></th><th>Name</th><th>Expression</th><th>Value</th><th></th></tr></thead>';
   const tbody = document.createElement('tbody');
 
-  state.doc.parameters.forEach((p, i) => {
+  // Favourites first, and in the order they were made within each group. The
+  // list is walked, not sorted in place: reordering the document's own array
+  // would renumber every row and change what a delete button points at.
+  const order = state.doc.parameters
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => (b.p.favourite ? 1 : 0) - (a.p.favourite ? 1 : 0) || a.i - b.i);
+
+  order.forEach(({ p, i }) => {
     const tr = document.createElement('tr');
+
+    const tdStar = document.createElement('td');
+    const star = document.createElement('button');
+    star.textContent = p.favourite ? '★' : '☆';
+    star.title = p.favourite ? 'A favourite. Click to drop it.' : 'Make it a favourite';
+    star.className = 'starbtn';
+    star.addEventListener('click', () => {
+      p.favourite = !p.favourite;
+      state.dirty = true;
+      renderParameters();
+    });
+    tdStar.appendChild(star);
 
     const tdName = document.createElement('td');
     const nameInput = document.createElement('input');
@@ -18479,16 +18569,19 @@ function renderParameters() {
     });
     tdDel.appendChild(del);
 
-    tr.append(tdName, tdExpr, tdVal, tdDel);
+    tr.append(tdStar, tdName, tdExpr, tdVal, tdDel);
     tbody.appendChild(tr);
   });
 
   table.appendChild(tbody);
   body.appendChild(table);
 
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.style.marginTop = '10px';
+
   const add = document.createElement('button');
   add.textContent = '+ Add parameter';
-  add.style.marginTop = '10px';
   add.addEventListener('click', () => {
     pushUndo('add parameter');
     let n = state.doc.parameters.length + 1;
@@ -18499,7 +18592,134 @@ function renderParameters() {
     renderParameters();
     rebuildAll();
   });
-  body.appendChild(add);
+  row.appendChild(add);
+
+  const out = document.createElement('button');
+  out.textContent = 'Export';
+  out.title = 'Write the table out as a CSV';
+  out.addEventListener('click', () => exportParameters());
+  row.appendChild(out);
+
+  const inn = document.createElement('button');
+  inn.textContent = 'Import';
+  inn.title = 'Read a CSV back in. A name already here keeps its place and takes the new expression.';
+  inn.addEventListener('click', () => importParameters());
+  row.appendChild(inn);
+
+  body.appendChild(row);
+}
+
+/**
+ * Take `Width = 50` typed into a dimension field and make the parameter.
+ *
+ * Returns the name to leave in the field, so the field ends up referring to the
+ * parameter rather than holding a copy of the number, or null when what was
+ * typed was an ordinary expression and nothing should happen.
+ *
+ * A name already in use is not quietly overwritten. Someone typing `wall = 3`
+ * into a second field usually means "use the wall parameter here", and taking
+ * that as an instruction to redefine wall would move every other feature that
+ * reads it.
+ */
+function parameterFromField(text) {
+  const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$/.exec(String(text || ''));
+  if (!m) return null;
+  const [, name, expr] = m;
+
+  const existing = state.doc.parameters.find((p) => p.name === name);
+  if (existing) {
+    setStatus(`${name} already exists, so the field now reads it. Change it in Parameters.`);
+    return name;
+  }
+
+  // It has to evaluate, or the field is left as typed and the person can see
+  // what they wrote. Silently making a broken parameter would put the error on
+  // a row they are not looking at.
+  const scope = resolveParameters(state.doc.parameters).scope;
+  try {
+    evaluate(expr, scope);
+  } catch (err) {
+    setStatus(`Could not make ${name}: ${err.message}`);
+    return null;
+  }
+
+  pushUndo('add parameter');
+  // Named where it is used, so it is a favourite by the act of being made,
+  // which is what Fusion does with these too.
+  state.doc.parameters.push({ name, expr, favourite: true });
+  state.dirty = true;
+  setStatus(`${name} = ${expr}. It is in Parameters now, marked a favourite.`);
+  return name;
+}
+
+/* ------------------------------------------------------------------ */
+/* Parameters in and out                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Write the parameters out.
+ *
+ * The expression is what is kept, not the number it works out to: a table
+ * exported from one part and read into another is meant to carry the reasoning,
+ * and a column of numbers would carry only the answers. The value is written
+ * too, as a fourth column nothing reads back, because a person opening the file
+ * in a spreadsheet wants to see it.
+ */
+async function exportParameters() {
+  const res = await window.anvil.exportText(
+    'parameters.csv',
+    'csv',
+    'Comma separated values',
+    parametersToCsv(state.doc.parameters)
+  );
+  if (res?.canceled) return;
+  setStatus(
+    res?.ok
+      ? `${state.doc.parameters.length} parameter${state.doc.parameters.length === 1 ? '' : 's'} written to ${res.path}.`
+      : `Could not write the parameters: ${res?.error || 'unknown'}`
+  );
+}
+
+/**
+ * Read a parameter list back in.
+ *
+ * A name already in the document keeps its row and takes the new expression,
+ * so importing a revised table updates the part rather than filling it with
+ * duplicates that shadow each other. Names not here yet are appended.
+ */
+async function importParameters() {
+  const res = await window.anvil.importText('csv', 'Comma separated values');
+  if (!res?.ok) {
+    if (res && !res.canceled) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+
+  const { taken, skipped } = parametersFromCsv(res.text);
+  let updated = 0;
+  let added = 0;
+
+  pushUndo('import parameters');
+  for (const row of taken) {
+    const existing = state.doc.parameters.find((p) => p.name === row.name);
+    if (existing) {
+      existing.expr = row.expr;
+      if (row.comment) existing.comment = row.comment;
+      updated++;
+    } else {
+      state.doc.parameters.push(row);
+      added++;
+    }
+  }
+
+  state.dirty = true;
+  renderParameters();
+  rebuildAll();
+
+  const bits = [];
+  if (added) bits.push(`${added} added`);
+  if (updated) bits.push(`${updated} updated`);
+  if (skipped.length) bits.push(`${skipped.length} skipped`);
+  setStatus(bits.length ? `Parameters: ${bits.join(', ')}.` : 'Nothing in that file to import.');
 }
 
 /**
@@ -18823,6 +19043,9 @@ window.anvilDev = {
   // camera is. These are here so a probe can measure it rather than infer it.
   axisDragAmount,
   pullTarget,
+  // The parameter file readers, so a probe can put a table out and read it back
+  // without going through a save dialog it cannot answer.
+  expr: { parametersToCsv, parametersFromCsv },
   ready: () => !!state.result,
   isDirty: () => !!state.dirty,
   /** Save, and say whether it happened. Used by the close prompt. */

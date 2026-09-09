@@ -298,6 +298,11 @@ export function normalizeBlend(f) {
     if (!set.filletType) set.filletType = set.endRadius ? 'variable' : 'constant';
     if (set.chord === undefined) set.chord = set.radius;
     if (!set.holdEdges) set.holdEdges = [];
+    // A blend made in this session always writes both, so an absent one is an
+    // old document, and an old document was circular and G1.
+    if (set.radius2 === undefined) set.radius2 = set.radius;
+    if (!set.continuity) set.continuity = 'G1';
+    if (set.weight === undefined) set.weight = '1';
   }
   return f;
 }
@@ -3954,10 +3959,19 @@ export function rebuild(doc, options = {}) {
 
         const endSize =
           type === 'variable' && set.endRadius ? safeEval(set.endRadius, scope, size) : undefined;
+        // Curvature continuity, which Fusion calls G2, and how hard the curve
+        // is pulled toward the corner. Both belong to a fillet; a chamfer is
+        // flat by definition and has neither.
+        const continuity = kind === 'fillet' && set.continuity === 'G2' ? 'G2' : 'G1';
         const tools = buildEdgeTools(topo, edges, size, kind, ks, {
           endSize,
           sizeFor,
-          size2: chamferSecondDistance(kind, set, size, scope)
+          continuity,
+          weight: continuity === 'G2' ? safeEval(set.weight, scope, 1) : undefined,
+          size2:
+            kind === 'chamfer'
+              ? chamferSecondDistance(kind, set, size, scope)
+              : filletSecondRadius(kind, set, size, scope)
         });
         if (!tools.applied) continue;
 
@@ -4080,6 +4094,17 @@ export function rebuild(doc, options = {}) {
       return Number.isFinite(t) && t > 1e-6 ? size * t : size;
     }
     return undefined;
+  }
+
+  /**
+   * The radius a fillet uses on the second face, when the set asks for a
+   * different one. Undefined everywhere else, which is what keeps a plain
+   * fillet on the circular arc it has always drawn.
+   */
+  function filletSecondRadius(kind, set, size, scope) {
+    if (kind !== 'fillet' || set.filletType !== 'asymmetric') return undefined;
+    const r = Math.abs(safeEval(set.radius2, scope, size));
+    return r > 1e-9 ? r : undefined;
   }
 
   /**

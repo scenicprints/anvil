@@ -358,3 +358,98 @@ export function safeEval(source, scope, fallback = 0) {
 
 export const FUNCTION_NAMES = Object.keys(FUNCS);
 export const UNIT_NAMES = Object.keys(UNITS);
+
+/* ------------------------------------------------------------------ */
+/* Parameters as a file                                                */
+/* ------------------------------------------------------------------ */
+
+/** One CSV field, quoted only when it has to be. */
+function csvCell(text) {
+  const s = String(text ?? '');
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * Split one CSV line, honouring quotes.
+ *
+ * An expression can hold a comma, `max(a, b)` being the obvious one, so a line
+ * cannot simply be split on the character.
+ */
+function csvSplit(line) {
+  const out = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quoted) {
+      if (c === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (c === '"') quoted = false;
+      else cur += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += c;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+/**
+ * The parameter table as CSV.
+ *
+ * The expression is what is kept, not the number it works out to: a table
+ * carried from one part to another is meant to carry the reasoning, and a
+ * column of numbers would carry only the answers. The value goes in a fourth
+ * column that nothing reads back, because a person opening the file in a
+ * spreadsheet wants to see it.
+ */
+export function parametersToCsv(params) {
+  const { scope, errors } = resolveParameters(params);
+  const lines = ['name,expression,comment,value'];
+  for (const p of params) {
+    lines.push(
+      [
+        csvCell(p.name),
+        csvCell(p.expr),
+        csvCell(p.comment || ''),
+        csvCell(errors[p.name] ? '' : scope[p.name])
+      ].join(',')
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Read a parameter list out of CSV text.
+ *
+ * Returns the rows worth keeping and the ones that were not, so the caller can
+ * say which lines were left rather than importing something that evaluates to
+ * nothing. A name that is not a name, or a row with no expression, is not a
+ * parameter.
+ */
+export function parametersFromCsv(text) {
+  const rows = String(text ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map(csvSplit);
+  // A header row is optional, and is recognised rather than counted: a file
+  // whose first line is a real parameter must not lose it.
+  if (rows.length && /^name$/i.test(rows[0][0] || '')) rows.shift();
+
+  const taken = [];
+  const skipped = [];
+  for (const cells of rows) {
+    const name = String(cells[0] || '').replace(/[^A-Za-z0-9_]/g, '');
+    const expr = String(cells[1] ?? '').trim();
+    if (!name || /^[0-9]/.test(name) || !expr) {
+      skipped.push(cells[0] || '(blank)');
+      continue;
+    }
+    taken.push({ name, expr, comment: cells[2] || undefined });
+  }
+  return { taken, skipped };
+}
