@@ -1845,6 +1845,55 @@ since undo hands back a document parsed afresh.
 
 ---
 
+## Wood grain, and wrapping an image round a whole part
+
+Two things built on one idea: what a point on a surface looks like is worked out
+from **where it is in the world**, not from coordinates painted onto the surface.
+
+A part here has no texture coordinates and should not need any. A solid modelled
+from features has no natural way to be unwrapped, and every attempt to give it one
+puts a seam somewhere and stretches the pattern where the surface curves.
+
+**Wood does not want to be wrapped anyway.** A wooden part is cut out of a block
+that already had rings in it, so the grain belongs to the space the part occupies
+and not to its surface: cut a groove across an oak plank and the rings show in the
+walls of the groove, in the right places, because they were already there. That
+falls straight out of a pattern that is a function of position.
+
+Two decisions in `woodgrain.js` settle whether it looks like a board or like
+plywood, and both were wrong first time. The grain runs along the longest side,
+because nobody saws a plank across the tree. And the pith sits *under the wide
+face*: that face then slices the rings at a shallow angle and they open into the
+long arches everybody recognises. Put the pith off to the side instead and the
+face cuts the rings square, which is quarter-sawn timber and reads as a contour
+map. The ring spacing is in millimetres rather than a fraction of the part, so a
+small part shows a few rings and a big one many, as they would if both came from
+one tree; scaling to the part is what makes a render look like wallpaper.
+
+**Wrapping an image is the same idea, and Fusion does not have it.** A decal there
+is a planar projection: you point it at a face, it lands on that face and stops
+where the face stops. That is right for a logo in one place and Anvil has it too.
+A *finish* is not that. A knurl, a carbon weave, a hex pattern: those belong to
+the whole part, have to carry round every corner, and there is no face to point
+at. So `wrap.js` projects the image three times, once down each axis, and blends
+the three by which way each surface faces. A face square to an axis takes that
+projection outright; a rounded corner takes a mixture, which is what carries the
+pattern round it with no join. Three texture reads, no geometry required, and it
+works exactly as well on an imported mesh as on a modelled solid.
+
+What it cannot do is hold artwork that must appear once and must not distort:
+wrapping a photograph round a sphere this way shows it three times. That is what
+the decal is for, and the dialog says so.
+
+**Four faults, one symptom.** Building the wrap, every wrong intermediate looked
+identical from the outside: the part came out one flat colour. A texture that had
+loaded but never uploaded because nothing redrew; a helper injected at `<common>`
+that referenced `map` before three declares it, so the shader would not compile;
+a material swapped for the render that left the wrap behind on the old one; and,
+in the end, a test image whose gradients ran from a point to itself and painted
+nothing at all. `demo-wrap.js` measures the spread of brightness across the part
+rather than looking at it, because looking at it is what took so long.
+
 ## Making a photograph of a part
 
 Four things, and the order they matter in is not the order they look like they

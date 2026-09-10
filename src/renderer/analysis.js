@@ -65,10 +65,11 @@ export const RENDER_FINISH = {
   tpu: { metalness: 0, roughness: 0.85 },
   // Polycarbonate is the glassy one: hard, clear, and it holds a reflection.
   pc: { metalness: 0, roughness: 0.15, clearcoat: 0.9, clearcoatRoughness: 0.08 },
-  // Wood is matt and has no coat, and this is as far as roughness alone gets
-  // it: without a grain it reads as a pale matt solid rather than as oak. The
-  // colour and the grain are a texture, which is not a thing bodies carry yet.
-  oak: { metalness: 0, roughness: 0.78 },
+  // Wood is matt and has no coat. Roughness alone got it as far as a pale matt
+  // solid; the grain is what makes it oak, and it is named here rather than
+  // switched on somewhere else so that everything a material is stays in one
+  // place.
+  oak: { metalness: 0, roughness: 0.78, grain: { wood: 'oak' } },
   // Resin comes off the printer glossy, which is most of why it photographs
   // better than filament does.
   resin: { metalness: 0, roughness: 0.18, clearcoat: 0.8, clearcoatRoughness: 0.1 }

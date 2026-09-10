@@ -8,6 +8,7 @@
  */
 
 import * as THREE from './three.js';
+import { applyWrap, wrapTexture } from './wrap.js';
 import { buildGeometry, buildEdges } from './meshutil.js';
 
 // Surfaces are drawn in a warmer tone than solids, so which is which reads at
@@ -1465,6 +1466,46 @@ export class Viewport {
         entry.mesh.geometry = geom;
         entry.lines.geometry = edgeGeom;
       }
+      /*
+       * A wrapped image, if this body has one.
+       *
+       * Applied in the working view and not only in a render, which is a
+       * departure from the rule that the working view stays matt. The rule is
+       * about finish: a reflection is something to see past while you are
+       * modelling. A wrap is not a finish, it is where the pattern *is*, and a
+       * pattern you cannot see is one you cannot place.
+       */
+      const wrapKey = rec.wrap ? JSON.stringify(rec.wrap) : '';
+      if (wrapKey !== (entry.wrapKey || '')) {
+        entry.unwrap?.();
+        entry.unwrap = null;
+        entry.wrapTex?.dispose();
+        entry.wrapTex = null;
+        if (rec.wrap?.url) {
+          /*
+           * A set of texture coordinates that are never read.
+           *
+           * The image goes in three's own map slot, which is the only way a
+           * texture reliably gets bound, and that slot insists the geometry has
+           * coordinates. A solid has none and needs none: the wrap works out
+           * its own from where each point is in the world. So the geometry gets
+           * an array of zeroes to satisfy the requirement, and the shader
+           * ignores it. Without them the part does not draw at all, which is a
+           * confusing way to find this out.
+           */
+          const geom = entry.mesh.geometry;
+          if (!geom.getAttribute('uv')) {
+            const n = geom.getAttribute('position').count;
+            geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2));
+          }
+          entry.wrapTex = wrapTexture(rec.wrap.url, rec.wrap, () => this.invalidate());
+          entry.unwrap = applyWrap(entry.mat, rec.wrap, entry.wrapTex);
+        } else {
+          entry.mat.needsUpdate = true;
+        }
+        entry.wrapKey = wrapKey;
+      }
+
       // A polished finish, for reading reflections off a surface. It is a
       // material swap and nothing else: the geometry is untouched, and the
       // moment the analysis goes away so does the chrome.

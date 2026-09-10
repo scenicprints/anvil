@@ -27,6 +27,8 @@ import {
   meshReaderFor
 } from './meshutil.js';
 import { readASM } from './asmread.js';
+import { applyWoodGrain } from './woodgrain.js';
+import { WRAP_MODES, applyWrap } from './wrap.js';
 import {
   newDocument,
   newSketch,
@@ -352,6 +354,9 @@ function rebuildAll() {
         // document alone. Clear Analysis puts it back.
         appearance:
           state.colourBy?.of.get(b.id) ?? (state.doc.appearance?.byBody?.[b.id] || null),
+        // An image wrapped over the whole body, carried with the image itself
+        // so the viewport has everything it needs to draw it.
+        wrap: wrapFor(b.id),
         visible: !state.hiddenBodies.has(b.id)
       });
     } catch (err) {
@@ -1967,6 +1972,9 @@ async function runCommand(cmd) {
       break;
     case 'insertCanvas':
       cmdInsertCanvas();
+      break;
+    case 'wrapImage':
+      cmdWrapImage();
       break;
     case 'insertDecal':
       cmdInsertDecal();
@@ -7179,7 +7187,8 @@ const RIBBON_MENUS = {
     ['editInPlace', 'Edit the document a derive came from'],
     ['breakLink', 'Break the link, keep the geometry'],
     ['insertCanvas', 'Canvas, an image to trace'],
-    ['insertDecal', 'Decal, an image on a face']
+    ['insertDecal', 'Decal, an image on a face'],
+    ['wrapImage', 'Wrap an image over a whole body']
   ],
   selectMore: [
     ['selectGrow', 'Grow'],
@@ -9996,9 +10005,14 @@ function applyRenderFinish() {
      * is worth having in a photograph and is noise in a working view.
      */
     const wantsCoat = (want.clearcoat ?? 0) > 0;
+    // A grain is worked out in the shader from where a point is in the world,
+    // which needs a material of its own the same way a clear coat does: the
+    // patch is on the compiled program, and the working view shares its
+    // material with everything else that is the same colour.
+    const wantsGrain = !!want.grain;
     const original = entry.mat;
     let mat = original;
-    if (wantsCoat && !original.isMeshPhysicalMaterial) {
+    if ((wantsCoat || wantsGrain) && !original.isMeshPhysicalMaterial) {
       mat = new THREE.MeshPhysicalMaterial({
         color: original.color.clone(),
         side: original.side,
@@ -10028,6 +10042,34 @@ function applyRenderFinish() {
     }
     mat.envMapIntensity = 1;
     mat.needsUpdate = true;
+
+    /*
+     * A wrapped image has to come across with the swap.
+     *
+     * The render gives a coated finish a material of its own, and a fresh
+     * material knows nothing of the wrap that was patched onto the old one. The
+     * part then renders plain while the working view shows it wrapped, which is
+     * the most confusing possible way for this to fail: both are right and they
+     * disagree.
+     */
+    if (mat !== original && entry.wrapTex && record.wrap) {
+      const geom = entry.mesh.geometry;
+      if (!geom.getAttribute('uv')) {
+        const n = geom.getAttribute('position').count;
+        geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2));
+      }
+      applyWrap(mat, record.wrap, entry.wrapTex);
+    }
+
+    if (wantsGrain) {
+      // The grain is cut from the block the part occupies, so it needs to know
+      // how big the part is and which way round it lies.
+      const box = new THREE.Box3().setFromObject(entry.mesh);
+      applyWoodGrain(mat, want.grain, {
+        min: [box.min.x, box.min.y, box.min.z],
+        max: [box.max.x, box.max.y, box.max.z]
+      });
+    }
   }
   return () => {
     for (const w of was) {
@@ -10590,6 +10632,161 @@ function restoreVersion(id) {
  * because a fillet was added is worse than one sitting where it was left, and
  * the tree says which of the two has happened.
  */
+/** The wrap on a body, with its image, or nothing. */
+function wrapFor(bodyId) {
+  const spec = state.doc.wraps?.byBody?.[bodyId];
+  if (!spec?.image) return null;
+  const held = state.doc.imageData?.[spec.image];
+  return held?.url ? { ...spec, url: held.url } : null;
+}
+
+/**
+ * Wrap an image over a whole body.
+ *
+ * Fusion has decals, which are planar: you point one at a face and it lands on
+ * that face and stops where the face stops. That is the right tool for a logo
+ * in one place, and Anvil has it too.
+ *
+ * A finish is not that. A knurl, a carbon weave, a hex pattern, brushed grain:
+ * those belong to the whole part and have to carry round every corner, and
+ * there is no face to point at. This is that, and doing it needs no unwrapping
+ * of the model, which is what makes it work on an imported mesh as well as on a
+ * modelled solid.
+ */
+async function cmdWrapImage() {
+  if (state.sketcher.active) finishSketch();
+  const bodies = state.result?.bodies || [];
+  if (!bodies.length) {
+    setStatus('Nothing to wrap yet.');
+    return;
+  }
+  const chosen = bodies.filter((b) => state.selection.bodies.has(b.id));
+  const onto = chosen.length ? chosen : bodies;
+
+  const res = await window.anvil.importBinary('image');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+  let bitmap;
+  try {
+    bitmap = await imageOf(res.bytes);
+  } catch (err) {
+    setStatus(`Could not read that image: ${err.message}`);
+    return;
+  }
+
+  pushUndo('wrap image');
+  const key = uid('img');
+  state.doc.imageData = state.doc.imageData || {};
+  state.doc.imageData[key] = { url: bitmap.url, width: bitmap.width, height: bitmap.height };
+  state.doc.wraps = state.doc.wraps || { byBody: {} };
+  state.doc.wraps.byBody = state.doc.wraps.byBody || {};
+
+  const spec = {
+    image: key,
+    size: '40',
+    angle: '0',
+    x: '0',
+    y: '0',
+    strength: 1,
+    sharpness: '4',
+    mode: 'tint',
+    tile: true
+  };
+  for (const b of onto) state.doc.wraps.byBody[b.id] = { ...spec };
+  state.dirty = true;
+  rebuildAll();
+
+  showInspector('Wrap Image', wrapFields(onto.map((b) => b.id), key), () => {});
+  setStatus(
+    `${res.path.split(/[\\/]/).pop()} wrapped over ${onto.length} bod${onto.length === 1 ? 'y' : 'ies'}.`
+  );
+}
+
+/** The Wrap dialog. Every change is live, because placing it is the whole job. */
+function wrapFields(ids, key) {
+  const firstSpec = () => state.doc.wraps?.byBody?.[ids[0]] || {};
+  const put = (field) => (_f, v) => {
+    for (const id of ids) {
+      const spec = state.doc.wraps?.byBody?.[id];
+      if (spec) spec[field] = v;
+    }
+    state.dirty = true;
+    rebuildAll();
+  };
+  const take = (field) => () => firstSpec()[field];
+
+  return [
+    {
+      key: 'size',
+      label: `How wide one tile is (${unitLabel()})`,
+      type: 'expr',
+      get: take('size'),
+      set: put('size')
+    },
+    {
+      key: 'angle',
+      label: 'Turned by (deg)',
+      type: 'expr',
+      get: take('angle'),
+      set: put('angle')
+    },
+    {
+      key: 'x',
+      label: `Shifted across (${unitLabel()})`,
+      type: 'expr',
+      get: take('x'),
+      set: put('x')
+    },
+    {
+      key: 'y',
+      label: `Shifted along (${unitLabel()})`,
+      type: 'expr',
+      get: take('y'),
+      set: put('y')
+    },
+    {
+      key: 'mode',
+      label: 'Laid on by',
+      type: 'select',
+      options: WRAP_MODES,
+      get: take('mode'),
+      set: put('mode')
+    },
+    {
+      // How quickly one projection gives way to the next round a corner. It is
+      // the one setting here with no equivalent anywhere else, so it gets a
+      // plain name rather than the word blend.
+      key: 'sharpness',
+      label: 'How crisply it turns a corner',
+      type: 'expr',
+      get: take('sharpness'),
+      set: put('sharpness')
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The image is projected down all three axes and blended by which way each surface faces, so it carries round every corner with no seam and needs no unwrapping. That also means it repeats: it is for a pattern that belongs to the whole part. For artwork that must appear once, in one place, use a decal.'
+    },
+    {
+      key: '__remove',
+      label: 'Take it off',
+      type: 'action',
+      run: () => {
+        pushUndo('remove wrap');
+        for (const id of ids) delete state.doc.wraps?.byBody?.[id];
+        if (state.doc.imageData) delete state.doc.imageData[key];
+        state.dirty = true;
+        rebuildAll();
+        hideInspector();
+        setStatus('Wrap taken off.');
+      }
+    }
+  ];
+}
+
 async function cmdInsertDecal() {
   if (state.sketcher.active) finishSketch();
   const pick = firstPickedFaceRef();

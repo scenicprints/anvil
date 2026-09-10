@@ -33,6 +33,7 @@ import { textContours } from '../src/renderer/textoutline.js';
 import { parseSVG, parseDXF } from '../src/renderer/vectorimport.js';
 import { parsePLY, parseOFF, parseGLTF, parseDAE } from '../src/renderer/meshutil.js';
 import { readRecords, readASM } from '../src/renderer/asmread.js';
+import { grainAxis, pithOffset, ringSpacing, WOODS } from '../src/renderer/woodgrain.js';
 import {
   MATERIALS,
   RENDER_FINISH,
@@ -8457,6 +8458,47 @@ async function run() {
     assert(!body.solid && body.sheet, 'and it is a surface, not a solid');
     // Three sides of 10, 20, 10, dragged 10 up.
     near(SH.sheetArea(body.sheet), 400, 0.01, '40 of curve by 10 of drag');
+  });
+
+  test('wood: the grain runs the long way and the tree is under the board', () => {
+    /*
+     * Two decisions that between them settle whether a wooden part looks like a
+     * board or like a sheet of plywood, and both were wrong the first time.
+     *
+     * The grain runs along the longest side, because nobody saws a plank across
+     * the tree. And the pith, the centre of the tree, sits under the wide face:
+     * that face then slices the rings at a shallow angle and they open into the
+     * long arches everybody recognises as wood. Put the pith off to the side
+     * instead and the wide face cuts the rings square, which gives the even
+     * parallel stripes of quarter-sawn timber and reads as a contour map.
+     */
+    const board = [120, 50, 14];
+    assert(JSON.stringify(grainAxis(board)) === '[1,0,0]', 'along the longest side');
+    assert(JSON.stringify(grainAxis([20, 90, 14])) === '[0,1,0]', 'whichever that is');
+    assert(JSON.stringify(grainAxis([20, 14, 90])) === '[0,0,1]', 'including upright');
+
+    // Under the thin direction, which for this board is Z, and much further
+    // that way than sideways.
+    const pith = pithOffset([0, 0, 0], board, [1, 0, 0]);
+    assert(Math.abs(pith[2]) > Math.abs(pith[1]), 'the tree is under the wide face');
+    assert(Math.abs(pith[2]) > 50, 'and far enough away that the middle is not a bullseye');
+    // Never along the grain: a pith offset that way is a tree lying down.
+    near(pith[0], 0, 1e-9, 'and not along the grain');
+
+    // Rings are spaced in millimetres, not as a fraction of the part. A small
+    // part shows a few rings and a big one shows many, which is what happens
+    // when both are cut from the same tree; scaling to the part is what makes a
+    // render look like wallpaper.
+    near(ringSpacing(2), 0.5, 1e-9, 'two millimetres a ring');
+    near(ringSpacing(4), 0.25, 1e-9, 'four is half as many');
+    assert(ringSpacing(0) > 0 && Number.isFinite(ringSpacing(0)), 'and nothing divides by zero');
+
+    // Wood is not metal and has no coat: the grain is the whole of its finish.
+    assert(WOODS.oak && WOODS.oak.light !== WOODS.oak.dark, 'oak has two colours');
+    assert(
+      WOODS.oak.roughDark > WOODS.oak.roughLight,
+      'late growth is denser and takes a polish differently, which is the stripe in the reflection'
+    );
   });
 
   test('render: every material has a finish of its own', () => {

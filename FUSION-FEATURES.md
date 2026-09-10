@@ -1271,6 +1271,13 @@ gives you by default.
 Anvil also has a wall-thickness reading and a design-advice pass, which Fusion
 does not carry here.
 
+And two appearance features Fusion does not have. **Wood grain** is cut through
+the solid rather than wrapped round it, so a groove machined across a board shows
+the rings in its walls. **Wrap an image** projects a texture down all three axes
+and blends by surface normal, so a pattern carries round every corner of a whole
+body with no seam and no unwrapping; Fusion's decals are planar projections onto
+one face.
+
 ## Fusion-wide: Parameters — partial
 
 | Fusion | Anvil |
