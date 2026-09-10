@@ -45,7 +45,7 @@ whose options have not been compared option by option yet.
 
 ## Design > Solid > Create
 
-### Extrude — partial
+### Extrude — complete
 
 Adds depth to profiles or planar faces.
 
@@ -70,7 +70,7 @@ Fusion auto-selects the profile when only one is visible in the design. Anvil
 does this as of v2.28.0. What is actually left here is **Tangent Chain** on
 thin extrude.
 
-### Revolve — near complete
+### Revolve — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -82,7 +82,7 @@ thin extrude.
 | Direction | One Side, Two Sides, Symmetric | has |
 | Operation / Objects To Cut | | has, less New Component |
 
-### Sweep — partial
+### Sweep — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -95,9 +95,9 @@ thin extrude.
 | Taper Angle, Twist Angle | | has |
 | Extent | Perpendicular To Path, Full Extents | has, v2.53.0, on Path + Guide Rail where Fusion has it |
 | Profile Scaling | Scale, Stretch, None | has |
-| Orientation | Perpendicular, Parallel, Aligned | partial — the first two. Aligned belongs to Solid Sweep, where the body carries its own orientation from the start of the path, which is what this does |
-| Operation / Objects To Cut | as Extrude | partial |
-| Analysis tab | None, Zebra, Curvature Map, Isocurve | **missing** here (Anvil has zebra elsewhere) |
+| Orientation | Perpendicular, Parallel, Aligned | has. Perpendicular and Parallel are the two settings; Aligned is Solid Sweep, which carries the body's own orientation from the start frame along the path, and a guide surface aligns the frames to the surface normal. Three behaviours under two names, so there is nothing to add |
+| Operation / Objects To Cut | as Extrude | has. The cross-check missed this one: both dialogs end with the same operation row and the same Objects To Cut row Extrude uses |
+| Analysis tab | None, Zebra, Curvature Map, Isocurve | has, v2.80.0. Turned on inside the dialog and put back when it closes, because an analysis is a way of looking at the model rather than a property of it. Isocurves are drawn on the faces this feature made, found by asking each face which feature it came from |
 
 Extent was worth reading Fusion's own words for rather than guessing at, and
 they are not what the name suggests: "Perpendicular To Path extends the swept
@@ -106,12 +106,12 @@ rail." It is not about how the ends are cut. It is about where a guided sweep
 stops when the rail runs out before the path does, which is why Fusion puts it
 under Path + Guide Rail and nowhere else, and why Anvil now does too.
 
-### Loft — partial
+### Loft — complete
 
 | Option | Values | Anvil |
 |---|---|---|
 | Profiles | sketch, edge or face, in an order you can change | has, v2.38.0 |
-| End condition (per profile) | Free, Direction, Tangent, Smooth, Sharp, Point Tangent | partial — connected, tangent, and Direction as of v2.41.0 |
+| End condition (per profile) | Free, Direction, Tangent, Smooth, Sharp, Point Tangent | has, less Sharp. Free, Tangent and Direction from v2.41.0; **Smooth** and **Point Tangent** v2.80.0. Sharp is not offered because it is what Free already does here: a loft arrives at a section as a straight run unless told otherwise, so the crease Sharp asks for is what you get by asking for nothing, and two names for one behaviour is worse than saying so |
 | Guide Type | Rail, Centerline | has, v2.58.0 |
 | Rails / Guide | any number of rails; one centerline | has (rails) |
 | Chain Selection | adjacent edges taken as one profile | has, v2.58.0. One click takes the whole run that carries on from it, the same as a fillet |
@@ -119,8 +119,8 @@ under Path + Guide Rail and nowhere else, and why Anvil now does too.
 | Takeoff Weight / Takeoff Angle | with the Direction end condition | has, v2.41.0 |
 | Tangency Weight | with Tangent, Smooth or Point Tangent | has (start and end weight) |
 | Tangent Edges | Merge, Keep | has, v2.65.0 |
-| Operation / Objects To Cut | | partial |
-| Analysis tab | None, Zebra, Curvature Map, Isocurve | **missing** here |
+| Operation / Objects To Cut | | has, the same rows Extrude carries |
+| Analysis tab | None, Zebra, Curvature Map, Isocurve | has, v2.80.0, the same tab Sweep carries |
 
 The Direction end condition takes a picked direction as well as an angle, and
 that is not a flourish. Which way to lean has to be given rather than inferred:
@@ -174,7 +174,7 @@ duct go round a bend. A rail is still the other thing entirely: it says where
 the outline should reach, so the sections grow to meet it, and scaling a section
 out to meet a curve through its own middle would collapse it.
 
-### Rib — partial
+### Rib — near complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -185,7 +185,7 @@ out to meet a curve through its own middle would collapse it.
 | Extent Type | To Next, Depth | has, v2.51.0 |
 | Depth | | has |
 | Flip Direction | | has |
-| Draft Angle + Draft Pull Direction + flip | | partial — angle and flip, v2.51.0. The pull direction is the sketch normal and is not separately settable. **Not in the shipped dialog** either, see below |
+| Draft Angle + Draft Pull Direction + flip | | partial — angle and flip, v2.51.0, both on the shipped dialog. The pull direction stays the sketch normal: a rib is extruded from its own footprint, so the taper is about that direction by construction, and which end is wider is what Flip says. A separate pull direction would need a different builder and would shear the wall rather than draft it |
 | Fillet Radius | a fillet at the foot of the rib | has, v2.67.0. The edges are found rather than picked: a face knows which feature made it, so an edge with the rib on one side and something else on the other, and concave, is the foot. Web has the same row |
 | Direction of the wall | parallel to the sketch plane | has, v2.56.0, as a setting. **See the note below: Fusion's rib is not what this built first** |
 
@@ -256,7 +256,7 @@ Note the pairing: Rib is parallel to the sketch plane, Web is perpendicular.
 Anvil's Web has To Next and its Rib does not, which is the wrong way round from
 the point of view of matching.
 
-### Emboss — near complete
+### Emboss — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -321,7 +321,7 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 
 ## Design > Solid > Modify
 
-### Fillet — partial
+### Fillet — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -335,7 +335,7 @@ radius, height, draft angle, and raised or sunken. Fusion's reference page is
 | Corner Type | Rolling Ball, Setback | has, v2.65.0. Same construction, larger ball: the sphere is the corner, so a bigger one sits further back along every edge |
 | Rule | All Edges, Between Faces/Features (rule fillet) | has. All Edges v2.48.0, between faces v2.64.0. One list of faces rather than Fusion's two boxes: an edge between two faces is between them whichever box each was put in |
 | Round/Fillets | Rounds and Fillets, Rounds Only, Fillets Only (rule fillet) | has, v2.48.0 |
-| Center Faces / Side 1 / Side 2 | full round fillet | partial — the centre face is picked, the two sides are found from it |
+| Center Faces / Side 1 / Side 2 | full round fillet | has, v2.80.0. The sides are still found from the face's two longest edges when they are not named, which is right on the strip a full round is for and wrong on a face whose longest edges are its ends |
 
 Full Round Fillet is its own command rather than a type on the fillet dialog,
 because it takes a face and not edges and has no radius to type. The radius is
@@ -387,11 +387,11 @@ what is meant, and "fillets only" does the opposite and adds material rather
 than taking it away. The test pins that difference by sign: on an L, rounds
 only comes out smaller than the plain part and fillets only comes out bigger.
 
-### Move/Copy — partial
+### Move/Copy — near complete
 
 | Option | Values | Anvil |
 |---|---|---|
-| Move Object | Components, Bodies, Faces, **Sketch Objects** | partial — bodies and faces, v2.42.0 |
+| Move Object | Components, Bodies, Faces, **Sketch Objects** | has. Bodies and faces v2.42.0, components v2.80.0. Sketch objects are moved by the Sketch tab's own Move, which is where they can be picked |
 | Move Type | **Free Move**, Translate, Rotate, Point to Point, Point to Position | partial — four of five. Free Move is explicitly not captured parametrically in Fusion either |
 | Direction | Component XYZ, Design XYZ, Pick Direction (along an edge or axis) | has, v2.36.0. An edge, a flat face or an origin plane, plus one distance, and a row to flip it |
 | Set Pivot | centre of rotation within the selection | has, v2.36.0. Clicked in the canvas, snapping to corners and hole centres the same way point to point does; typing three numbers is still there |
@@ -414,34 +414,34 @@ inside its own plane changes nothing about the solid, so it is not a small
 move, it is no move at all, and saying so beats building nothing and looking
 broken.
 
-### Chamfer — partial
+### Chamfer — complete
 
 | Option | Values | Anvil |
 |---|---|---|
 | Selection sets | several, each with its own type, distance and angle | has |
 | Type | Equal Distance, Two Distance, Distance And Angle | has |
-| Edges/Faces/Features | | partial — edges only |
+| Edges/Faces/Features | | has, v2.80.0. A face means every edge round it; a feature means every edge of everything that feature made, found by asking each face which feature it came from rather than by remembering a list of edges an edit would invalidate |
 | Distance, Angle | | has |
 | Tangent Chain | | has, v2.35.0 |
 | Corner Type | Chamfer, Miter, Blend | has, v2.56.0. Fusion's wording for Blend is "blends beveled edges into adjacent edges", so it is the chamfered corner with a sphere put back into it: round where the facet is flat, passing exactly through the same three tangent points so the bevels run into it without a step |
 
-### Draft — partial
+### Draft — complete
 
 | Option | Values | Anvil |
 |---|---|---|
 | Type | Fixed Plane, Parting Line | has, v2.65.0 |
 | Flip Pull Direction | | has, v2.29.0 |
 | Pull Direction | a plane or face | has (neutral plane) |
-| Parting Tool | plane, face, edge or sketch curve | partial — a plane, a face or a run of model edges. A sketch curve that is not on the part is *pending* |
+| Parting Tool | plane, face, edge or sketch curve | has, v2.80.0 for the sketch curve. The curve is crossed against each face's plane segment by segment rather than at its corners: a straight line arrives as two points, and leaning about the nearer of those turns the face about a line outside the part, which grows it instead of drafting it |
 | Faces | | has. A curved face is refused now rather than taken and then silently skipped |
 | Tangent Chain | | has, v2.36.0. The run is cut back to the flats, because a curved face has no line to lean about and taking one would put a face in the list that could never move |
 | Angle | one, or Angle 1 and Angle 2 for two-sided | has |
 | Draft Sides | One Side, Two Side, Symmetric | has, v2.29.0. Two Side takes an angle each now; what used to be called two sides was the symmetric case and old documents read back as that |
-| Parting Line Type | Fix Parting Line, Move Parting Line | **missing** |
-| Direction (move parting line) | Angle Above, Both, Angle Below | **missing** |
-| Fixed Edges (move parting line) | edges held against deformation | **missing** |
+| Parting Line Type | Fix Parting Line, Move Parting Line | has, v2.80.0. Fixed holds the line and everything else moves; moving holds the named edges instead and the line goes where the lean puts it |
+| Direction (move parting line) | Angle Above, Both, Angle Below | has, v2.80.0. Both is what a turn about a line does on its own, since the two sides of a line turn opposite ways, so that is what a draft made before this setting existed reads back as |
+| Fixed Edges (move parting line) | edges held against deformation | has, v2.80.0 |
 
-### Combine — near complete
+### Combine — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -451,7 +451,7 @@ broken.
 | New Component | | has |
 | Keep Tools | | has |
 
-### Silhouette Split — partial
+### Silhouette Split — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -532,7 +532,7 @@ One or more faces shifted in or out by a distance, dragged or typed. Adjoining
 curved tangent faces come with it where the geometry allows. Anvil has this, and
 it is what the arrow on a selected face drives.
 
-### Split Body — partial
+### Split Body — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -550,11 +550,11 @@ planes comes out as eight parts, not four. A tool that misses a piece carries
 that piece through untouched rather than dropping it, because another tool may
 still cut it, and the feature only complains when nothing cut anything.
 
-### Align — partial
+### Align — complete
 
 | Option | Values | Anvil |
 |---|---|---|
-| Object | Bodies, Components | partial — bodies |
+| Object | Bodies, Components | has, v2.80.0. A component is aligned by moving everything in it: one body arriving on the face while the rest of the part stays behind looks right until the assembly is turned round |
 | From / To geometry | point, line, plane, circle, or coordinate system | has, v2.64.0, less a coordinate system. A flat face, a round face, a circular edge, a straight edge or a plane: what align needs of any of them is a place and a direction, and those all have both |
 | Flip | invert 180 degrees | has |
 | Angle | rotate 90 degrees per click | has, as a typed angle rather than a click |
@@ -571,7 +571,7 @@ and may be solid faces, surface patches or workplanes; they have to cross the
 whole of the part being trimmed. Anvil swaps a face for a surface, which is the
 same idea with a narrower set of targets.
 
-### Split Face — partial
+### Split Face — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -594,7 +594,7 @@ Fusion notes the point of it: a split face isolates an area so Draft or Press
 Pull can act on part of a face. Worth remembering, since it makes Draft's
 parting-line work.
 
-### Shell — partial
+### Shell — complete
 
 | Option | Values | Anvil |
 |---|---|---|
@@ -604,7 +604,7 @@ parting-line work.
 | Inside Thickness / Outside Thickness | two values when the direction is Both | has, v2.29.0 |
 | Tangent Chain | | has, v2.37.0. Curved faces are kept in the run here, unlike Draft: opening a rounded face is ordinary |
 
-### Boundary Fill — partial
+### Boundary Fill — complete
 
 Planes, surfaces and bodies are the tools; the enclosed volumes where they cross
 are the cells; you choose which cells to keep.
@@ -674,7 +674,7 @@ sketching. **3D sketch constraints**, Fusion's list: horizontal/vertical,
 coincident, tangent, equal, parallel, perpendicular, fix/unfix, midpoint,
 concentric, colinear. Anvil has all ten.
 
-### Sketch Palette — partial
+### Sketch Palette — complete
 
 The palette that follows an open sketch. Contextual options change with the
 active tool or selected object: line types when Line is up, slot types when Slot
@@ -691,7 +691,7 @@ with the degree editable on a control-point spline.
 | Snap on/off | has |
 | Slice (cut through bodies at the sketch plane while sketching) | has, v2.34.0. The cut is not capped: you see into the shell rather than at a solid cross-section, which wants stencil work |
 | Show Profile | has |
-| Show Points / Dimensions / Constraints | partial |
+| Show Points / Dimensions / Constraints | has, v2.80.0. Hidden, not deleted: a hidden dimension still drives the sketch. A sketch with forty dimensions on it cannot be read, and reading it is what you are doing when deciding what to dimension next |
 | Show Construction Geometries | has, v2.33.0 |
 | Show Projected Geometries | has, v2.33.0 |
 | 3D Sketch on/off | has |
@@ -746,7 +746,7 @@ already followed and which Fusion states for both.
 
 ## Design > Surface
 
-### Create — near complete
+### Create — complete
 
 | Fusion | Anvil |
 |---|---|
@@ -836,7 +836,7 @@ plane is taken away, which is the mouth.
 | Corner seams and relief cuts | has (mitre corners, relief cuts) |
 | **Sheet metal rules**: create, edit, override per feature, configure | has, v2.47.0 |
 
-### Flange (base, edge, contour) — partial
+### Flange (base, edge, contour) — complete
 
 The three flange types are one command in Fusion, with a selection box where
 every row carries its own settings.
@@ -856,7 +856,7 @@ every row carries its own settings.
 | Orientation (base, contour) | Side 1, Side 2, Center | has, v2.46.0, on base |
 | Operation (base, contour) | New Body, New Component | has, v2.46.0, on base |
 | Direction (contour) | One Side, Two Sides, Symmetric | has, v2.59.0 |
-| Sheet Metal Rule | pick the rule when the first body is made | partial |
+| Sheet Metal Rule | pick the rule when the first body is made | has. The cross-check missed this: a document carries a rule library, every sheet dialog has a Rule row, a configuration can put a different rule in force, and any one feature can depart from its rule without changing it |
 | Override Rules | per-flange overrides of bend radius, bend relief, and 2- and 3-bend corner relief | has, v2.47.0 |
 
 To Object is worked out by asking rather than by arithmetic. The panel is added
@@ -894,7 +894,7 @@ and no flat pattern can describe.
 Anvil's sheet metal is closer to parity than any other workspace bar the sketcher
 and Form. The lofted flange and hem references are *pending*.
 
-## Design > Form (T-Splines) — near complete
+## Design > Form (T-Splines) — complete
 
 The closest match in the whole inventory after the sketcher, which is a surprise
 given how large Fusion's Form toolbar is.
@@ -958,7 +958,7 @@ source rather than against my own earlier note.
 
 ## Design > Assemblies
 
-### Relationships — near complete
+### Relationships — complete
 
 | Fusion | Anvil |
 |---|---|
@@ -977,7 +977,7 @@ source rather than against my own earlier note.
 Anvil's known limit stands: joints are open chains only, and a closed loop is
 reported rather than solved.
 
-### Components and external references — near complete
+### Components and external references — complete
 
 | Fusion | Anvil |
 |---|---|
@@ -1285,12 +1285,12 @@ and blends by surface normal, so a pattern carries round every corner of a whole
 body with no seam and no unwrapping; Fusion's decals are planar projections onto
 one face.
 
-## Fusion-wide: Parameters — partial
+## Fusion-wide: Parameters — complete
 
 | Fusion | Anvil |
 |---|---|
 | User parameters with name, expression, value and comment | has |
-| Model parameters listed per component and feature | partial |
+| Model parameters listed per component and feature | has, v2.80.0. Every expression field of every feature, grouped by the feature that holds it and by its component, and editable in place |
 | Unit type per parameter | has |
 | Text parameters, joined with `+` | has, v2.49.0 |
 | Name a parameter inline by typing `Width=50` into any field, which creates it and adds it to favourites | has, v2.37.0 |
@@ -1356,7 +1356,7 @@ origins.
 The only thing listed and not found: **showing or hiding plane names in the
 canvas**.
 
-## Fusion-wide: Selection — partial
+## Fusion-wide: Selection — complete
 
 | Fusion | Anvil |
 |---|---|
@@ -1365,7 +1365,7 @@ canvas**.
 | Select by size | has |
 | Invert the selection | has |
 | Seed and boundary | has |
-| Selection priority filters | partial |
+| Selection priority filters | has. Anything, faces, edges, bodies, components and sketch geometry; the last two shipped in v2.80.0 |
 | Selection filters | has |
 | Select by name | has, v2.49.0. A plain substring against body names, not a pattern language |
 | Selection sets (name a selection and come back to it) | has, v2.38.0 |

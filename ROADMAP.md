@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.79.0**. 609 tests in the window, plus 55 checks of the
+Current version: **2.80.0**. 619 tests in the window, plus 55 checks of the
 library, profiles and the version counter in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
@@ -28,6 +28,26 @@ too**, which closes out Category 1 and Category 2 of the Fusion inventory:
 **The library below is now built too**, in v2.71.0: profiles, projects, folders,
 the index, recents, search, the version counter, where you left off, and the
 placeholder handling. Profile pictures followed in v2.72.0.
+
+**Batch 26 has shipped too**, in v2.80.0: the last of the modelling gaps. Draft's
+parting line story in full (fix or move the line, which side leans, the edges to
+hold, and a sketch curve as the tool), chamfer by face and by feature, the loft's
+Smooth and Point Tangent ends, an Analysis tab inside Sweep and Loft, silhouette
+face splitting at a parting line that is not flat, the pattern compute option,
+naming a full round's two sides, align and move on a whole component, the last
+three sketch palette switches, two more selection priorities, and the model's own
+dimensions listed in the Parameters dialog.
+
+Four rows that file called gaps turned out to be built already, which is the
+fourth time it has been wrong in that direction. **Read the source before
+building anything from it.**
+
+Of the 325 rows that are Anvil's business, 291 are full, 10 partial and 24
+missing, and every one of the 24 is in simulation, render lamps, generative
+studies or animation output. What is left in modelling is four things, each with
+its reason written down: a rib's draft is about its own extrude direction, Free
+Move is not parametric in Fusion either, splitting a body in two at a silhouette
+still needs a flat parting line, and there is no version history view.
 
 What is left is in `FUSION-FEATURES.md`, item by item, each with the reason it is
 not built. Reading it back after the library shipped, the honest summary is:

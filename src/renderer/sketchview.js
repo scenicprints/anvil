@@ -248,6 +248,18 @@ export class SketchEditor {
     // things against them, and in the way once you are not.
     this.showConstruction = true;
     this.showProjected = true;
+    /*
+     * The rest of Fusion's Sketch Palette show switches.
+     *
+     * Points and dimensions are not scaffolding the way construction lines
+     * are: they are how a sketch is edited. They are worth turning off anyway,
+     * and for one reason: a sketch with forty dimensions on it cannot be read,
+     * and reading it is what you are doing when you are deciding what to
+     * dimension next. A drag is still possible with points hidden, since what
+     * is picked is the geometry rather than the dot drawn on it.
+     */
+    this.showPoints = true;
+    this.showDimensions = true;
     this.onRegionsChanged = null;
 
     this._pointTexture = this._makePointTexture();
@@ -3665,6 +3677,7 @@ export class SketchEditor {
     const positions = [];
     const colors = [];
     this.sketch.points.forEach((p, i) => {
+      if (!this.showPoints && !this.selection.has(`p${i}`)) return;
       if (!this.pointIsUsed(i)) return;
       const w = toWorld(p);
       positions.push(w.x, w.y, w.z);
@@ -3839,7 +3852,11 @@ export class SketchEditor {
     const P = this.sketch.points;
     const items = [];
 
+    const dims = new Set(['distance', 'distanceX', 'distanceY', 'radius', 'diameter', 'angle']);
     for (const c of this.sketch.constraints) {
+      // Hidden dimensions are hidden, not deleted: they still drive the sketch
+      // and they come back the moment the switch goes back on.
+      if (!this.showDimensions && dims.has(c.type)) continue;
       if (c.type === 'distance' || c.type === 'distanceX' || c.type === 'distanceY') {
         const a = P[c.points[0]];
         const b = P[c.points[1]];

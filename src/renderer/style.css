@@ -1021,6 +1021,28 @@ table.params .starbtn:hover {
   border-top: 1px solid var(--line);
 }
 
+/* The model's own dimensions, listed under the named parameters. */
+.modelparams {
+  margin-top: 6px;
+}
+.modelparams .paramgroup {
+  padding-top: 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.modelparams input {
+  width: 100%;
+}
+.modelparams .val {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* ---------------- making a texture out of a picture ---------------- */
 
 /* Wider than the other modals, because the whole point is the two pictures

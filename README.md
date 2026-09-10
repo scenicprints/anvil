@@ -2079,8 +2079,17 @@ Of Fusion's Sketch tab, nothing is missing. Of its Inspect panel, Fastener
 Stack, Display Component Colors and Find Similar Components are not modelling
 analyses at all.
 
-**Modelling gaps that remain:** Fusion's compute options for patterns that hit
-different geometry. Silhouette Split works only where the parting line is flat.
+**Modelling gaps that remain**, and the list is short now. A rib's draft is
+about its own extrude direction, because a rib is built from its footprint and a
+separate pull direction would shear the wall rather than draft it; which end is
+wider is what Flip says. Free Move is not captured parametrically, which it is
+not in Fusion either. Splitting a body in two at a silhouette still needs a flat
+parting line, since a non-planar cut has no tool; splitting the *faces* at one
+works whatever shape it is, which is the case that matters for draft. And there
+is no version history view, though the versions are kept.
+
+Everything else in Fusion's Solid, Surface, Sheet Metal, Mesh, Form, Assemble,
+Construct, Inspect and Sketch tabs is here, option by option, as of v2.80.0.
 
 **Pull it, rather than asking for a command.** Click a planar face and an arrow
 stands on it, with a distance box beside the arrow. Type the number, or drag the
@@ -2268,6 +2277,88 @@ A modelled thread is real geometry and costs real triangles. That is the point
 for a printed part, but it is why Fusion leaves threads cosmetic by default.
 
 ---
+
+## The last of the modelling gaps
+
+Batch 26, v2.80.0, and it was mostly a list of small things that had been
+sitting in the inventory with a reason next to them. Four of them turned out to
+be already built and wrongly recorded, which is the fourth time that file has
+been wrong in the same direction: **read the source before building from it.**
+
+**Draft got the whole parting line story.** Fusion has two kinds. Fix Parting
+Line holds the line where it is and leans the face about it, which is what Anvil
+already did. Move Parting Line holds the *edges you name* instead and lets the
+line go wherever the lean puts it, which is what you want when the line is a
+feature of the shape rather than a face of the mould. Its Direction row decides
+which side of the line leans: above, below, or both, and both is what a turn
+about a line does on its own, so that is what an older draft reads back as.
+
+The parting tool can now be a sketch curve as well as an edge, and that took one
+real correction. A curve arrives as the points somebody drew, which for a
+straight line is two of them. Leaning about the nearer of those two turns the
+face about a line outside the part, and the face grows instead of drafting.
+Crossing the curve against each face's plane segment by segment finds the actual
+crossing, which for a line that crosses is exact.
+
+**Chamfer takes faces and features, not only edges.** A face means every edge
+round it. A feature means every edge of everything that feature made, and it is
+found by asking each face which feature it came from rather than by remembering
+a list of edges that an edit would invalidate. Both are checked by equivalence:
+naming the faces has to give exactly the body that naming their edges by hand
+gives.
+
+**Loft got Smooth and Point Tangent.** Tangent leaves the end section in the
+right direction and then immediately starts bending toward the next one, so the
+direction is continuous and the curvature jumps; Smooth holds the direction over
+a run so the bending starts from nothing. Point Tangent only means something
+where the section is a point: a cone's width falls away in a straight line and a
+dome's follows a circle, which near the tip is two thirds of the box against one
+third. On a printed part that is a nose instead of a spike, and a spike is
+supports and a stringy top layer.
+
+Fusion's Sharp is not here, because it is what Free already does: a loft arrives
+at a section as a straight run unless told otherwise. Two names for one
+behaviour would be worse than saying so.
+
+**Sweep and Loft carry an Analysis tab**, which is zebra, curvature or isocurves
+turned on inside the dialog while the settings are being changed and put back
+when it closes. Those two shapes cannot be judged by their outline: a loft
+between two rounded sections can be the right size, in the right place, and have
+a crease down it that no dimension shows. The isocurves are drawn on the faces
+this feature made rather than on the whole part, found by asking each face which
+feature it came from. It is deliberately not written into the document: an
+analysis is a way of looking at the model, and a document that saved one would
+come back days later striped with nothing to say why.
+
+**Silhouette Split parts the faces at any parting line now**, flat or not, and
+the way it does it is the point. It used to fit a plane to the silhouette and
+cut. But the silhouette is exactly where the surface stops facing the pull
+direction and starts facing away, so which side a triangle is on is a question
+about that triangle alone: labelling them is the whole operation, with no plane
+and no boolean. A moulded part's parting line is hardly ever flat. Splitting a
+body in two still needs a plane, because a non-planar cut has no tool.
+
+**Patterns got Fusion's Compute Option.** Adjust applies each copy to what it
+lands on, one at a time, which is what a pattern of holes crossing a step needs.
+Identical joins the copies into one tool and cuts once, which on a heavy part is
+forty booleans against one. They give the same body for a cut or a join, and the
+test says so, because a faster answer that is quietly different is not an
+option, it is a bug.
+
+**And the smaller ones.** A full round fillet's two sides can be named where the
+guess from the longest edges is wrong. Align and Move take a whole component, so
+half a part cannot arrive somewhere new while the rest stays behind. The sketch
+palette can hide points, dimensions and constraints, hidden rather than deleted.
+Selection priority gained components and sketch geometry. And the Parameters
+dialog now lists every dimension in the model under the named ones, grouped by
+the feature that holds it and editable in place, which is the half of that
+dialog that was actually missing: a part is nearly always built from numbers
+typed straight into dialogs.
+
+**One bug found by reading.** `renderAnalysis()` was called in two places and
+defined in none, so Surface Continuity and Isocurve Analysis both threw before
+drawing anything, and Surface Continuity never showed its report. It is
+`renderAnalysisOverlay`.
 
 ## Building the installer
 

@@ -225,7 +225,14 @@ async function boot() {
   // are placing things against them, in the way once you are not.
   for (const [id, key] of [
     ['chkShowConstruction', 'showConstruction'],
-    ['chkShowProjected', 'showProjected']
+    ['chkShowProjected', 'showProjected'],
+    // Fusion's other three show switches. Points and dimensions are not
+    // scaffolding the way the first two are, but a sketch with forty
+    // dimensions on it cannot be read, and reading it is exactly what you are
+    // doing when deciding what to dimension next.
+    ['chkShowPoints', 'showPoints'],
+    ['chkShowDims', 'showDimensions'],
+    ['chkShowConstraints', 'showConstraints']
   ]) {
     $(`#${id}`)?.addEventListener('change', (e) => {
       state.sketcher[key] = e.target.checked;
@@ -390,6 +397,9 @@ function rebuildAll() {
 
   renderTree();
   renderTimeline();
+  // An Analysis tab showing isocurves has to work them out again: they are
+  // drawn on the faces this feature made, and the rebuild has just remade them.
+  if (state.editing?.analysis === 'iso') state.isoRuns = dialogIsocurves();
   renderAnalysisOverlay();
   syncDialogError();
   // The face the handle stands on has just been rebuilt, so the handle has to
@@ -536,7 +546,10 @@ function activeFilter() {
     faces: p === 'face',
     edges: p === 'edge',
     bodies: p === 'body' || p === 'component',
-    profiles: false,
+    // Sketch geometry only: a click falls through the part to the sketch drawn
+    // on it, which is how you get at a profile lying on a face without first
+    // hiding the body it is lying on.
+    profiles: p === 'sketch',
     wholeBody: p === 'component'
   };
 }
@@ -611,6 +624,7 @@ function handleViewportDown(e) {
         'surfaceCurves',
         'sheetEdges',
         'partingEdges',
+        'fixedEdges',
         // A loft section can be a run of model edges, so an edge has to be
         // offered there as well as a profile. An align can be lined up by a
         // circle, so the same goes for its two rows.
@@ -2135,6 +2149,12 @@ async function runCommand(cmd) {
       break;
     case 'priorityEdge':
       cmdSelectPriority('edge');
+      break;
+    case 'priorityComponent':
+      cmdSelectPriority('component');
+      break;
+    case 'prioritySketch':
+      cmdSelectPriority('sketch');
       break;
     case 'faceGroups':
       cmdFaceGroups();
@@ -4368,11 +4388,48 @@ function blendFields(kind) {
       (feature.sets || []).forEach((set, i) => {
         const n = i + 1;
         out.push({
+          /*
+           * Fusion's Edges, Faces and Features. A face means every edge round
+           * it; a feature means every edge of everything that feature made,
+           * found by asking the faces which feature they came from rather than
+           * by remembering a list of edges that an edit would invalidate.
+           */
+          key: `sets.${i}.pickKind`,
+          label: `Set ${n} takes`,
+          type: 'select',
+          showIf: (f) => !f.sets[i]?.all,
+          get: (f) => f.sets[i]?.pickKind || 'edges',
+          set: (f, v) => {
+            f.sets[i].pickKind = v;
+          },
+          options: [
+            ['edges', 'The edges picked'],
+            ['faces', 'Every edge round the faces picked'],
+            ['feature', 'Every edge of the feature a face belongs to']
+          ]
+        });
+        out.push({
+          key: `__setFaces${i}`,
+          label: `Set ${n} faces`,
+          type: 'pick',
+          pick: `ruleFaces:${i}`,
+          showIf: (f) =>
+            !f.sets[i]?.all && ['faces', 'feature'].includes(f.sets[i]?.pickKind || 'edges'),
+          summary: (f) => {
+            const c = f.sets[i]?.ruleFaces?.length || 0;
+            return c ? `${c} face${c === 1 ? '' : 's'}` : 'Nothing yet';
+          },
+          clear: (f) => {
+            f.sets[i].ruleFaces = [];
+          }
+        });
+        out.push({
           key: `__set${i}`,
           label: `Set ${n} edges`,
           type: 'pick',
           pick: `set:${i}`,
-          showIf: (f) => kind !== 'fillet' || !f.sets[i]?.all,
+          showIf: (f) =>
+            (f.sets[i]?.pickKind || 'edges') === 'edges' && (kind !== 'fillet' || !f.sets[i]?.all),
           summary: (f) => {
             const set = f.sets[i];
             const c = set?.edges?.length || 0;
@@ -4403,7 +4460,7 @@ function blendFields(kind) {
           key: `sets.${i}.tangentChain`,
           label: `Set ${n} follows tangent edges`,
           type: 'bool',
-          showIf: (f) => !f.sets[i]?.all,
+          showIf: (f) => !f.sets[i]?.all && (f.sets[i]?.pickKind || 'edges') === 'edges',
           get: (f) => f.sets[i]?.tangentChain !== false,
           set: (f, v) => {
             f.sets[i].tangentChain = !!v;
@@ -4663,6 +4720,7 @@ function moveFields() {
       type: 'select',
       options: [
         ['bodies', 'Bodies'],
+        ['components', 'Components, everything in them at once'],
         ['faces', 'Faces']
       ]
     },
@@ -5125,6 +5183,19 @@ function alignFields() {
       clear: (f) => {
         f.bodies = 'all';
       }
+    },
+    {
+      // Fusion's Object. A component is aligned by moving everything in it: one
+      // body arriving on the face while the rest of the part stays behind looks
+      // like it worked until the assembly is turned round.
+      key: 'object',
+      label: 'What moves',
+      type: 'select',
+      get: (f) => f.object || 'body',
+      options: [
+        ['body', 'The bodies picked'],
+        ['component', 'The whole component they belong to']
+      ]
     },
     {
       key: '__from',
@@ -5627,11 +5698,36 @@ function draftFields() {
       ]
     },
     {
+      // Fusion's Parting Tool. A sketch curve is not the same as an edge: a
+      // moulded shape's split often runs where there is no edge yet, which is
+      // exactly why somebody draws one.
+      key: 'partingTool',
+      label: 'The line comes from',
+      type: 'select',
+      showIf: (f) => f.partingType === 'line',
+      get: (f) => f.partingTool || 'edges',
+      options: [
+        ['edges', 'Edges of the part'],
+        ['curve', 'A sketch curve']
+      ]
+    },
+    {
+      key: '__partingCurve',
+      label: 'Sketch',
+      type: 'select',
+      showIf: (f) => f.partingType === 'line' && f.partingTool === 'curve',
+      options: pathSketchOptions(),
+      get: (f) => f.partingCurve?.sketch || '',
+      set: (f, v) => {
+        f.partingCurve = v ? { sketch: v } : null;
+      }
+    },
+    {
       key: '__partingEdges',
       label: 'Parting line',
       type: 'pick',
       pick: 'partingEdges',
-      showIf: (f) => f.partingType === 'line',
+      showIf: (f) => f.partingType === 'line' && (f.partingTool || 'edges') === 'edges',
       summary: (f) => {
         const n = (f.partingEdges || []).length;
         return n ? `${n} edge${n === 1 ? '' : 's'}` : 'Nothing yet';
@@ -5641,11 +5737,57 @@ function draftFields() {
       }
     },
     {
+      /*
+       * Fusion's Parting Line Type. Fixed holds the line where it is and the
+       * face leans about it. Moving holds the edges named below instead, so
+       * the line goes wherever the lean puts it, which is what you want when
+       * the line is a feature of the shape rather than a face of the mould.
+       */
+      key: 'partingLine',
+      label: 'The parting line itself',
+      type: 'select',
+      showIf: (f) => f.partingType === 'line',
+      get: (f) => f.partingLine || 'fix',
+      options: [
+        ['fix', 'Stays where it is'],
+        ['move', 'Moves, and these edges are held instead']
+      ]
+    },
+    {
+      key: '__fixedEdges',
+      label: 'Edges to hold',
+      type: 'pick',
+      pick: 'fixedEdges',
+      showIf: (f) => f.partingType === 'line' && f.partingLine === 'move',
+      summary: (f) => {
+        const n = (f.fixedEdges || []).length;
+        return n ? `${n} edge${n === 1 ? '' : 's'}` : 'Nothing yet';
+      },
+      clear: (f) => {
+        f.fixedEdges = [];
+      }
+    },
+    {
+      // Fusion's Direction, and it belongs to a parting line draft only. Both
+      // is what a turn about a line does anyway, since the two sides of a line
+      // turn opposite ways.
+      key: 'partingDirection',
+      label: 'Which side leans',
+      type: 'select',
+      showIf: (f) => f.partingType === 'line',
+      get: (f) => f.partingDirection || 'both',
+      options: [
+        ['both', 'Both, in opposite senses'],
+        ['above', 'Above the line only'],
+        ['below', 'Below the line only']
+      ]
+    },
+    {
       key: '__partingNote',
       label: '',
       type: 'note',
       showIf: (f) => f.partingType === 'line',
-      text: 'The plane below is still what says which way the mould opens. The parting line only says where the part keeps its size.'
+      text: 'The plane below is still what says which way the mould opens, and which side is above. The parting line only says where the part keeps its size.'
     },
     {
       key: '__neutral',
@@ -5917,6 +6059,95 @@ const CURVE_PICK_FIELDS = (key, label, showIf) => [
  * The Sweep dialog. What to sweep, along what, optionally guided by a rail,
  * then how far along, how it leans and turns, and what to do with the result.
  */
+/* ------------------------------------------------------------------ */
+/* The Analysis tab a surface dialog carries                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fusion's Analysis tab, on the two dialogs that make a surface out of
+ * sections: Sweep and Loft.
+ *
+ * Both of those are shapes you cannot judge by their outline. A loft between
+ * two rounded sections can be the right size, in the right place, and still
+ * have a crease down it that no dimension will show and no orbit will find,
+ * because a crease is a jump in what the surface reflects rather than in where
+ * it is. So the reading has to be available while the settings are being
+ * changed, which is what a tab inside the dialog means: turn the setting, watch
+ * the stripe kink, turn it back.
+ *
+ * This is deliberately not written into the feature. An analysis is a way of
+ * looking at the model and not a property of it, and a document that saved one
+ * would come back days later striped, with nothing on screen to say why.
+ */
+const DIALOG_ANALYSES = [
+  ['none', 'The model as it is'],
+  ['zebra', 'Zebra stripes, for creases'],
+  ['curvature', 'Curvature map, for how hard it turns'],
+  ['iso', 'Isocurves, for how the surface flows']
+];
+
+function analysisRow() {
+  return {
+    key: '__analysis',
+    label: 'While this is open, show',
+    type: 'select',
+    get: () => state.editing?.analysis || 'none',
+    set: (_f, v) => setDialogAnalysis(v),
+    options: DIALOG_ANALYSES
+  };
+}
+
+/** Turn one on, remembering whatever was being shown before. */
+function setDialogAnalysis(kind) {
+  const ed = state.editing;
+  if (!ed) return;
+  if (!ed.analysisWas) {
+    ed.analysisWas = { faceAnalysis: state.faceAnalysis, isoRuns: state.isoRuns };
+  }
+  ed.analysis = kind === 'none' ? null : kind;
+
+  // Only one colouring at a time: they would fight over the same buffer.
+  state.faceAnalysis =
+    kind === 'zebra'
+      ? { kind: 'zebra', plane: 'XY', bands: '12' }
+      : kind === 'curvature'
+        ? { kind: 'curvature' }
+        : null;
+  state.isoRuns = null;
+  if (kind === 'none') restoreDialogAnalysis();
+}
+
+/**
+ * The isocurves for the faces this dialog is making.
+ *
+ * Every face knows which feature made it, so the reading can be about the
+ * surface in hand rather than about the whole part. Drawing them everywhere
+ * would bury the one surface being judged under the rest of the model.
+ */
+function dialogIsocurves() {
+  const id = state.editing?.feature?.id;
+  if (!id) return null;
+  const runs = [];
+  for (const rec of state.records || []) {
+    if (!rec.topology || !rec.mesh) continue;
+    for (const face of rec.topology.faces) {
+      if (face.src?.tag !== id) continue;
+      runs.push(...isoLines(rec.mesh, face, 8));
+    }
+  }
+  return runs.length ? runs : null;
+}
+
+/** Put back whatever was on screen before the dialog turned something on. */
+function restoreDialogAnalysis() {
+  const was = state.editing?.analysisWas;
+  if (!was) return;
+  state.faceAnalysis = was.faceAnalysis || null;
+  state.isoRuns = was.isoRuns || null;
+  state.editing.analysis = null;
+  state.editing.analysisWas = null;
+}
+
 function sweepFields() {
   const railed = (f) => f.sweepType === 'rail';
   return [
@@ -6045,7 +6276,8 @@ function sweepFields() {
         f.op = v;
         if (v === 'component') ensureFeatureComponent(f);
       } },
-    TARGETS_FIELD
+    TARGETS_FIELD,
+    analysisRow()
   ];
 }
 
@@ -6077,12 +6309,22 @@ function loftSectionRowText(entry, i) {
 
 /** The Loft dialog: the sections in order, how the ends leave, and any rails. */
 function loftFields(feature) {
+  /*
+   * Fusion's end conditions, in its own order and its own words.
+   *
+   * Its Sharp is not here, because it is what Free already does: a loft in
+   * Anvil arrives at a section as a straight run unless it is told otherwise,
+   * so the crease Sharp asks for is what you get by asking for nothing. Two
+   * names for one behaviour would be worse than saying so.
+   */
   const CONDITIONS = [
-    ['connected', 'Connected'],
-    ['tangent', 'Tangent'],
-    ['direction', 'Direction, at an angle']
+    ['connected', 'Free, no constraint'],
+    ['tangent', 'Tangent, leaves square to the section'],
+    ['smooth', 'Smooth, and the curvature runs on too'],
+    ['direction', 'Direction, at an angle'],
+    ['pointTangent', 'Point tangent, a dome at a tip']
   ];
-  const leans = (which) => (f) => ['tangent', 'direction'].includes(f[which]);
+  const leans = (which) => (f) => ['tangent', 'direction', 'smooth'].includes(f[which]);
   // Fusion lets the profile order be changed, and the order is what a loft is:
   // the same three sections in a different order is a different shape. Clicking
   // them again in the right order was the only way to fix a mis-ordered loft,
@@ -6215,7 +6457,8 @@ function loftFields(feature) {
         f.op = v;
         if (v === 'component') ensureFeatureComponent(f);
       } },
-    TARGETS_FIELD
+    TARGETS_FIELD,
+    analysisRow()
   ];
 }
 
@@ -7216,7 +7459,11 @@ const RIBBON_MENUS = {
     ['priorityAuto', 'Anything'],
     ['priorityFace', 'Faces only'],
     ['priorityEdge', 'Edges only'],
-    ['priorityBody', 'Bodies only']
+    ['priorityBody', 'Bodies only'],
+    // Clicking a body picks the whole component it belongs to, which is what
+    // you want while assembling and in the way while modelling.
+    ['priorityComponent', 'Components only'],
+    ['prioritySketch', 'Sketch geometry only']
   ],
   faceGroups: [
     ['faceGroups', 'Generate Face Groups'],
@@ -7844,6 +8091,12 @@ function startDraft() {
     sides: 'one',
     partingType: 'plane',
     partingEdges: [],
+    // Fusion's Parting Line Type and Direction. A draft made before these
+    // existed leans about the line itself, in both senses, which is what a turn
+    // about a line does anyway, so that is what an absent one has to mean.
+    partingLine: 'fix',
+    partingDirection: 'both',
+    fixedEdges: [],
     flipPull: false
   };
   openFeatureEditor(feature, 'Draft', draftFields());
@@ -8284,7 +8537,27 @@ function startPatternFeature() {
     { key: 'count2', label: 'Count along Y', type: 'expr', showIf: (f) => f.pattern !== 'circular' },
     { key: 'spacing2', label: 'Spacing Y', type: 'expr', showIf: (f) => f.pattern !== 'circular' },
     { key: 'count', label: 'Count', type: 'expr', showIf: (f) => f.pattern === 'circular' },
-    { key: 'angle', label: 'Total angle', type: 'expr', showIf: (f) => f.pattern === 'circular' }
+    { key: 'angle', label: 'Total angle', type: 'expr', showIf: (f) => f.pattern === 'circular' },
+    {
+      /*
+       * Fusion's Compute Option. Adjust applies each copy to whatever it lands
+       * on, one at a time, which is what a pattern of holes crossing a step
+       * needs. Identical does the same work in one go by joining the copies
+       * into a single tool and cutting once, which on a heavy part is the
+       * difference between forty booleans and one.
+       *
+       * They give the same body for a cut or a join. For an intersect they do
+       * not, so that one always adjusts whatever this says.
+       */
+      key: 'compute',
+      label: 'How the copies are applied',
+      type: 'select',
+      get: (f) => f.compute || 'adjust',
+      options: [
+        ['adjust', 'One at a time, against what each lands on'],
+        ['identical', 'All at once, which is quicker on a heavy part']
+      ]
+    }
   ]);
 }
 
@@ -12451,7 +12724,7 @@ function cmdSurfaceContinuity() {
     return;
   }
   state.continuityMarks = marks;
-  renderAnalysis();
+  renderAnalysisOverlay();
   showReport('Surface Continuity', lines, [
     'G0 means the faces touch. G1 means they leave the edge in the same direction, so there is no crease to feel.',
     'G2 means they leave it curving by the same amount, so there is no band of different shading either. That is the one only a reflection finds, which is what zebra is for.'
@@ -12487,7 +12760,7 @@ function cmdIsocurveAnalysis() {
     return;
   }
   state.isoRuns = runs;
-  renderAnalysis();
+  renderAnalysisOverlay();
   setStatus(`${runs.length} isocurves drawn. Clear Analysis puts them away.`);
 }
 
@@ -13912,10 +14185,26 @@ function fullRoundFields() {
       }
     },
     {
+      // Fusion's Side 1 and Side 2. Found from the face when they are not
+      // named, which is right on the strip a full round is for and wrong on a
+      // face whose longest edges are its ends.
+      key: '__sideFaces',
+      label: 'The two faces either side',
+      type: 'pick',
+      pick: 'fullRoundSides',
+      summary: (f) => {
+        const n = (f.sideFaces || []).length;
+        return n ? `${n} of 2 picked` : 'Found from the face';
+      },
+      clear: (f) => {
+        f.sideFaces = [];
+      }
+    },
+    {
       key: '__note',
       label: '',
       type: 'note',
-      text: 'The radius is whatever makes the round meet both faces either side, which is half the distance between them, so there is nothing to type. The two sides are found from the face itself; if they are not parallel it says so rather than guessing.'
+      text: 'The radius is whatever makes the round meet both faces either side, which is half the distance between them, so there is nothing to type. Leave the two sides empty and they are found from the face itself; name them where the guess is wrong.'
     }
   ];
 }
@@ -14635,9 +14924,11 @@ const PICK_PROMPTS = {
   movePointTo: 'Click where to measure to.',
   movePivot: 'Click the point to turn about.',
   partingEdges: 'Click the edges the draft should turn about.',
-  'ruleFaces:0': 'Click the faces. Every edge where two of them meet is taken.',
+  fixedEdges: 'Click the edges to hold. The parting line moves instead of these.',
+  'ruleFaces:0': 'Click the faces, or one face of the feature you mean.',
   moveFaces: 'Click the faces to move.',
   fullRoundFaces: 'Click the flat face to round away.',
+  fullRoundSides: 'Click the two faces the round has to reach.',
   alignRegion: 'Click the flat region of the mesh to lay down.',
   moveDirection: 'Click an edge, a flat face, or an origin plane.',
   projectDir: 'Click an edge, a flat face, or an origin plane to project along.',
@@ -15683,7 +15974,7 @@ function pickIntoEdit(hit) {
       return true;
     }
     ed.pickInto = null;
-  } else if (ed.pickInto === 'partingEdges') {
+  } else if (ed.pickInto === 'partingEdges' || ed.pickInto === 'fixedEdges') {
     // The edges a parting line draft turns about. Clicking one takes the whole
     // run that carries on from it, the same as a fillet: a parting line round a
     // moulded part is never one edge.
@@ -15691,17 +15982,18 @@ function pickIntoEdit(hit) {
     const record = (state.records || []).find((r) => r.id === hit.bodyId);
     const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
     if (!edge) return true;
-    f.partingEdges = f.partingEdges || [];
+    const into = ed.pickInto === 'fixedEdges' ? 'fixedEdges' : 'partingEdges';
+    f[into] = f[into] || [];
     const run = SEL.tangentEdgeRun(record.topology, [edge.id])
       .map((id) => record.topology.edges.find((e) => e.id === id))
       .filter(Boolean)
       .map((e) => edgeReference(e, record.topology));
     const ref = edgeReference(edge, record.topology);
-    if (f.partingEdges.some((x) => sameEdgeRef(x, ref))) {
-      f.partingEdges = f.partingEdges.filter((x) => !run.some((r) => sameEdgeRef(x, r)));
+    if (f[into].some((x) => sameEdgeRef(x, ref))) {
+      f[into] = f[into].filter((x) => !run.some((r) => sameEdgeRef(x, r)));
     } else {
       for (const r of run) {
-        if (!f.partingEdges.some((x) => sameEdgeRef(x, r))) f.partingEdges.push(r);
+        if (!f[into].some((x) => sameEdgeRef(x, r))) f[into].push(r);
       }
     }
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
@@ -15752,6 +16044,22 @@ function pickIntoEdit(hit) {
       }
     }
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
+  } else if (ed.pickInto === 'fullRoundSides') {
+    // Two, and no more: a full round runs between exactly two faces. A third
+    // click replaces the older of the two rather than being ignored, which is
+    // what makes correcting one of them a click instead of a clear and two.
+    if (hit.kind !== 'face' || hit.faceId === null) return true;
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = record?.topology?.faces[hit.faceId];
+    if (!face) return true;
+    f.sideFaces = f.sideFaces || [];
+    const ref = faceReference(face);
+    const at = f.sideFaces.findIndex((x) => sameFaceRef(x, ref));
+    if (at >= 0) f.sideFaces.splice(at, 1);
+    else {
+      f.sideFaces.push(ref);
+      if (f.sideFaces.length > 2) f.sideFaces.shift();
+    }
   } else if (ed.pickInto === 'fullRoundFaces') {
     if (hit.kind !== 'face' || hit.faceId === null) return true;
     const record = (state.records || []).find((r) => r.id === hit.bodyId);
@@ -16248,6 +16556,7 @@ function commitEdit() {
   hidePullValue();
   state.hoverProfile = null;
   restorePlanes();
+  restoreDialogAnalysis();
   const { preEdit, title, feature } = state.editing;
 
   // A sketch that has been built on gets out of the way, the same as Fusion
@@ -16292,6 +16601,7 @@ function cancelEdit() {
   hidePullValue();
   state.hoverProfile = null;
   restorePlanes();
+  restoreDialogAnalysis();
   const { feature, isNew } = state.editing;
 
   // A joint is added to the document before its dialog opens, so backing out
@@ -19404,7 +19714,8 @@ function cmdSelectPriority(kind) {
     body: 'Bodies only',
     face: 'Faces only',
     edge: 'Edges only',
-    component: 'Components only'
+    component: 'Components only',
+    sketch: 'Sketch geometry only'
   }[kind];
   setStatus(`${said} can be selected now.`);
   updateHints();
@@ -22994,7 +23305,128 @@ function renderParameters() {
   row.appendChild(inn);
 
   body.appendChild(row);
+
+  // Fusion lists the model's own dimensions under the named ones, per feature.
+  renderModelParameters(body);
 }
+
+/**
+ * Fusion's model parameters: every dimension in the model, listed where it
+ * came from.
+ *
+ * The table above it is the parameters somebody named. This is the other half,
+ * and it is the half that is usually wanted: a part is nearly always built from
+ * numbers typed straight into dialogs, and until now the only way back to one
+ * of those was to remember which feature it was in, find it in the timeline and
+ * open it. Here they are all in one place, grouped by the feature that holds
+ * them, and editable in place.
+ *
+ * Only the rows that hold an expression. A dropdown or a tick box is not a
+ * parameter, and a list that carried them would be a list of everything, which
+ * is a list of nothing.
+ */
+function renderModelParameters(body) {
+  const features = (state.doc.features || []).filter((f) => f.type !== 'sketch');
+  const rows = [];
+  for (const feature of features) {
+    let described = null;
+    try {
+      described = describeFeature(feature);
+    } catch {
+      // A feature whose dialog cannot be built is not worth a broken table.
+      continue;
+    }
+    if (!described?.fields) continue;
+    const fields = described.fields.filter(
+      (f) =>
+        (f.type === 'expr' || f.type === undefined) &&
+        f.key &&
+        !f.key.startsWith('__') &&
+        (!f.showIf || f.showIf(feature))
+    );
+    const mine = [];
+    for (const f of fields) {
+      const value = f.get ? f.get(feature) : getPath(feature, f.key);
+      if (value === undefined || value === null || typeof value === 'object') continue;
+      mine.push({
+        feature,
+        field: f,
+        label: typeof f.label === 'function' ? f.label(feature) : f.label,
+        value: String(value)
+      });
+    }
+    if (mine.length) rows.push({ title: described.title || feature.type, items: mine });
+  }
+
+  const head = document.createElement('div');
+  head.className = 'hint';
+  head.style.marginTop = '14px';
+  head.textContent = rows.length
+    ? 'Every dimension in the model, where it was typed. Editing one here is the same as opening its feature.'
+    : 'Nothing in the model holds a dimension yet.';
+  body.appendChild(head);
+  if (!rows.length) return;
+
+  const scope = resolveParameters(state.doc.parameters).scope;
+  const table = document.createElement('table');
+  table.className = 'params modelparams';
+  const tbody = document.createElement('tbody');
+
+  for (const group of rows) {
+    // The component the feature belongs to, so a table in an assembly says
+    // which part each dimension is on rather than listing forty of them flat.
+    const comp = group.items[0].feature.component
+      ? (state.doc.components || []).find((c) => c.id === group.items[0].feature.component)
+      : null;
+    const head2 = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 3;
+    cell.className = 'paramgroup';
+    cell.textContent = comp ? `${comp.name} · ${group.title}` : group.title;
+    head2.appendChild(cell);
+    tbody.appendChild(head2);
+
+    for (const item of group.items) {
+      const tr = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = item.label || item.field.key;
+      tr.appendChild(name);
+
+      const expr = document.createElement('td');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = item.value;
+      const readout = document.createElement('td');
+      readout.className = 'val';
+      const show = () => {
+        try {
+          readout.textContent = round(evaluate(input.value, scope), 3);
+          readout.style.color = '';
+        } catch {
+          readout.textContent = 'error';
+          readout.style.color = 'var(--err)';
+        }
+      };
+      show();
+      input.addEventListener('change', () => {
+        pushUndo('parameter');
+        if (item.field.set) item.field.set(item.feature, input.value);
+        else setPath(item.feature, item.field.key, input.value);
+        state.dirty = true;
+        show();
+        rebuildAll();
+      });
+      expr.appendChild(input);
+      tr.appendChild(expr);
+      tr.appendChild(readout);
+      tbody.appendChild(tr);
+    }
+  }
+
+  table.appendChild(tbody);
+  body.appendChild(table);
+}
+
 
 /**
  * Take `Width = 50` typed into a dimension field and make the parameter.

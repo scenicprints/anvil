@@ -2209,13 +2209,17 @@ export function rebuild(doc, options = {}) {
       return loftLoops(list, ks, { closed: !!feature.closed });
     };
 
-    const outer = build(picked.map((p) => ({ contour: p.outer, plane: p.plane })));
+    const outer = build(
+      picked.map((p) => ({ contour: p.outer, plane: p.plane, degenerate: p.degenerate }))
+    );
     if (!outer) throw new Error('Loft could not be built from those profiles');
 
     let solid = outer;
     const holeCount = Math.min(...picked.map((p) => p.holes.length));
     for (let h = 0; h < holeCount; h++) {
-      const tube = build(picked.map((p) => ({ contour: p.holes[h], plane: p.plane })));
+      const tube = build(
+        picked.map((p) => ({ contour: p.holes[h], plane: p.plane, degenerate: p.degenerate }))
+      );
       if (tube) solid = K.difference(solid, tube, ks);
     }
 
@@ -2477,39 +2481,91 @@ export function rebuild(doc, options = {}) {
       };
     };
 
-    const leans = (which) => ['tangent', 'direction'].includes(feature[which]);
+    /*
+     * Fusion's Point Tangent, which means something only where the section is
+     * a point: the surface arrives at the tip as a dome rather than as a cone.
+     *
+     * A cone's width falls off in a straight line toward the tip, and a dome's
+     * follows a circle, so at a fraction t of the way from the tip a cone is at
+     * t and a dome is at the square root of one minus (1 - t) squared. Near the
+     * tip those are far apart, which is the whole of the difference between a
+     * spike and a nose.
+     *
+     * Two sections rather than one, because the loft between sections is
+     * straight: one gives a blunt cone and two follow the circle closely enough
+     * that a fingertip cannot find the corner.
+     */
+    const domeAt = (tip, near, t) => {
+      const k = Math.sqrt(Math.max(0, 1 - (1 - t) * (1 - t)));
+      const ring = near.contour;
+      let cx = 0;
+      let cy = 0;
+      for (const [u, v] of ring) {
+        cx += u / ring.length;
+        cy += v / ring.length;
+      }
+      return {
+        contour: ring.map(([u, v]) => [cx + (u - cx) * k, cy + (v - cy) * k]),
+        // The neighbour's frame with the origin moved toward the tip: the
+        // contour is written in that frame, so it has to stay in it.
+        plane: {
+          ...near.plane,
+          origin: [
+            tip.plane.origin[0] + (near.plane.origin[0] - tip.plane.origin[0]) * t,
+            tip.plane.origin[1] + (near.plane.origin[1] - tip.plane.origin[1]) * t,
+            tip.plane.origin[2] + (near.plane.origin[2] - tip.plane.origin[2]) * t
+          ]
+        }
+      };
+    };
+
+    const leans = (which) => ['tangent', 'direction', 'smooth'].includes(feature[which]);
     const angleFor = (which, key) =>
       feature[which] === 'direction' ? safeEval(feature[key], scope, 90) : 90;
 
-    if (leans('endCondition')) {
+    if (feature.endCondition === 'pointTangent' && out[out.length - 1].degenerate) {
+      const tip = out[out.length - 1];
+      const near = out[out.length - 2];
+      out.splice(out.length - 1, 0, domeAt(tip, near, 0.45), domeAt(tip, near, 0.15));
+    } else if (leans('endCondition')) {
       const w = Math.max(0.01, Math.min(0.9, safeEval(feature.endWeight, scope, 1) * 0.25));
       const last = out[out.length - 1];
       const prev = out[out.length - 2];
-      out.splice(
-        out.length - 1,
-        0,
+      const at = (d) =>
         shifted(
           last,
           prev,
-          gap(last, prev) * w,
+          gap(last, prev) * w * d,
           angleFor('endCondition', 'endAngle'),
           feature.endTakeoff
-        )
-      );
+        );
+      /*
+       * Fusion's Smooth, which is its curvature continuous end.
+       *
+       * Tangent puts one section a little way off the end, so the surface
+       * leaves in the right direction and then immediately starts bending
+       * toward the next section: the direction is continuous and the curvature
+       * jumps. Two sections in line hold the direction over a run instead, so
+       * the bending starts from nothing, which is what curvature continuity
+       * means and what stops the band of shading a zebra stripe finds.
+       */
+      if (feature.endCondition === 'smooth') out.splice(out.length - 1, 0, at(1.9), at(1));
+      else out.splice(out.length - 1, 0, at(1));
     }
-    if (leans('startCondition')) {
+    if (feature.startCondition === 'pointTangent' && out[0].degenerate) {
+      out.splice(1, 0, domeAt(out[0], out[1], 0.15), domeAt(out[0], out[1], 0.45));
+    } else if (leans('startCondition')) {
       const w = Math.max(0.01, Math.min(0.9, safeEval(feature.startWeight, scope, 1) * 0.25));
-      out.splice(
-        1,
-        0,
+      const at = (d) =>
         shifted(
           out[0],
           out[1],
-          gap(out[0], out[1]) * w,
+          gap(out[0], out[1]) * w * d,
           angleFor('startCondition', 'startAngle'),
           feature.startTakeoff
-        )
-      );
+        );
+      if (feature.startCondition === 'smooth') out.splice(1, 0, at(1), at(1.9));
+      else out.splice(1, 0, at(1));
     }
     return out;
   }
@@ -3535,8 +3591,59 @@ export function rebuild(doc, options = {}) {
         continue;
       }
 
-      const partingEdges = byLine ? resolveEdgeRefs(topo, feature.partingEdges || []) : [];
-      if (byLine && !partingEdges.length) {
+      const partingEdges =
+        byLine && feature.partingTool !== 'curve'
+          ? resolveEdgeRefs(topo, feature.partingEdges || [])
+          : [];
+      /*
+       * Fusion's Fix Parting Line and Move Parting Line.
+       *
+       * Fixed is what this always did: the face leans about the parting line,
+       * so the line is exactly where it was and everything else moves. Moving
+       * is the other way round. The edges named here are what is held, the face
+       * leans about those instead, and the parting line goes wherever the lean
+       * puts it, which is what you want when the line is a feature of the shape
+       * rather than a face of the mould.
+       */
+      /*
+       * Fusion's Parting Tool can be a sketch curve, and that is not the same
+       * as an edge of the part: a moulded shape's split often runs where there
+       * is no edge yet, which is exactly why somebody draws one.
+       *
+       * The curve is not required to lie on the part or even to touch it. What
+       * each face needs is one point to lean about, so the nearest point of the
+       * curve to that face's own plane is taken, preferring the one nearest the
+       * middle of the face where several are equally close.
+       */
+      let partingCurve = null;
+      if (byLine && feature.partingTool === 'curve') {
+        try {
+          partingCurve = curvePoints(feature.partingCurve, doc, scope);
+        } catch (err) {
+          errs.push({ feature: feature.id, message: err.message });
+          continue;
+        }
+        if (!partingCurve || partingCurve.length < 2) {
+          errs.push({
+            feature: feature.id,
+            message: 'Choose the sketch curve the draft should turn about'
+          });
+          continue;
+        }
+      }
+
+      const moveLine = byLine && feature.partingLine === 'move';
+      const heldEdges = moveLine ? resolveEdgeRefs(topo, feature.fixedEdges || []) : [];
+      if (moveLine && !heldEdges.length) {
+        errs.push({
+          feature: feature.id,
+          message: (feature.fixedEdges || []).length
+            ? 'Draft has lost the edges it was told to hold'
+            : 'With the parting line moving, click the edges to hold it by'
+        });
+        continue;
+      }
+      if (byLine && !partingCurve && !partingEdges.length) {
         errs.push({
           feature: feature.id,
           message: (feature.partingEdges || []).length
@@ -3574,7 +3681,71 @@ export function rebuild(doc, options = {}) {
         // A point on the line the face turns about: where it meets the
         // neutral plane, or a point on the parting edge that lies on it.
         let pivot;
-        if (byLine) {
+        // Where the parting line crosses this face, which is what above and
+        // below are measured from even when the lean is about something else.
+        let linePoint = null;
+        if (byLine && partingCurve) {
+          /*
+           * Where the curve crosses this face's plane.
+           *
+           * Along the whole curve, not at its corners. A curve arrives as the
+           * points somebody drew, which for a straight line is two of them, and
+           * the nearer of those two can be a long way off the face: the lean
+           * then turns about a line outside the part and the face grows instead
+           * of leaning. Measured segment by segment, a line that crosses the
+           * plane crosses it exactly.
+           */
+          const off = (q) =>
+            (q[0] - face.centre[0]) * n[0] +
+            (q[1] - face.centre[1]) * n[1] +
+            (q[2] - face.centre[2]) * n[2];
+          const near = (q) =>
+            Math.hypot(q[0] - face.centre[0], q[1] - face.centre[1], q[2] - face.centre[2]);
+
+          let best = null;
+          let bestOff = Infinity;
+          let bestNear = Infinity;
+          const consider = (q) => {
+            const o = Math.abs(off(q));
+            const d2 = near(q);
+            if (o < bestOff - 1e-6 || (o < bestOff + 1e-6 && d2 < bestNear)) {
+              best = q;
+              bestOff = o;
+              bestNear = d2;
+            }
+          };
+          for (let i = 0; i < partingCurve.length; i++) {
+            const q = partingCurve[i];
+            consider(q);
+            const r = partingCurve[i + 1];
+            if (!r) break;
+            const a0 = off(q);
+            const b0 = off(r);
+            if (a0 === b0 || a0 * b0 > 0) continue;
+            const t = a0 / (a0 - b0);
+            consider([
+              q[0] + (r[0] - q[0]) * t,
+              q[1] + (r[1] - q[1]) * t,
+              q[2] + (r[2] - q[2]) * t
+            ]);
+          }
+          linePoint = best ? [...best] : null;
+          pivot = linePoint;
+          // Moving the line holds the named edges instead, whichever kind of
+          // tool said where the line is.
+          if (moveLine) {
+            const id = topo.faces.indexOf(face);
+            const held = heldEdges.filter((e) => e.faceA === id || e.faceB === id);
+            if (!held.length) {
+              errs.push({
+                feature: feature.id,
+                message: 'One of those faces has none of the held edges on it'
+              });
+              continue;
+            }
+            pivot = held[0].refPoint ? [...held[0].refPoint] : null;
+          }
+        } else if (byLine) {
           const id = topo.faces.indexOf(face);
           const mine = partingEdges.filter((e) => e.faceA === id || e.faceB === id);
           const on = mine[0] || null;
@@ -3585,11 +3756,40 @@ export function rebuild(doc, options = {}) {
             });
             continue;
           }
-          pivot = on.refPoint ? [...on.refPoint] : null;
+          linePoint = on.refPoint ? [...on.refPoint] : null;
+          pivot = linePoint;
+          if (moveLine) {
+            const held = heldEdges.filter((e) => e.faceA === id || e.faceB === id);
+            if (!held.length) {
+              errs.push({
+                feature: feature.id,
+                message: 'One of those faces has none of the held edges on it'
+              });
+              continue;
+            }
+            pivot = held[0].refPoint ? [...held[0].refPoint] : null;
+          }
         } else {
           pivot = planeIntersectionPoint(face, neutral, d);
         }
         if (!pivot) continue;
+
+        /*
+         * Fusion's Direction, which only exists on a parting line draft: the
+         * angle above the line, below it, or both. Both is what a rotation
+         * about a line does on its own, since the two sides of a line turn
+         * opposite ways, so it is the one that needs no clipping and the one an
+         * older document reads back as.
+         */
+        let sideClip = null;
+        if (byLine && linePoint && feature.partingDirection && feature.partingDirection !== 'both') {
+          // `halfSpace` keeps what is *behind* the direction it is given, which
+          // is why this looks the wrong way round and is not: above the line
+          // means the far side of a plane facing down it.
+          const way =
+            feature.partingDirection === 'above' ? [-pull[0], -pull[1], -pull[2]] : pull;
+          sideClip = halfSpace(linePoint, way, span, ks);
+        }
 
         const prism = buildFacePrism(mesh, face, span, ks);
         const prismBack = buildFacePrism(mesh, face, -span, ks);
@@ -3620,6 +3820,10 @@ export function rebuild(doc, options = {}) {
           let remove = K.intersection(K.difference(footprint, newSide, ks), solid, ks);
           // Past the old face but inside the new plane: material to put on.
           let addOn = K.intersection(footprint, K.difference(newSide, oldSide, ks), ks);
+          if (sideClip) {
+            remove = K.intersection(remove, sideClip, ks);
+            addOn = K.intersection(addOn, sideClip, ks);
+          }
           if (clip) {
             remove = K.intersection(remove, clip, ks);
             addOn = K.intersection(addOn, clip, ks);
@@ -4832,8 +5036,34 @@ export function rebuild(doc, options = {}) {
     const transforms = patternTransforms(feature, scope);
     if (!transforms.length) return bodies;
 
+    /*
+     * Fusion's Compute Option, and the honest version of it.
+     *
+     * Adjust applies each copy to whatever it lands on, one at a time, which is
+     * what a pattern of holes crossing a step needs and what this has always
+     * done. Identical does the same work in one go: the copies are joined into
+     * a single tool and the part is cut once.
+     *
+     * For a cut or a join those two give the same body, because a difference
+     * from the union of the tools is the same as taking them away one after
+     * another, and one boolean against a heavy part beats forty. For an
+     * intersect they do not, so identical is not offered there: intersecting
+     * with a union keeps what any copy covers, and intersecting one at a time
+     * keeps only what all of them do.
+     */
+    const identical = feature.compute === 'identical';
+
     let current = bodies;
     for (const rec of sources) {
+      if (identical && (rec.op === 'cut' || rec.op === 'join' || rec.op === 'new')) {
+        let all = null;
+        for (const m of transforms) {
+          const moved = K.transform(rec.tool, m.elements, ks);
+          all = all ? K.union(all, moved, ks) : moved;
+        }
+        if (all) current = applyToolTo(current, all, rec.op, feature, ks);
+        continue;
+      }
       for (const m of transforms) {
         const moved = K.transform(rec.tool, m.elements, ks);
         current = applyToolTo(current, moved, rec.op, feature, ks);
@@ -4925,9 +5155,15 @@ export function rebuild(doc, options = {}) {
 
   function doMove(feature, bodies, scope, ks, errs) {
     normalizeMove(feature);
-    const targets = pickBodies(feature, bodies);
+    let targets = pickBodies(feature, bodies);
     if (!targets.length) return bodies;
     if (feature.moveObject === 'faces') return moveFaces(feature, bodies, targets, scope, ks, errs);
+    // Fusion's Components. The same reason align has it: half a part arriving
+    // somewhere new looks right until the assembly is turned round.
+    if (feature.moveObject === 'components') {
+      const comps = new Set(targets.map((b) => b.component).filter((c) => c));
+      if (comps.size) targets = bodies.filter((b) => comps.has(b.component));
+    }
     const m = moveMatrix(feature, scope, targets);
 
     const out = bodies.slice();
@@ -5212,11 +5448,67 @@ export function rebuild(doc, options = {}) {
           }
         }
 
+        /*
+         * Fusion's other two ways of saying which edges: a face, meaning every
+         * edge round it, and a feature, meaning every edge of everything that
+         * feature made.
+         *
+         * A face knows which feature made it, so a feature's edges can be found
+         * by asking rather than by remembering: pick any face of the boss and
+         * its foot, its rim and its flank are all in the set. That is what
+         * makes it survive an edit. Naming the edges instead means naming them
+         * again every time the boss moves.
+         */
+        let scoped = null;
+        const pickKind = set.pickKind || 'edges';
+        if (!set.all && pickKind !== 'edges') {
+          const chosen = resolveFaceRefs(topo, set.ruleFaces || []);
+          if (!chosen.length) {
+            errs.push({
+              feature: feature.id,
+              message:
+                pickKind === 'faces'
+                  ? `Click the faces to ${kind} round`
+                  : `Click a face of the feature to ${kind}`
+            });
+            continue;
+          }
+          let ids;
+          if (pickKind === 'faces') {
+            ids = new Set(chosen.map((f) => topo.faces.indexOf(f)));
+          } else {
+            const tags = new Set(chosen.map((f) => f.src?.tag).filter((t) => t !== undefined));
+            ids = new Set();
+            topo.faces.forEach((f, i) => {
+              if (f.src && tags.has(f.src.tag)) ids.add(i);
+            });
+            if (!ids.size) {
+              errs.push({
+                feature: feature.id,
+                message: 'Those faces do not say which feature made them, so there is no feature to take'
+              });
+              continue;
+            }
+          }
+          // Either side, so the boundary between what was picked and the rest
+          // is in: the foot of a boss is exactly such an edge.
+          scoped = topo.edges.filter((e) => ids.has(e.faceA) || ids.has(e.faceB));
+          if (!scoped.length) {
+            errs.push({
+              feature: feature.id,
+              message: `Nothing round those faces could be ${kind === 'fillet' ? 'filleted' : 'chamfered'}`
+            });
+            continue;
+          }
+        }
+
         const edges = ruled
           ? ruled
-          : set.all
-            ? topo.edges.filter(kind0)
-            : resolveEdgeRefs(topo, set.edges || []);
+          : scoped
+            ? scoped
+            : set.all
+              ? topo.edges.filter(kind0)
+              : resolveEdgeRefs(topo, set.edges || []);
         if (!edges.length) continue;
 
         const type = kind === 'fillet' ? set.filletType || 'constant' : 'constant';
@@ -5282,7 +5574,12 @@ export function rebuild(doc, options = {}) {
         // Which of the two it is matters. Nothing picked is an unfinished
         // dialog; edges picked that the radius will not fit on is a real
         // problem with a real answer, which is a smaller radius.
-        const nonePicked = feature.sets.every((set) => !set.all && !set.edges?.length);
+        const nonePicked = feature.sets.every(
+          (set) =>
+            !set.all &&
+            !set.edges?.length &&
+            !((set.pickKind || 'edges') !== 'edges' && set.ruleFaces?.length)
+        );
         errs.push({
           feature: feature.id,
           message: nonePicked
@@ -5495,8 +5792,30 @@ export function rebuild(doc, options = {}) {
           errs.push({ feature: feature.id, message: 'That face has no two sides to round between' });
           continue;
         }
-        const [e1, e2] = mine;
         const sideOf = (e) => topo.faces[e.faceA === id ? e.faceB : e.faceA];
+
+        /*
+         * Fusion asks for the centre face and both sides. The sides are found
+         * here instead, from the two longest edges, which is right on the strip
+         * a full round is for and wrong on a face whose long edges are its
+         * ends. So they can be named as well, and naming them wins.
+         */
+        let e1 = mine[0];
+        let e2 = mine[1];
+        if ((feature.sideFaces || []).length === 2) {
+          const named = resolveFaceRefs(topo, feature.sideFaces);
+          const wanted = new Set(named.map((f) => topo.faces.indexOf(f)));
+          const across = mine.filter((e) => wanted.has(topo.faces.indexOf(sideOf(e))));
+          if (across.length < 2) {
+            errs.push({
+              feature: feature.id,
+              message: 'Those two faces are not across this one from each other'
+            });
+            continue;
+          }
+          e1 = across[0];
+          e2 = across[1];
+        }
         const s1 = sideOf(e1);
         const s2 = sideOf(e2);
         if (!s1?.planar || !s2?.planar) {
@@ -6086,8 +6405,21 @@ export function rebuild(doc, options = {}) {
    * Modify rather than in Assemble.
    */
   function doAlign(feature, bodies, scope, ks, errs) {
-    const targets = pickBodies(feature, bodies);
+    let targets = pickBodies(feature, bodies);
     if (!targets.length) return bodies;
+
+    /*
+     * Fusion's Object: Bodies or Components.
+     *
+     * A component aligned by one of its bodies has to move all of them, or the
+     * thing that was aligned arrives on the face and the rest of the part stays
+     * behind. Which is worse than not moving at all: it looks like it worked
+     * until the assembly is turned round.
+     */
+    if (feature.object === 'component') {
+      const comps = new Set(targets.map((b) => b.component).filter((c) => c));
+      if (comps.size) targets = bodies.filter((b) => comps.has(b.component));
+    }
 
     const from = alignFrame(feature.from);
     const to = alignFrame(feature.to);
@@ -6395,6 +6727,57 @@ export function rebuild(doc, options = {}) {
         continue;
       }
 
+      /*
+       * Splitting the faces needs no plane and no boolean at all.
+       *
+       * The silhouette is exactly where the surface stops facing the pull
+       * direction and starts facing away from it, so which side a triangle
+       * belongs to is a question about that triangle alone. Labelling them is
+       * the whole operation, and it works whatever shape the parting line is,
+       * where fitting a plane to it only ever worked when it was flat. A
+       * moulded part's parting line is hardly ever flat.
+       *
+       * The label carries the ordinary angular grouping as well as the side, so
+       * the faces the part already had survive and only the ones that straddle
+       * the silhouette are divided. A label on its own says "these triangles
+       * are one face and nothing else joins them", which would have welded
+       * every upward face on the part into a single one.
+       */
+      if (feature.operation === 'faces') {
+        const mesh = K.meshData(b.solid);
+        const count = mesh.triVerts.length / 3;
+        const stride = mesh.numProp;
+        const pos = mesh.vertProperties;
+        const faceOf = new Int32Array(count);
+        try {
+          const byAngle = buildTopology(mesh, topologyOptions(b));
+          byAngle.faces.forEach((f, i) => {
+            for (const t of f.tris) faceOf[t] = i;
+          });
+        } catch {
+          // A body whose faces cannot be grouped still parts into two sides.
+        }
+        const labels = new Int32Array(count);
+        for (let t = 0; t < count; t++) {
+          const a0 = mesh.triVerts[t * 3] * stride;
+          const b0 = mesh.triVerts[t * 3 + 1] * stride;
+          const c0 = mesh.triVerts[t * 3 + 2] * stride;
+          const ux = pos[b0] - pos[a0];
+          const uy = pos[b0 + 1] - pos[a0 + 1];
+          const uz = pos[b0 + 2] - pos[a0 + 2];
+          const vx = pos[c0] - pos[a0];
+          const vy = pos[c0 + 1] - pos[a0 + 1];
+          const vz = pos[c0 + 2] - pos[a0 + 2];
+          const nx = uy * vz - uz * vy;
+          const ny = uz * vx - ux * vz;
+          const nz = ux * vy - uy * vx;
+          const facing = nx * dir[0] + ny * dir[1] + nz * dir[2] >= 0 ? 1 : 0;
+          labels[t] = faceOf[t] * 2 + facing;
+        }
+        out.push({ ...b, groupLabels: labels });
+        continue;
+      }
+
       const pts = silhouettePoints(b, dir);
       if (pts.length < 3) {
         errs.push({ feature: feature.id, message: 'No silhouette in that direction' });
@@ -6423,19 +6806,6 @@ export function rebuild(doc, options = {}) {
         out.push(b);
         continue;
       }
-      // Fusion's Split Faces Only: the part stays one body and only its faces
-      // are parted at the silhouette. Each half is marked as its own geometry
-      // before they go back together, so the faces either side of the seam
-      // carry different names and are not welded into one again. It is the
-      // same trick Split Face uses, which is what makes a draft or a press
-      // pull able to take one side of a moulded part.
-      if (feature.operation === 'faces') {
-        const nearSide = K.tagOriginal(keep, `${feature.id}:near`, ks);
-        const farSide = K.tagOriginal(rest, `${feature.id}:far`, ks);
-        out.push({ ...b, solid: K.union(nearSide, farSide, ks) });
-        continue;
-      }
-
       out.push({ ...b, solid: keep });
       out.push({
         id: `${feature.id}:${out.length}`,

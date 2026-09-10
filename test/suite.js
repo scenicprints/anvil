@@ -1320,6 +1320,70 @@ async function run() {
     res.dispose();
   });
 
+  test('chamfer: a face means the edges round it, a feature means all of its own', () => {
+    /*
+     * Fusion's Edges, Faces and Features, and the point of the last two is that
+     * they survive an edit. A list of edges is a list of names that a change
+     * upstream can invalidate; a face knows which feature made it, so "every
+     * edge of that boss" can be asked rather than remembered.
+     *
+     * Checked by equivalence, which is the only honest way: naming the faces
+     * has to give exactly the body that naming their edges by hand gives.
+     */
+    const boxDoc = () => {
+      const d = newDocument();
+      d.features = [prim('box', { width: '40', depth: '30', height: '20' })];
+      return d;
+    };
+    let res = rebuild(boxDoc());
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = topo.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    assert(top, 'the box has a top');
+    const topId = topo.faces.indexOf(top);
+    const roundTheTop = topo.edges
+      .filter((e) => e.faceA === topId || e.faceB === topId)
+      .map((e) => edgeReference(e, topo));
+    assert(roundTheTop.length === 4, `four edges round the top, got ${roundTheTop.length}`);
+    const topRef = faceReference(top);
+    res.dispose();
+
+    const volumeOf = (set) => {
+      const doc = boxDoc();
+      doc.features.push({ id: uid('f'), type: 'chamfer', bodies: 'all', sets: [set] });
+      const r = rebuild(doc);
+      assert(r.errors.length === 0, JSON.stringify(r.errors));
+      const v = r.bodies[0].solid.volume();
+      r.dispose();
+      return v;
+    };
+
+    const byEdges = volumeOf({ radius: '3', edges: roundTheTop });
+    const byFace = volumeOf({ radius: '3', pickKind: 'faces', ruleFaces: [topRef] });
+    assert(byEdges < 24000, 'the chamfer took something off');
+    near(byFace, byEdges, 1e-6, 'a face is exactly the edges round it');
+
+    // A box is one feature, so any face of it stands for every edge it has.
+    const byFeature = volumeOf({ radius: '3', pickKind: 'feature', ruleFaces: [topRef] });
+    const everyEdge = volumeOf({ radius: '3', all: true, ruleKind: 'both' });
+    near(byFeature, everyEdge, 1e-6, 'a feature is every edge it made');
+    assert(byFeature < byFace, 'and that is more than the top alone');
+
+    // Asking for faces and naming none is a question rather than a shrug.
+    const doc = boxDoc();
+    doc.features.push({
+      id: uid('f'),
+      type: 'chamfer',
+      bodies: 'all',
+      sets: [{ radius: '3', pickKind: 'faces', ruleFaces: [] }]
+    });
+    const out = rebuild(doc);
+    assert(
+      out.errors.some((e) => /faces to chamfer round/.test(e.message)),
+      `expected a word about picking faces, got ${JSON.stringify(out.errors)}`
+    );
+    out.dispose();
+  });
+
   test('shell: hollows a box to an even wall', () => {
     const doc = newDocument();
     doc.features = [
@@ -2267,6 +2331,215 @@ async function run() {
     out.dispose();
   });
 
+  test('draft: the parting line can move, held by edges you name instead', () => {
+    /*
+     * Fusion's other parting line type, and the two are opposites.
+     *
+     * Fixed holds the line and everything else moves, which is the test above:
+     * the top rim keeps its size and the bottom leans in. Moving holds the
+     * edges named instead and lets the line go wherever the lean puts it, so
+     * the same draft about the same rim, held at the bottom, keeps the *bottom*
+     * and moves the rim.
+     */
+    const plainBox = () => {
+      const d = newDocument();
+      d.features.push(prim('box', { width: '40', depth: '40', height: '20', centered: true }));
+      return d;
+    };
+    const doc = plainBox();
+    let res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const faces = topo.faces
+      .filter((f) => f.planar && Math.abs(f.normal[2]) < 0.01)
+      .map(faceReference);
+    const ringAt = (z) =>
+      topo.edges
+        .filter((e) => e.kind === 'line' && Math.abs(e.refPoint[2] - z) < 0.01)
+        .map((e) => edgeReference(e, topo));
+    const rim = ringAt(10);
+    const foot = ringAt(-10);
+    assert(rim.length === 4 && foot.length === 4, 'a rim at each end');
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'draft',
+      bodies: 'all',
+      faces,
+      angle: '6',
+      neutral: 'XY',
+      partingType: 'line',
+      partingEdges: rim,
+      partingLine: 'move',
+      fixedEdges: foot
+    });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+
+    const after = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = after.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    const bottom = after.faces.find((f) => f.planar && f.normal[2] < -0.99);
+    assert(top && bottom, 'the box still has a top and a bottom');
+    near(bottom.area, 40 * 40, 1, 'the held end kept its size');
+    assert(
+      Math.abs(top.area - 40 * 40) > 100,
+      `and the parting line moved: ${top.area.toFixed(0)} against ${40 * 40}`
+    );
+    res.dispose();
+
+    // Moving the line with nothing to hold it by is a question, not a shrug.
+    const held = plainBox();
+    held.features.push({
+      id: uid('f'),
+      type: 'draft',
+      bodies: 'all',
+      faces,
+      angle: '6',
+      neutral: 'XY',
+      partingType: 'line',
+      partingEdges: rim,
+      partingLine: 'move',
+      fixedEdges: []
+    });
+    const out = rebuild(held);
+    assert(
+      out.errors.some((e) => /edges to hold/.test(e.message)),
+      `expected a word about holding edges, got ${JSON.stringify(out.errors)}`
+    );
+    out.dispose();
+  });
+
+  test('draft: a parting line draft can lean one side of the line only', () => {
+    /*
+     * Fusion's Direction, which exists on a parting line draft and nowhere
+     * else. A turn about a line moves the two sides of it opposite ways, so
+     * both is what the turn does on its own and is what a draft made before
+     * this setting existed has to keep doing.
+     *
+     * On a box drafted about its own top rim the whole wall is below the line,
+     * which makes the check exact: below is the whole of it, and above is
+     * nothing at all.
+     */
+    const plainBox = () => {
+      const d = newDocument();
+      d.features.push(prim('box', { width: '40', depth: '40', height: '20', centered: true }));
+      return d;
+    };
+    let res = rebuild(plainBox());
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const faces = topo.faces
+      .filter((f) => f.planar && Math.abs(f.normal[2]) < 0.01)
+      .map(faceReference);
+    const rim = topo.edges
+      .filter((e) => e.kind === 'line' && Math.abs(e.refPoint[2] - 10) < 0.01)
+      .map((e) => edgeReference(e, topo));
+    const plain = res.bodies[0].solid.volume();
+    res.dispose();
+
+    const volumeWith = (partingDirection) => {
+      const doc = plainBox();
+      doc.features.push({
+        id: uid('f'),
+        type: 'draft',
+        bodies: 'all',
+        faces,
+        angle: '6',
+        neutral: 'XY',
+        partingType: 'line',
+        partingEdges: rim,
+        partingDirection
+      });
+      const r = rebuild(doc);
+      assert(r.errors.length === 0, JSON.stringify(r.errors));
+      const v = r.bodies[0].solid.volume();
+      r.dispose();
+      return v;
+    };
+
+    const both = volumeWith('both');
+    assert(Math.abs(both - plain) > 100, 'both leans the wall');
+    near(volumeWith('below'), both, 1, 'and the whole wall is below the line');
+    near(volumeWith('above'), plain, 1, 'so above the line there is nothing to lean');
+  });
+
+  test('draft: the parting line can be a sketch curve rather than an edge', () => {
+    /*
+     * Fusion's Parting Tool takes a sketch curve as well as an edge, and the
+     * difference matters: a moulded shape's split usually runs where there is
+     * no edge yet, which is exactly why somebody draws one.
+     *
+     * A line drawn on the XY plane, through the middle of a box that straddles
+     * it, holds the box at its own height: the top flares one way and the
+     * bottom the other, which is what a turn about a line through the middle
+     * does and what a parting line on a moulded part looks like.
+     */
+    const doc = newDocument();
+    const line = openSketch('XY', [[-40, -40], [40, 40]], 'Split');
+    doc.sketches[line.id] = line;
+    doc.features = [
+      prim('box', { width: '40', depth: '40', height: '20', centered: true }),
+      { id: uid('f'), type: 'sketch', sketch: line.id }
+    ];
+    let res = rebuild(doc);
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const faces = topo.faces
+      .filter((f) => f.planar && Math.abs(f.normal[2]) < 0.01)
+      .map(faceReference);
+    assert(faces.length === 4, `four walls, got ${faces.length}`);
+    const plain = res.bodies[0].solid.volume();
+    res.dispose();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'draft',
+      bodies: 'all',
+      faces,
+      angle: '6',
+      neutral: 'XY',
+      partingType: 'line',
+      partingTool: 'curve',
+      partingCurve: { sketch: line.id }
+    });
+    res = rebuild(doc);
+    assert(res.errors.length === 0, JSON.stringify(res.errors));
+
+    const after = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = after.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    const bottom = after.faces.find((f) => f.planar && f.normal[2] < -0.99);
+    assert(top && bottom, 'it still has a top and a bottom');
+    const square = 40 * 40;
+    assert(
+      (top.area - square) * (bottom.area - square) < 0,
+      `one end grew and the other shrank: ${top.area.toFixed(0)} and ${bottom.area.toFixed(0)}`
+    );
+    // Turning about the middle takes as much off one end as it puts on the
+    // other, so the part weighs very nearly what it did.
+    near(res.bodies[0].solid.volume(), plain, plain * 0.02, 'and it holds its size in the middle');
+    res.dispose();
+
+    // A curve tool with no curve named is a question rather than a shrug.
+    const empty = newDocument();
+    empty.features = [
+      prim('box', { width: '40', depth: '40', height: '20', centered: true }),
+      {
+        id: uid('f'),
+        type: 'draft',
+        bodies: 'all',
+        faces,
+        angle: '6',
+        neutral: 'XY',
+        partingType: 'line',
+        partingTool: 'curve'
+      }
+    ];
+    const out = rebuild(empty);
+    assert(
+      out.errors.some((e) => /sketch curve/.test(e.message)),
+      `expected a word about the curve, got ${JSON.stringify(out.errors)}`
+    );
+    out.dispose();
+  });
+
   test('draft: two sides may lean by different amounts', () => {
     // A box drafted about a plane through its middle. Symmetric leans the same
     // amount each way; two sides takes an angle each, which is what a part with
@@ -2697,6 +2970,65 @@ async function run() {
     const boreArea = 0.5 * seg * 4 * Math.sin((2 * Math.PI) / seg);
     near(props.volume, 60 * 20 * 5 - 4 * boreArea * 5, 0.5, 'plate volume with four holes');
     res.dispose();
+  });
+
+  test('pattern: applying the copies all at once gives the same part', () => {
+    /*
+     * Fusion's Compute Option. Adjust applies each copy to what it lands on,
+     * one at a time; identical joins the copies into one tool and cuts once,
+     * which on a heavy part is the difference between forty booleans and one.
+     *
+     * For a cut they have to agree exactly, and that is the whole claim: taking
+     * the union of the tools away is the same as taking them away one after
+     * another. If it were not, the faster one would be quietly wrong.
+     */
+    const plateWith = (compute) => {
+      const doc = newDocument();
+      const holes = newSketch('XY', 'Hole');
+      holes.points = [{ x: -12, y: 0 }];
+      holes.entities = [{ id: 1, type: 'point', p: 0 }];
+      holes.nextEntityId = 2;
+      doc.sketches[holes.id] = holes;
+      const holeFeature = {
+        id: uid('f'),
+        type: 'hole',
+        sketch: holes.id,
+        points: [0],
+        diameter: '4',
+        through: true,
+        counterbore: false,
+        countersink: false
+      };
+      doc.features = [
+        prim('box', { width: '60', depth: '20', height: '5' }),
+        { id: uid('f'), type: 'sketch', sketch: holes.id },
+        holeFeature,
+        {
+          id: uid('f'),
+          type: 'patternFeature',
+          features: [holeFeature.id],
+          pattern: 'rectangular',
+          count1: '4',
+          spacing1: '8',
+          count2: '1',
+          spacing2: '0',
+          dir1: [1, 0, 0],
+          dir2: [0, 1, 0],
+          compute
+        }
+      ];
+      const res = rebuild(doc);
+      assert(res.errors.length === 0, `errors: ${JSON.stringify(res.errors)}`);
+      const props = K.properties(res.bodies[0].solid);
+      res.dispose();
+      return props;
+    };
+
+    const one = plateWith('adjust');
+    const all = plateWith('identical');
+    assert(one.genus === 4, `four holes one at a time, genus ${one.genus}`);
+    assert(all.genus === 4, `and four holes all at once, genus ${all.genus}`);
+    near(all.volume, one.volume, 1e-6, 'the same part either way');
   });
 
   /* -------- assemblies -------- */
@@ -3801,6 +4133,71 @@ async function run() {
     assert(held > plain, `tangent should hold its size longer: ${held} against ${plain}`);
   });
 
+  test('loft: point tangent brings it to a dome rather than a spike', () => {
+    /*
+     * Fusion's Point Tangent, and it means something only where the section is
+     * a point. A cone's width falls away in a straight line toward the tip and
+     * a dome's follows a circle, which near the tip are far apart: the same
+     * base and the same height, and two thirds of the box against one third.
+     *
+     * On a printed part that is the difference between a nose and a spike, and
+     * a spike is a support and a stringy first layer at the top.
+     */
+    const withTip = (extra) => {
+      const { doc, top } = loftDoc(10, extra);
+      top.points = [{ x: 0, y: 0 }];
+      top.entities = [{ id: 1, type: 'point', p: 0 }];
+      top.nextEntityId = 2;
+      const f = doc.features[doc.features.length - 1];
+      f.sections[1] = { sketch: top.id, point: 0 };
+      const res = rebuild(doc);
+      assert(res.bodies.length === 1, `expected one body: ${JSON.stringify(res.errors)}`);
+      const v = res.bodies[0].solid.volume();
+      const box = K.boundingBox(res.bodies[0].solid);
+      res.dispose();
+      return { v, top: box.max[2] };
+    };
+
+    const cone = withTip({});
+    near(cone.v, (20 * 20 * 30) / 3, 40, 'a pyramid, as before');
+
+    const dome = withTip({ endCondition: 'pointTangent' });
+    assert(
+      dome.v > cone.v * 1.4,
+      `a dome carries far more than a pyramid: ${dome.v.toFixed(0)} against ${cone.v.toFixed(0)}`
+    );
+    // And it still ends where it was told to. A dome that overshot the point
+    // would be a different part, not a rounded one.
+    near(dome.top, 30, 0.6, 'the tip is still where the point is');
+  });
+
+  test('loft: a smooth end holds its direction longer than a tangent one', () => {
+    /*
+     * Fusion's Smooth is its curvature continuous end. Tangent leaves in the
+     * right direction and then immediately starts bending toward the next
+     * section, so the direction is continuous and the curvature jumps. Smooth
+     * holds the direction over a run, so the bending starts from nothing.
+     *
+     * Measured as volume, which is the blunt way to see it: holding the
+     * section's size for longer leaves more material behind.
+     */
+    const volume = (extra) => {
+      const res = rebuild(loftDoc(10, extra).doc);
+      assert(res.bodies.length === 1, `expected one body: ${JSON.stringify(res.errors)}`);
+      const v = res.bodies[0].solid.volume();
+      res.dispose();
+      return v;
+    };
+    const plain = volume({});
+    const tangent = volume({ startCondition: 'tangent', startWeight: '1' });
+    const smooth = volume({ startCondition: 'smooth', startWeight: '1' });
+    assert(tangent > plain, `tangent holds its size: ${tangent} against ${plain}`);
+    assert(
+      smooth > tangent,
+      `and smooth holds it longer still: ${smooth} against ${tangent}`
+    );
+  });
+
   test('loft: a takeoff angle of ninety is exactly the tangent case', () => {
     // Fusion measures the takeoff angle from the section's own plane, so
     // ninety degrees is straight out of it, which is what tangent already
@@ -4560,6 +4957,78 @@ async function run() {
     assert(!flatOnTop, 'the flat is gone entirely');
     near(K.boundingBox(res.bodies[0].solid).max[2], 10, 0.05, 'and the height is unchanged');
     res.dispose();
+  });
+
+  test('full round: the two sides can be named where the guess is wrong', () => {
+    /*
+     * The sides are found from the face's two longest edges, which is right on
+     * the strip a full round is for and wrong on a face whose longest edges are
+     * its ends. Naming them is Fusion's Side 1 and Side 2, and naming wins.
+     *
+     * On a 40 by 30 top the guess rounds across the 30, giving a radius of 15.
+     * Naming the other pair rounds across the 40 for a radius of 20, and the
+     * two take away plainly different amounts.
+     */
+    const barDoc = () => {
+      const d = newDocument();
+      d.features.push({
+        id: uid('f'),
+        type: 'primitive',
+        shape: 'box',
+        params: { width: '40', depth: '30', height: '40', centered: true },
+        op: 'new'
+      });
+      return d;
+    };
+    let res = rebuild(barDoc());
+    const topo = buildTopology(K.meshData(res.bodies[0].solid));
+    const top = topo.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    const across = topo.faces
+      .filter((f) => f.planar && Math.abs(f.normal[0]) > 0.99)
+      .map(faceReference);
+    assert(top && across.length === 2, 'a top and the two faces 40 apart');
+    const topRef = faceReference(top);
+    res.dispose();
+
+    const volumeOf = (extra) => {
+      const doc = barDoc();
+      doc.features.push({ id: uid('f'), type: 'fullRound', bodies: 'all', faces: [topRef], ...extra });
+      const r = rebuild(doc);
+      assert(r.errors.length === 0, JSON.stringify(r.errors));
+      const v = r.bodies[0].solid.volume();
+      r.dispose();
+      return v;
+    };
+
+    const box = 40 * 30 * 40;
+    // Across the 30: a slab 15 deep off the top, less half a cylinder of 15.
+    const guessed = box - 40 * 15 * 30 + (Math.PI * 225 * 40) / 2;
+    near(volumeOf({}), guessed, guessed * 0.01, 'the guess rounds across the short way');
+    // Across the 40: a slab 20 deep, less half a cylinder of 20.
+    const named = box - 30 * 20 * 40 + (Math.PI * 400 * 30) / 2;
+    near(
+      volumeOf({ sideFaces: across }),
+      named,
+      named * 0.01,
+      'and naming the other pair rounds the other way'
+    );
+
+    // Two faces that are not across this one from each other is a refusal with
+    // the reason, not a silent fall back to the guess.
+    const doc = barDoc();
+    doc.features.push({
+      id: uid('f'),
+      type: 'fullRound',
+      bodies: 'all',
+      faces: [topRef],
+      sideFaces: [topRef, across[0]]
+    });
+    const out = rebuild(doc);
+    assert(
+      out.errors.some((e) => /across this one/.test(e.message)),
+      `expected a word about the sides, got ${JSON.stringify(out.errors)}`
+    );
+    out.dispose();
   });
 
   test('full round: faces it cannot round are refused with the reason', () => {
@@ -6079,6 +6548,60 @@ async function run() {
     near(moved.solid.volume(), 1000, 1e-3, 'align moves, it does not resize');
   });
 
+  test('align: a component moves all of itself, not just the body picked', () => {
+    /*
+     * Fusion's Object row. One body of a part arriving on the face while the
+     * rest of the part stays where it was is worse than nothing happening: it
+     * looks right until the assembly is turned round.
+     */
+    const doc = newDocument();
+    doc.components = [{ id: 'c1', name: 'Bracket' }];
+    doc.features = [
+      prim('box', { width: '20', depth: '20', height: '20', centered: false, x: '0', y: '0', z: '0' }),
+      prim('box', { width: '10', depth: '10', height: '10', centered: false, x: '60', y: '0', z: '0' }),
+      prim('box', { width: '4', depth: '4', height: '4', centered: false, x: '60', y: '20', z: '0' })
+    ];
+    doc.features[1].op = 'new';
+    doc.features[2].op = 'new';
+    doc.features[1].component = 'c1';
+    doc.features[2].component = 'c1';
+
+    const before = rebuild(doc);
+    assert(before.bodies.length === 3, `three bodies to start, got ${before.bodies.length}`);
+    const topoA = buildTopology(K.meshData(before.bodies[0].solid));
+    const topoB = buildTopology(K.meshData(before.bodies[1].solid));
+    const topOfA = topoA.faces.find((f) => f.planar && f.normal[2] > 0.99);
+    const bottomOfB = topoB.faces.find((f) => f.planar && f.normal[2] < -0.99);
+    const tagAlong = before.bodies[2].solid.boundingBox();
+
+    doc.features.push({
+      id: uid('f'),
+      type: 'align',
+      bodies: [before.bodies[1].id],
+      object: 'component',
+      from: { bodyId: before.bodies[1].id, face: faceReference(bottomOfB) },
+      to: { bodyId: before.bodies[0].id, face: faceReference(topOfA) },
+      flip: false,
+      angle: '0'
+    });
+    const out = rebuild(doc);
+    const moved = out.bodies.find((b) => b.id === before.bodies[1].id);
+    const other = out.bodies.find((b) => b.id === before.bodies[2].id);
+    near(moved.solid.boundingBox().min[2], 20, 1e-3, 'the body picked lands on the face');
+
+    // And the other body of the same component moved by exactly the same
+    // amount, which is what makes it one part rather than two.
+    const now = other.solid.boundingBox();
+    near(
+      now.min[0] - tagAlong.min[0],
+      moved.solid.boundingBox().min[0] - 60,
+      1e-3,
+      'the rest of the component came with it'
+    );
+    near(now.min[2] - tagAlong.min[2], 20, 1e-3, 'by the same amount in Z');
+    near(other.solid.volume(), 64, 1e-3, 'and nothing was resized');
+  });
+
   test('delete face: a through bore is filled back in', () => {
     const doc = newDocument();
     const plate = rectSketch(40, 40);
@@ -6203,6 +6726,92 @@ async function run() {
     // than cutting somewhere arbitrary.
     assert(out.bodies.length === 1, `left alone, got ${out.bodies.length} bodies`);
     assert(out.errors.length > 0, 'and reported why');
+  });
+
+  test('silhouette split: faces part at a parting line that is not flat', () => {
+    /*
+     * The gap this closes, and it is the shape a moulded part actually has: a
+     * parting line hardly ever lies in a plane.
+     *
+     * Splitting the part into two bodies needs a tool to cut with, and a
+     * non-planar cut has none, so that still says so. Splitting the faces needs
+     * neither a plane nor a boolean: the silhouette is exactly where the
+     * surface stops facing the pull direction, so which side a triangle is on
+     * is a question about that triangle alone.
+     */
+    const twoBalls = () => {
+      const d = newDocument();
+      d.features.push(prim('sphere', { diameter: '30', centered: true, x: '0', y: '0', z: '0' }));
+      const second = prim('sphere', { diameter: '20', centered: true, x: '18', y: '0', z: '8' });
+      second.op = 'join';
+      d.features.push(second);
+      return d;
+    };
+
+    // Two balls at different heights: each has its own equator, and the two are
+    // not in one plane.
+    const asBodies = twoBalls();
+    asBodies.features.push({
+      id: uid('f'),
+      type: 'silhouetteSplit',
+      direction: { plane: 'XY' },
+      bodies: 'all'
+    });
+    const refused = rebuild(asBodies);
+    assert(
+      refused.errors.some((e) => /not flat/.test(e.message)),
+      `the line really is not flat: ${JSON.stringify(refused.errors)}`
+    );
+    refused.dispose();
+
+    const plainCount = (() => {
+      const r = rebuild(twoBalls());
+      const n = buildTopology(K.meshData(r.bodies[0].solid), topologyOptions(r.bodies[0])).faces
+        .length;
+      r.dispose();
+      return n;
+    })();
+
+    const doc = twoBalls();
+    doc.features.push({
+      id: uid('f'),
+      type: 'silhouetteSplit',
+      direction: { plane: 'XY' },
+      operation: 'faces',
+      bodies: 'all'
+    });
+    const out = rebuild(doc);
+    assert(out.errors.length === 0, JSON.stringify(out.errors));
+    assert(out.bodies.length === 1, `still one body, got ${out.bodies.length}`);
+    const topo = buildTopology(K.meshData(out.bodies[0].solid), topologyOptions(out.bodies[0]));
+    assert(
+      topo.faces.length > plainCount,
+      `the surface is parted: ${topo.faces.length} faces against ${plainCount}`
+    );
+
+    // And every face is wholly on one side of the line, which is what makes the
+    // halves usable: a draft applied to one of them cannot reach the other.
+    const mesh = K.meshData(out.bodies[0].solid);
+    for (const face of topo.faces) {
+      let up = 0;
+      let down = 0;
+      for (const t of face.tris) {
+        const i = mesh.triVerts[t * 3] * mesh.numProp;
+        const j = mesh.triVerts[t * 3 + 1] * mesh.numProp;
+        const k = mesh.triVerts[t * 3 + 2] * mesh.numProp;
+        const p = mesh.vertProperties;
+        const ux = p[j] - p[i];
+        const uy = p[j + 1] - p[i + 1];
+        const uz = p[j + 2] - p[i + 2];
+        const vx = p[k] - p[i];
+        const vy = p[k + 1] - p[i + 1];
+        const vz = p[k + 2] - p[i + 2];
+        if (ux * vy - uy * vx >= 0) up++;
+        else down++;
+      }
+      assert(!up || !down, 'no face straddles the parting line');
+    }
+    out.dispose();
   });
 
   test('references: a cylindrical face can be matched back at all', () => {
