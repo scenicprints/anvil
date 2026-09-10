@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.78.0**. 583 tests in the window, plus 55 checks of the
+Current version: **2.79.0**. 609 tests in the window, plus 55 checks of the
 library, profiles and the version counter in plain node.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,

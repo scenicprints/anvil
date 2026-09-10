@@ -182,12 +182,20 @@ export function weldPoints(points, tris, tol = 1e-6) {
     }
   }
   const kept = [];
-  for (const [a, b, c] of tris) {
+  // Which triangle of the mesh as it arrived each kept one was. Dropping a
+  // degenerate triangle shifts every index after it, and the faces a texture
+  // was told to go on are numbered against the mesh as it arrived, so without
+  // this the texture lands on the wrong faces on any mesh that had one.
+  const from = [];
+  tris.forEach(([a, b, c], i) => {
     const t = [map[a], map[b], map[c]];
     // A triangle whose corners welded together had no area to begin with.
-    if (t[0] !== t[1] && t[1] !== t[2] && t[0] !== t[2]) kept.push(t);
-  }
-  return { points: out, tris: kept };
+    if (t[0] !== t[1] && t[1] !== t[2] && t[0] !== t[2]) {
+      kept.push(t);
+      from.push(i);
+    }
+  });
+  return { points: out, tris: kept, from };
 }
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);

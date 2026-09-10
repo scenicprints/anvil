@@ -1021,6 +1021,84 @@ table.params .starbtn:hover {
   border-top: 1px solid var(--line);
 }
 
+/* ---------------- making a texture out of a picture ---------------- */
+
+/* Wider than the other modals, because the whole point is the two pictures
+   side by side: the one that was opened and the surface it would make. */
+.texmakerbody {
+  width: 640px;
+  max-width: 86vw;
+}
+.texshots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.texshot canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+  border: 1px solid var(--rule-2);
+  background: var(--ground);
+  /* A height map is a grid of samples and the preview is usually smaller than
+     the picture, so it is smoothed rather than blocked up. */
+  image-rendering: auto;
+}
+.texshot .hint {
+  margin: 4px 0 0;
+  text-align: center;
+}
+.texcontrols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 14px;
+}
+.texcontrols input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+  min-width: 0;
+}
+
+/* The pictures already in the document, to pick one from. */
+.texpick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+.texpickcell {
+  padding: 4px;
+  display: block;
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.texpickcell canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+  margin-bottom: 3px;
+}
+
+/* The picture on a Texture's own dialog row. */
+canvas.texrow {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  flex: none;
+  border: 1px solid var(--rule-2);
+  cursor: pointer;
+  background: var(--ground);
+}
+
 /* ---------------- boot ---------------- */
 
 #boot {

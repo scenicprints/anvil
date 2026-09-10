@@ -34,6 +34,7 @@ import { parseSVG, parseDXF } from '../src/renderer/vectorimport.js';
 import { parsePLY, parseOFF, parseGLTF, parseDAE } from '../src/renderer/meshutil.js';
 import { readRecords, readASM } from '../src/renderer/asmread.js';
 import { grainAxis, pithOffset, ringSpacing, WOODS } from '../src/renderer/woodgrain.js';
+import { toHeight, seamless, heightStats, shadePreview } from '../src/renderer/heightmap.js';
 import {
   refineMesh,
   weldPoints,
@@ -8482,6 +8483,8 @@ async function run() {
     return use;
   }
 
+  const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
   /** A closed box, as points and triangles. */
   function boxMesh(w = 20) {
     const h = w / 2;
@@ -8578,6 +8581,37 @@ async function run() {
     const welded = weldPoints(loose.points, loose.tris);
     assert(welded.points.length === 8, `a box has eight corners, got ${welded.points.length}`);
     for (const [, n] of edgeUse(welded.tris)) assert(n === 2, 'and it closes up');
+
+    /*
+     * And it says which triangle of the mesh as it arrived each kept one was.
+     * Welding drops any triangle whose corners turn out to be the same point,
+     * which shifts every index after it, and the faces a texture was told to go
+     * on are numbered against the mesh as it arrived. Without this, a texture
+     * put on one face of a mesh that happened to contain a degenerate triangle
+     * would come out on a different face, with nothing to say why.
+     */
+    assert(
+      welded.from.length === welded.tris.length,
+      'every kept triangle says where it came from'
+    );
+    welded.from.forEach((was, i) => {
+      const before = loose.tris[was].map((v) => loose.points[v]);
+      const after = welded.tris[i].map((v) => welded.points[v]);
+      for (const p of after) {
+        assert(
+          before.some((q) => dist3(p, q) < 1e-9),
+          'and it is the same triangle in the same place'
+        );
+      }
+    });
+
+    const withDud = {
+      points: [...box.points, [...box.points[0]]],
+      tris: [[0, 0, 1], ...box.tris]
+    };
+    const clean = weldPoints(withDud.points, withDud.tris);
+    assert(clean.tris.length === box.tris.length, 'a triangle with no area is dropped');
+    assert(clean.from[0] === 1, 'and what is left still points at the right originals');
   });
 
   test('relief: the surface moves out where light and in where dark', () => {
@@ -8675,6 +8709,181 @@ async function run() {
         near(moved[i][2], -10, 1e-9, 'the far side of the part never moved');
       }
     });
+  });
+
+  /* -------- turning a picture into a texture -------- */
+
+  /** A picture with a step down the middle of it, and some noise on top. */
+  function stepPicture(w = 32, h = 32, noise = 0) {
+    const gray = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        // Deliberately narrow: 80 to 150 out of 255, which is what a photograph
+        // off a phone looks like and the reason the stretch exists.
+        const base = x < w / 2 ? 80 : 150;
+        const n = noise ? ((x * 37 + y * 91) % 2 ? noise : -noise) : 0;
+        gray[y * w + x] = Math.max(0, Math.min(255, base + n));
+      }
+    }
+    return { width: w, height: h, gray };
+  }
+
+  test('texture from a picture: a photograph is opened out to the whole depth', () => {
+    /*
+     * Why this is on by default. A height map is read as nought to one and the
+     * depth is spread across that range, so a picture using a quarter of the
+     * range gives a quarter of the depth that was asked for, and the answer to
+     * "why is my texture so shallow" is never the depth setting.
+     */
+    const img = stepPicture();
+    const raw = heightStats(img);
+    assert(raw.max - raw.min < 0.3, `the picture starts narrow, ${(raw.max - raw.min).toFixed(2)}`);
+
+    const wide = heightStats(toHeight(img, { stretch: true }));
+    near(wide.min, 0, 1e-9, 'the darkest is now the bottom');
+    near(wide.max, 1, 1e-9, 'and the lightest is the top');
+
+    const left = heightStats(toHeight(img, { stretch: false }));
+    near(left.min, raw.min, 1e-9, 'and turned off it is left exactly as it came');
+    near(left.max, raw.max, 1e-9, 'both ends of it');
+  });
+
+  test('texture from a picture: reading it dark turns the pattern over', () => {
+    // A drawing is black on white, and carving the drawing means the black is
+    // the part that stands out, which is the opposite of the convention.
+    const img = stepPicture();
+    const light = toHeight(img, { stretch: false });
+    const dark = toHeight(img, { read: 'dark', stretch: false });
+    for (let i = 0; i < img.gray.length; i++) {
+      near(light.gray[i] + dark.gray[i], 255, 1.01, 'every point is turned over');
+    }
+  });
+
+  test('texture from a picture: smoothing takes the noise and keeps the step', () => {
+    /*
+     * The one that matters for a scanned drawing. A printer reproduces what it
+     * is given, so speckle in the picture is speckle on the part, and a
+     * fingertip finds it. What must survive is the actual step in the picture.
+     */
+    const img = stepPicture(32, 32, 20);
+    const rough = toHeight(img, { stretch: false });
+    const smooth = toHeight(img, { stretch: false, smooth: 3 });
+
+    const wiggle = (m) => {
+      // How much neighbouring points differ along a row that should be flat.
+      let sum = 0;
+      for (let x = 1; x < 15; x++) sum += Math.abs(m.gray[16 * 32 + x] - m.gray[16 * 32 + x - 1]);
+      return sum;
+    };
+    assert(
+      wiggle(smooth) < wiggle(rough) / 4,
+      `the noise goes, from ${wiggle(rough)} to ${wiggle(smooth)}`
+    );
+
+    const step = (m) => Math.abs(m.gray[16 * 32 + 24] - m.gray[16 * 32 + 4]);
+    assert(step(smooth) > step(rough) * 0.7, 'and the step in the picture is still there');
+  });
+
+  test('texture from a picture: outlines carve where the picture changes', () => {
+    // What turns a photograph into something that reads when it is printed. The
+    // outline cuts in; everywhere the picture is flat stays proud.
+    const img = stepPicture();
+    const lines = toHeight(img, { stretch: false, edges: 1 });
+    const middle = lines.gray[16 * 32 + 16];
+    const away = lines.gray[16 * 32 + 4];
+    assert(middle < away - 100, `the edge is cut in, ${middle} against ${away}`);
+    assert(away > 240, 'and the flat part is left alone at the top');
+  });
+
+  test('texture from a picture: the borders are made to meet', () => {
+    /*
+     * A texture repeats across the part, so wherever a tile ends the next one
+     * begins. Borders that disagree put a hard line down the work at every
+     * repeat, and on a printed part that line is a ridge you can catch a
+     * fingernail on.
+     *
+     * The measure is against the picture's own steps rather than against zero:
+     * a seam is gone when crossing it is no worse than moving one pixel
+     * anywhere else.
+     */
+    const w = 32;
+    const img = { width: w, height: w, gray: new Uint8Array(w * w) };
+    for (let y = 0; y < w; y++) {
+      for (let x = 0; x < w; x++) img.gray[y * w + x] = Math.round((x / (w - 1)) * 255);
+    }
+
+    const seamOf = (m) => {
+      let worst = 0;
+      for (let y = 0; y < w; y++) {
+        worst = Math.max(worst, Math.abs(m.gray[y * w] - m.gray[y * w + w - 1]));
+      }
+      return worst;
+    };
+    const stepOf = (m) => {
+      let worst = 0;
+      for (let x = 1; x < w; x++) worst = Math.max(worst, Math.abs(m.gray[x] - m.gray[x - 1]));
+      return worst;
+    };
+
+    assert(seamOf(img) > 200, `a ramp starts with a seam the width of the picture, ${seamOf(img)}`);
+    for (const mode of ['blend', 'mirror']) {
+      const tiled = seamless(img, mode);
+      assert(
+        seamOf(tiled) <= stepOf(tiled) + 1,
+        `${mode} leaves a seam no worse than one pixel elsewhere, ${seamOf(tiled)} against ${stepOf(tiled)}`
+      );
+    }
+  });
+
+  test('texture from a picture: the preview is lit across, not down', () => {
+    /*
+     * Three renders of the same coaster were thrown away learning this. A light
+     * behind the camera casts no shadow into a ridge, so relief lit that way is
+     * invisible whatever colour it is painted. The preview has to light the map
+     * from the side, and the check is that a slope reads differently from flat.
+     */
+    const w = 16;
+    const flat = { width: w, height: w, gray: new Uint8Array(w * w).fill(128) };
+    const ridged = { width: w, height: w, gray: new Uint8Array(w * w) };
+    for (let y = 0; y < w; y++) {
+      for (let x = 0; x < w; x++) ridged.gray[y * w + x] = x % 4 < 2 ? 60 : 200;
+    }
+
+    const spread = (px) => {
+      let lo = 255;
+      let hi = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i] < lo) lo = px[i];
+        if (px[i] > hi) hi = px[i];
+      }
+      return hi - lo;
+    };
+    near(spread(shadePreview(flat, { depth: 1 })), 0, 1, 'a flat map has nothing to show');
+    assert(
+      spread(shadePreview(ridged, { depth: 1 })) > 40,
+      'and ridges show as light and shade'
+    );
+  });
+
+  test('texture from a picture: a picture of one tone survives', () => {
+    // Nothing to stretch, nothing to find an outline in, and no way to make it
+    // tile. Every one of those is a divide by the range of a picture that has
+    // none, and the result has to be the picture rather than a pattern of
+    // rounding error.
+    const w = 8;
+    const flat = { width: w, height: w, gray: new Uint8Array(w * w).fill(90) };
+    for (const opts of [
+      { stretch: true },
+      { edges: 1 },
+      { smooth: 4 },
+      { tile: 'blend' },
+      { tile: 'mirror' },
+      { contrast: 0.8 }
+    ]) {
+      const out = toHeight(flat, opts);
+      const stats = heightStats(out);
+      near(stats.max - stats.min, 0, 1e-9, `flat stays flat through ${JSON.stringify(opts)}`);
+    }
   });
 
   test('wood: the grain runs the long way and the tree is under the board', () => {

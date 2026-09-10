@@ -1890,6 +1890,43 @@ pattern carries over an edge and round a corner with no seam. Give it faces and
 it textures only those, with the movement easing to nothing at the boundary
 rather than stepping, because a step at the boundary is another crack.
 
+**Any picture, and a tool that turns one into a texture.** Almost nothing you
+would open is a height map as it stands. A photograph uses a third of the range
+and so gives a third of the depth that was asked for. A drawing scanned off paper
+carries a speckle that a printer reproduces faithfully as fuzz you can feel. A
+tile whose two borders disagree puts a hard line down the work at every repeat,
+and on a printed part that line is a ridge you can catch a fingernail on.
+
+**Make Texture** is the step between, and the whole of its argument is on screen
+while the settings move: the picture on the left, and on the right the surface it
+would make, lit from the side. Not the grey map. Grey tells you the numbers and a
+raking light tells you the part, which is the same lesson the feature itself
+taught: relief lit from behind the camera is invisible whatever colour it is
+painted.
+
+What it can do to a picture is short, because these are the things that actually
+decide whether a texture prints: which way round it reads, opening it out to the
+whole depth, flattening off everything above or below a level, contrast,
+smoothing the noise away, keeping only the outlines, and making the borders meet
+so the tile repeats. That last one has two answers that fail differently.
+Blending keeps the whole picture by fading into a half-shifted copy of itself
+toward the borders, so the middle of the picture ends up at the edges and the
+middle already agrees with itself. Mirroring is exact by construction and costs
+you three quarters of the picture.
+
+Every texture keeps its picture in the document, so the same knurl on the grip
+and on the cap is the same knurl, and the Texture dialog has the picture on it as
+a row you can click: change your mind about the picture without losing the depth,
+the detail and the faces along with it.
+
+**How finely to divide is guessed from the part.** A fixed number was right on a
+coaster and ran a sixty millimetre box straight past the two million triangle
+limit, which is a poor way to meet a feature. The first guess now comes from how
+much surface there is and aims at eight hundred thousand triangles, a few seconds
+rather than most of a minute. The constant in it is measured, not derived:
+refinement halves an edge at a time, so where it stops depends on how long the
+edges were to begin with.
+
 Past 150,000 triangles the feature-edge outline is not drawn. Those edges are the
 places two triangles meet beyond a crease angle, which on an ordinary part is the
 corners and on a textured one is every ridge of the texture: half a million

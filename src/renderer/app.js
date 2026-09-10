@@ -29,6 +29,7 @@ import {
 import { readASM } from './asmread.js';
 import { applyWoodGrain } from './woodgrain.js';
 import { WRAP_MODES, applyWrap } from './wrap.js';
+import * as HM from './heightmap.js';
 import {
   newDocument,
   newSketch,
@@ -2140,6 +2141,9 @@ async function runCommand(cmd) {
       break;
     case 'textureRelief':
       cmdTextureRelief();
+      break;
+    case 'makeTexture':
+      cmdMakeTexture();
       break;
     case 'textureExtrude':
       cmdTextureExtrude();
@@ -15222,6 +15226,39 @@ function renderFields() {
       continue;
     }
 
+    if (f.type === 'image') {
+      /*
+       * A picture, shown rather than named.
+       *
+       * The thumbnail is the button, because it is where anybody would click
+       * and because the name of an image is nearly always the name of the file
+       * it came out of, which says nothing about what it looks like.
+       */
+      const label = document.createElement('label');
+      label.textContent = labelText;
+      wrap.appendChild(label);
+      const row = document.createElement('div');
+      row.className = 'row';
+      const held = state.doc.imageData?.[value];
+      const shot = document.createElement('canvas');
+      shot.className = 'texrow';
+      if (held?.gray) paintShaded(shot, held);
+      shot.title = 'Choose another picture';
+      shot.addEventListener('click', () => f.run(feature));
+      row.appendChild(shot);
+      const summary = document.createElement('span');
+      summary.className = 'picksummary';
+      summary.textContent = pictureNameOf(value);
+      row.appendChild(summary);
+      const btn = document.createElement('button');
+      btn.textContent = 'Change';
+      btn.addEventListener('click', () => f.run(feature));
+      row.appendChild(btn);
+      wrap.appendChild(row);
+      el.inspectorBody.appendChild(wrap);
+      continue;
+    }
+
     if (f.type === 'pick') {
       // A row that is filled in by clicking in the viewport. The button arms
       // it; what is already chosen is written beside the label.
@@ -19543,6 +19580,352 @@ function faceGroupEditFields(feature) {
  * A texture that is really there, in the geometry, so it survives being sliced
  * and printed rather than being a picture of one.
  */
+/* ------------------------------------------------------------------ */
+/* Textures, and making one out of a picture                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Turn a picture into a texture, and put it on the part.
+ *
+ * The Texture feature has always taken any image. What it could not do was tell
+ * you anything about the one you gave it until half a minute of refining had
+ * gone by and the part was on screen, and almost no picture is a height map as
+ * it stands: a photograph uses a third of the range and so gives a third of the
+ * depth, a drawing scanned off paper carries a fine noise that a printer will
+ * reproduce faithfully as fuzz, and a logo is usually the wrong way round.
+ *
+ * So this is the step between, with the answer on screen while the settings
+ * move. The preview is not the grey map: it is the grey map lit from the side,
+ * which is the only way to see what a texture will feel like, and the lesson
+ * that took three renders of the same coaster to learn.
+ */
+async function cmdMakeTexture() {
+  const picked = await pickPicture();
+  if (!picked) return;
+  openTextureMaker(picked.image, picked.name, (img, name) => startTextureWith(img, name));
+}
+
+/** An image off the disk, as a grey map, or nothing if it could not be read. */
+async function pickPicture() {
+  const res = await window.anvil.importBinary('image');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return null;
+  }
+  try {
+    return { image: await grayscaleOf(res.bytes), name: pictureTitle(res.path) };
+  } catch (err) {
+    setStatus(`Could not read that image: ${err.message}`);
+    return null;
+  }
+}
+
+/** The name of a file, without the folders or the extension. */
+function pictureTitle(file) {
+  const base = String(file || 'Picture').split(/[\\/]/).pop();
+  return base.replace(/\.[^.]+$/, '') || 'Picture';
+}
+
+/** Keep a height map in the document, and say what to call it afterwards. */
+function storeHeightMap(img, name) {
+  const key = uid('img');
+  state.doc.imageData = state.doc.imageData || {};
+  // Plain numbers, not a typed array. The document is saved and put on the undo
+  // stack as JSON, and a Uint8Array through JSON comes back as an object with a
+  // quarter of a million keys in it.
+  state.doc.imageData[key] = {
+    width: img.width,
+    height: img.height,
+    gray: Array.from(img.gray),
+    name
+  };
+  return key;
+}
+
+/**
+ * The dialog: the picture on the left, the surface it would make on the right.
+ *
+ * Everything is worked out by the same functions the feature itself uses, at
+ * the resolution the map will really have, so what is on screen is what will be
+ * on the part. The one thing the preview cannot show is the wrapping, which
+ * needs the body.
+ */
+function openTextureMaker(source, name, onUse) {
+  const modal = $('#modal');
+  $('#modalTitle').textContent = 'Make a texture from a picture';
+  const body = $('#modalBody');
+  body.innerHTML = '';
+  body.className = 'modal-body texmakerbody';
+
+  const opts = { ...HM.DEFAULTS };
+  let made = source;
+
+  const shots = document.createElement('div');
+  shots.className = 'texshots';
+  const before = pictureCanvas('The picture');
+  const after = pictureCanvas('The surface it makes');
+  shots.appendChild(before.wrap);
+  shots.appendChild(after.wrap);
+  body.appendChild(shots);
+
+  const controls = document.createElement('div');
+  controls.className = 'texcontrols';
+  body.appendChild(controls);
+
+  const readout = document.createElement('div');
+  readout.className = 'hint';
+  body.appendChild(readout);
+
+  const draw = () => {
+    made = HM.toHeight(source, opts);
+    paintShaded(after.canvas, made);
+    const stats = HM.heightStats(made);
+    readout.textContent =
+      stats.max - stats.min < 0.02
+        ? 'That comes out flat, so nothing would be printed.'
+        : `${made.width} by ${made.height}. Uses ${Math.round(
+            (stats.max - stats.min) * 100
+          )} per cent of the depth, sitting ${Math.round(
+            stats.mean * 100
+          )} per cent of the way up it on average.`;
+  };
+
+  paintGrey(before.canvas, source);
+
+  const choose = (label, key, options) => {
+    const field = document.createElement('div');
+    field.className = 'field';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    field.appendChild(lab);
+    const sel = document.createElement('select');
+    for (const [value, text] of options) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = text;
+      if (value === opts[key]) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change', () => {
+      opts[key] = sel.value;
+      draw();
+    });
+    field.appendChild(sel);
+    controls.appendChild(field);
+  };
+
+  const slide = (label, key, min, max, step, show) => {
+    const field = document.createElement('div');
+    field.className = 'field';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    field.appendChild(lab);
+    const row = document.createElement('div');
+    row.className = 'row';
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = min;
+    input.max = max;
+    input.step = step;
+    input.value = opts[key];
+    const val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = show(opts[key]);
+    input.addEventListener('input', () => {
+      opts[key] = Number(input.value);
+      val.textContent = show(opts[key]);
+      draw();
+    });
+    row.appendChild(input);
+    row.appendChild(val);
+    field.appendChild(row);
+    controls.appendChild(field);
+  };
+
+  const tick = (label, key) => {
+    const field = document.createElement('div');
+    field.className = 'field inline';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = !!opts[key];
+    input.addEventListener('change', () => {
+      opts[key] = input.checked;
+      draw();
+    });
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    field.appendChild(input);
+    field.appendChild(lab);
+    controls.appendChild(field);
+  };
+
+  choose('Which way round', 'read', [
+    ['light', 'Light parts stand out'],
+    ['dark', 'Dark parts stand out']
+  ]);
+  tick('Use the whole depth', 'stretch');
+  slide('Flat below', 'black', 0, 0.9, 0.01, (v) => `${Math.round(v * 100)}%`);
+  slide('Flat above', 'white', 0.1, 1, 0.01, (v) => `${Math.round(v * 100)}%`);
+  slide('Contrast', 'contrast', -0.9, 0.9, 0.05, (v) => v.toFixed(2));
+  slide('Smooth away the noise', 'smooth', 0, 8, 1, (v) => (v ? `${v} px` : 'none'));
+  slide('Outlines only', 'edges', 0, 1, 0.05, (v) => (v ? `${Math.round(v * 100)}%` : 'off'));
+  choose('Where the tile repeats', 'tile', [
+    ['none', 'Leave the borders as they are'],
+    ['blend', 'Blend the borders so it repeats'],
+    ['mirror', 'Mirror a quarter of it, which repeats exactly']
+  ]);
+
+  draw();
+  modal.classList.remove('hidden');
+
+  const ok = $('#modalOk');
+  const wasLabel = ok.textContent;
+  const cancel = $('#modalCancel');
+  const finish = () => {
+    ok.textContent = wasLabel;
+    body.className = 'modal-body';
+    ok.onclick = null;
+    cancel.removeEventListener('click', finish);
+  };
+  cancel.addEventListener('click', finish);
+  ok.textContent = 'Use it';
+
+  modalResolve = (choice) => {
+    finish();
+    onUse(choice.img, choice.name);
+  };
+  ok.onclick = () => closeModal({ img: made, name });
+}
+
+/** A labelled box for one of the two pictures in the maker. */
+function pictureCanvas(label) {
+  const wrap = document.createElement('div');
+  wrap.className = 'texshot';
+  const canvas = document.createElement('canvas');
+  wrap.appendChild(canvas);
+  const cap = document.createElement('div');
+  cap.className = 'hint';
+  cap.textContent = label;
+  wrap.appendChild(cap);
+  return { wrap, canvas };
+}
+
+/** A height map drawn as it is: grey, which is what the feature reads. */
+function paintGrey(canvas, img) {
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  const out = ctx.createImageData(img.width, img.height);
+  for (let i = 0; i < img.width * img.height; i++) {
+    out.data[i * 4] = out.data[i * 4 + 1] = out.data[i * 4 + 2] = img.gray[i];
+    out.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(out, 0, 0);
+}
+
+/** The same map, lit from the side, as the surface it would make. */
+function paintShaded(canvas, img) {
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  const out = ctx.createImageData(img.width, img.height);
+  out.data.set(HM.shadePreview(img, { depth: 1 }));
+  ctx.putImageData(out, 0, 0);
+}
+
+/**
+ * Choose which picture a texture uses.
+ *
+ * The pictures already in the document come first, because reusing one is the
+ * common case: the same knurl on the grip and on the cap has to be the same
+ * knurl, and picking the file again would make a second copy of it that drifts
+ * apart the first time either is adjusted.
+ */
+function promptTexturePicture(cb) {
+  const modal = $('#modal');
+  $('#modalTitle').textContent = 'Which picture';
+  const body = $('#modalBody');
+  body.innerHTML = '';
+
+  const held = Object.entries(state.doc.imageData || {}).filter(([, v]) => v?.gray);
+  if (held.length) {
+    const grid = document.createElement('div');
+    grid.className = 'texpick';
+    for (const [key, img] of held) {
+      const cell = document.createElement('button');
+      cell.className = 'texpickcell';
+      const canvas = document.createElement('canvas');
+      paintShaded(canvas, img);
+      cell.appendChild(canvas);
+      const cap = document.createElement('div');
+      cap.textContent = img.name || `${img.width} by ${img.height}`;
+      cell.appendChild(cap);
+      cell.addEventListener('click', () => closeModal({ key }));
+      grid.appendChild(cell);
+    }
+    body.appendChild(grid);
+  } else {
+    const note = document.createElement('div');
+    note.className = 'hint';
+    note.textContent = 'No pictures in this document yet.';
+    body.appendChild(note);
+  }
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const make = document.createElement('button');
+  make.className = 'accent';
+  make.textContent = 'Make one from a picture';
+  make.addEventListener('click', () => closeModal({ make: true }));
+  const file = document.createElement('button');
+  file.textContent = 'Use a file as it is';
+  file.addEventListener('click', () => closeModal({ file: true }));
+  row.appendChild(make);
+  row.appendChild(file);
+  body.appendChild(row);
+
+  modal.classList.remove('hidden');
+  modalResolve = cb;
+  // There is nothing to accept: the choice is the click. OK means cancel.
+  $('#modalOk').onclick = () => closeModal(null);
+}
+
+/**
+ * Swap the picture a texture is using, from inside its own dialog.
+ *
+ * Without this, changing your mind about the picture meant deleting the feature
+ * and starting again, which threw away the depth, the detail and the faces
+ * along with it.
+ */
+function changeTexturePicture(feature) {
+  promptTexturePicture(async (choice) => {
+    const use = (key) => {
+      feature.image = key;
+      state.dirty = true;
+      renderFields();
+      rebuildAll();
+    };
+    if (choice.key) {
+      use(choice.key);
+      return;
+    }
+    const picked = await pickPicture();
+    if (!picked) return;
+    if (choice.make) {
+      openTextureMaker(picked.image, picked.name, (img, name) => use(storeHeightMap(img, name)));
+      return;
+    }
+    use(storeHeightMap(picked.image, picked.name));
+  });
+}
+
+/** What a picture in the document is called, for a dialog row. */
+function pictureNameOf(key) {
+  const img = state.doc.imageData?.[key];
+  if (!img) return 'None';
+  return img.name || `${img.width} by ${img.height}`;
+}
+
 /**
  * Put a texture on a body so it comes out in the print.
  *
@@ -19555,6 +19938,21 @@ function faceGroupEditFields(feature) {
  * modelled as a pattern of real cuts.
  */
 async function cmdTextureRelief() {
+  const picked = await pickPicture();
+  if (!picked) return;
+  startTextureWith(picked.image, picked.name);
+}
+
+/**
+ * Start a Texture on a height map that is already in hand.
+ *
+ * Shared by the command that opens a file and the maker that builds one out of
+ * a picture, so both end at the same dialog with the same defaults, and the
+ * picture goes into the document inside the same undo step as the feature that
+ * uses it. Separately would leave a picture behind on undo, in a document that
+ * has nothing pointing at it and no way to see that it is there.
+ */
+function startTextureWith(img, name) {
   if (state.sketcher.active) finishSketch();
   const bodies = state.result?.bodies || [];
   if (!bodies.length) {
@@ -19562,23 +19960,8 @@ async function cmdTextureRelief() {
     return;
   }
 
-  const res = await window.anvil.importBinary('image');
-  if (!res.ok) {
-    if (res.error) setStatus(`Could not read that: ${res.error}`);
-    return;
-  }
-  let held;
-  try {
-    held = await grayscaleOf(res.bytes);
-  } catch (err) {
-    setStatus(`Could not read that image: ${err.message}`);
-    return;
-  }
-
   pushUndo('texture');
-  const key = uid('img');
-  state.doc.imageData = state.doc.imageData || {};
-  state.doc.imageData[key] = held;
+  const key = storeHeightMap(img, name);
 
   const chosen = bodies.filter((b) => state.selection.bodies.has(b.id));
   const feature = {
@@ -19592,19 +19975,61 @@ async function cmdTextureRelief() {
     depth: '0.6',
     size: '20',
     angle: '0',
-    detail: '0.4',
+    detail: String(detailFor(chosen.length ? chosen : bodies)),
     sharpness: '4',
     mode: 'both'
   };
   openFeatureEditor(feature, 'Texture', textureReliefFields());
   setStatus(
-    `${held.width} by ${held.height} image. Depth is how far it stands out; detail is how fine the surface is divided to carry it.`
+    `${img.width} by ${img.height} image, divided to ${feature.detail} ${unitLabel()} to carry it. Finer costs four times the triangles for half the number.`
   );
+}
+
+/**
+ * How finely to divide the surface, to start with.
+ *
+ * A texture can only be as fine as the mesh under it, and the mesh has to be
+ * divided until its triangles are smaller than the smallest thing in the
+ * picture. That is the whole cost of the feature, and it goes up as the square:
+ * halving this is four times the triangles and four times the wait.
+ *
+ * So the first guess is made from how much surface there is rather than being
+ * the same number for a keyring and a panel. A fixed 0.4 was fine on a coaster
+ * and ran a sixty millimetre box straight past the two million triangle limit,
+ * which is a poor way to meet a feature.
+ *
+ * The constant is measured rather than derived. Refinement halves an edge at a
+ * time, so where it stops depends on how long the edges were to begin with, and
+ * a body that arrives from the kernel finely tessellated in one place and
+ * coarsely in another lands somewhere between. This aims at roughly eight
+ * hundred thousand triangles, which is a few seconds rather than most of a
+ * minute.
+ */
+function detailFor(targets) {
+  let area = 0;
+  for (const b of targets) {
+    try {
+      if (b.solid) area += K.properties(b.solid).surfaceArea;
+    } catch {
+      /* a sheet or a mesh has no properties to ask for, and no area to add */
+    }
+  }
+  if (!(area > 0)) return 0.4;
+  const want = Math.sqrt(area / 33600);
+  return Math.min(2, Math.max(0.15, Math.round(want * 20) / 20));
 }
 
 /** The Texture dialog. */
 function textureReliefFields() {
   return [
+    {
+      // Which picture, shown as the surface it makes rather than as a name. A
+      // document ends up with several and they are told apart by looking.
+      key: 'image',
+      label: 'Picture',
+      type: 'image',
+      run: (f) => changeTexturePicture(f)
+    },
     {
       key: '__faces',
       label: 'On which faces',
@@ -23207,6 +23632,10 @@ window.anvilDev = {
   mesh: { unzip },
   asm: { readASM },
   insertF3D,
+  // Making a texture starts with a file dialog no probe can answer, so the
+  // dialog and the step after it are reachable with a picture already in hand.
+  texture: { openTextureMaker, startTextureWith, storeHeightMap, changeTexturePicture },
+  heightmap: HM,
   // A render is a dialog and then a file dialog, neither of which a probe can
   // answer, so the picture-making itself is reachable on its own.
   renderNow: async (opts) => {
