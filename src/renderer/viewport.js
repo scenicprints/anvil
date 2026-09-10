@@ -1431,8 +1431,24 @@ export class Viewport {
       const geom = buildGeometry(shown);
       // Model edges from the topology when it is available, so what is drawn
       // is what can be selected. Crease detection is the fallback.
-      const edgeGeom =
-        rec.displayMesh || !rec.topology ? buildEdges(shown) : this._edgeGeometry(rec);
+      /*
+       * Past a certain density the outline stops being an outline.
+       *
+       * Feature edges are the places two triangles meet at more than a crease
+       * angle, which on an ordinary part is the corners and nothing else. On a
+       * textured surface it is every ridge of the texture, so a knurl comes out
+       * as half a million little black lines and the part looks like it has been
+       * dropped in soot. Drawing them also costs more than drawing the part.
+       *
+       * So a body this dense is drawn without them. What is lost is the corner
+       * lines, and on a surface made of texture there were none worth seeing.
+       */
+      const dense = (shown.triVerts?.length || 0) / 3 > 150000;
+      const edgeGeom = dense
+        ? new THREE.BufferGeometry()
+        : rec.displayMesh || !rec.topology
+          ? buildEdges(shown)
+          : this._edgeGeometry(rec);
 
       if (!entry) {
         // A pale warm grey, brighter than the ground it sits on, with no

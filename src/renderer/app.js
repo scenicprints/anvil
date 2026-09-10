@@ -2138,6 +2138,9 @@ async function runCommand(cmd) {
     case 'faceGroups':
       cmdFaceGroups();
       break;
+    case 'textureRelief':
+      cmdTextureRelief();
+      break;
     case 'textureExtrude':
       cmdTextureExtrude();
       break;
@@ -19540,6 +19543,118 @@ function faceGroupEditFields(feature) {
  * A texture that is really there, in the geometry, so it survives being sliced
  * and printed rather than being a picture of one.
  */
+/**
+ * Put a texture on a body so it comes out in the print.
+ *
+ * Not a picture of a texture. The surface is actually pushed in and out until
+ * the pattern is geometry, which is why it survives slicing and why you can
+ * feel it on the part.
+ *
+ * Fusion has nothing like this. Its appearances are pictures and its decals are
+ * pictures, and neither reaches the geometry, so a knurl there has to be
+ * modelled as a pattern of real cuts.
+ */
+async function cmdTextureRelief() {
+  if (state.sketcher.active) finishSketch();
+  const bodies = state.result?.bodies || [];
+  if (!bodies.length) {
+    setStatus('Nothing to put a texture on yet.');
+    return;
+  }
+
+  const res = await window.anvil.importBinary('image');
+  if (!res.ok) {
+    if (res.error) setStatus(`Could not read that: ${res.error}`);
+    return;
+  }
+  let held;
+  try {
+    held = await grayscaleOf(res.bytes);
+  } catch (err) {
+    setStatus(`Could not read that image: ${err.message}`);
+    return;
+  }
+
+  pushUndo('texture');
+  const key = uid('img');
+  state.doc.imageData = state.doc.imageData || {};
+  state.doc.imageData[key] = held;
+
+  const chosen = bodies.filter((b) => state.selection.bodies.has(b.id));
+  const feature = {
+    id: uid('f'),
+    type: 'textureRelief',
+    bodies: chosen.length ? chosen.map((b) => b.id) : 'all',
+    // Faces, if any are picked. None means the whole body, which is the case
+    // this exists for: a texture that wraps the lot.
+    faces: facesFromSelection(),
+    image: key,
+    depth: '0.6',
+    size: '20',
+    angle: '0',
+    detail: '0.4',
+    sharpness: '4',
+    mode: 'both'
+  };
+  openFeatureEditor(feature, 'Texture', textureReliefFields());
+  setStatus(
+    `${held.width} by ${held.height} image. Depth is how far it stands out; detail is how fine the surface is divided to carry it.`
+  );
+}
+
+/** The Texture dialog. */
+function textureReliefFields() {
+  return [
+    {
+      key: '__faces',
+      label: 'On which faces',
+      type: 'pick',
+      pick: 'draftFaces',
+      summary: (f) => (f.faces?.length ? countOf(f.faces, 'face') : 'The whole body'),
+      clear: (f) => {
+        f.faces = [];
+      }
+    },
+    { key: 'depth', label: `How deep (${unitLabel()})`, type: 'expr' },
+    { key: 'size', label: `How wide one tile is (${unitLabel()})`, type: 'expr' },
+    { key: 'angle', label: 'Turned by (deg)', type: 'expr' },
+    {
+      /*
+       * The setting that decides how long this takes.
+       *
+       * A surface can only carry as much detail as it has vertices, so it is
+       * divided until its triangles are this small. Halving it costs four times
+       * the triangles, which is worth saying out loud rather than leaving
+       * somebody to discover by waiting.
+       */
+      key: 'detail',
+      label: `Divide the surface to (${unitLabel()})`,
+      type: 'expr'
+    },
+    {
+      key: 'mode',
+      label: 'The picture',
+      type: 'select',
+      options: [
+        ['both', 'Stands out where light, cuts in where dark'],
+        ['out', 'Only stands out'],
+        ['in', 'Only cuts in']
+      ]
+    },
+    {
+      key: 'sharpness',
+      label: 'How crisply it turns a corner',
+      type: 'expr'
+    },
+    {
+      key: '__note',
+      label: '',
+      type: 'note',
+      text: 'The picture is read down all three axes and blended by which way each part of the surface faces, so it carries over edges and round corners with no seam. Mid grey is the surface as it was, white stands out and black cuts in. Depth of about half a millimetre is enough to feel; detail near the nozzle width is as fine as a printer can hold, and finer only costs triangles.'
+    }
+  ];
+}
+
 async function cmdTextureExtrude() {
   if (state.sketcher.active) finishSketch();
   if (!meshBodies().length) {

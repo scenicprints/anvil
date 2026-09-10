@@ -1271,7 +1271,12 @@ gives you by default.
 Anvil also has a wall-thickness reading and a design-advice pass, which Fusion
 does not carry here.
 
-And two appearance features Fusion does not have. **Wood grain** is cut through
+And three features Fusion does not have. **Texture** is the one that matters: an
+image pushed into the geometry until the pattern is really there, so it prints
+and you can feel it. Fusion's appearances and decals are both pictures and
+neither reaches the geometry, so a knurl there has to be modelled as real cuts.
+
+The other two are appearance. **Wood grain** is cut through
 the solid rather than wrapped round it, so a groove machined across a board shows
 the rings in its walls. **Wrap an image** projects a texture down all three axes
 and blends by surface normal, so a pattern carries round every corner of a whole

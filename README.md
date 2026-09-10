@@ -1845,6 +1845,56 @@ since undo hands back a document parsed afresh.
 
 ---
 
+## A texture that is really there
+
+The one that matters, and the one Fusion has no answer to at all. Its appearances
+are pictures and its decals are pictures; neither reaches the geometry, so a
+knurl there has to be modelled as a pattern of real cuts.
+
+**Texture** takes an image and pushes the surface in and out until the pattern
+*is* the geometry. It survives slicing, it comes off the printer, and you can
+feel it. Mid grey is the surface as it was, white stands out and black cuts in,
+which is the convention every height map uses and the one that lets a pattern be
+drawn without deciding in advance whether it is raised or sunk.
+
+There was already a Texture Extrude, and it is still here for what it is good at,
+now called **Height Map**: laying a picture down one plane onto a scan. It fell
+short of this in three ways. It worked on mesh bodies and not on a modelled
+solid. It projected down one plane, so the pattern landed on the side facing that
+plane and smeared everywhere else. And it moved the vertices the body already
+had, which on a box is eight: the picture had nowhere to land.
+
+**Refining is the whole cost.** A surface can only carry as much detail as it has
+vertices, so the mesh is divided until its triangles are smaller than the
+smallest thing in the picture. A 90 mm coaster at half a millimetre is nearly two
+million triangles and half a minute, and the count is shown rather than hidden,
+because somebody waiting deserves to know what for.
+
+Refining has to keep the body watertight, and that is harder than it sounds.
+Divide a triangle into four and its neighbour is left undivided with a new point
+in the middle of their shared edge, touching nothing: a T-junction, which is a
+crack you cannot see until the slicer finds it and the print has a slot in it. So
+the split is done per *edge*, shared by both triangles that own it, and each
+triangle is then rebuilt from how many of its own edges were split.
+
+**Two splits leave a pentagon, and that is where the bug was.** Filling it by
+fanning from one of the new midpoints makes a triangle out of that midpoint and
+the two ends of its own edge: three points in a line, no area. The kernel refused
+the whole body with the words "Not manifold" and nothing to say which triangle
+was at fault. A fan from a corner cannot make that mistake, so both choices are
+fans from corners now, and a test checks every triangle has area at four
+different target sizes.
+
+**It wraps**, by the same three-axis reading the appearance wrap uses, so the
+pattern carries over an edge and round a corner with no seam. Give it faces and
+it textures only those, with the movement easing to nothing at the boundary
+rather than stepping, because a step at the boundary is another crack.
+
+Past 150,000 triangles the feature-edge outline is not drawn. Those edges are the
+places two triangles meet beyond a crease angle, which on an ordinary part is the
+corners and on a textured one is every ridge of the texture: half a million
+little black lines, and the part looks like it has been dropped in soot.
+
 ## Wood grain, and wrapping an image round a whole part
 
 Two things built on one idea: what a point on a surface looks like is worked out

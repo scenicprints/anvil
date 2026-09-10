@@ -35,6 +35,14 @@ import { parsePLY, parseOFF, parseGLTF, parseDAE } from '../src/renderer/meshuti
 import { readRecords, readASM } from '../src/renderer/asmread.js';
 import { grainAxis, pithOffset, ringSpacing, WOODS } from '../src/renderer/woodgrain.js';
 import {
+  refineMesh,
+  weldPoints,
+  displace,
+  faceMask,
+  vertexNormals,
+  sampleTriplanar
+} from '../src/renderer/relief.js';
+import {
   MATERIALS,
   RENDER_FINISH,
   massProperties,
@@ -8458,6 +8466,215 @@ async function run() {
     assert(!body.solid && body.sheet, 'and it is a surface, not a solid');
     // Three sides of 10, 20, 10, dragged 10 up.
     near(SH.sheetArea(body.sheet), 400, 0.01, '40 of curve by 10 of drag');
+  });
+
+  /* -------- a texture that is really there -------- */
+
+  /** Every edge of a watertight mesh is used by exactly two triangles. */
+  function edgeUse(tris) {
+    const use = new Map();
+    for (const [a, b, c] of tris) {
+      for (const [i, j] of [[a, b], [b, c], [c, a]]) {
+        const k = i < j ? `${i}_${j}` : `${j}_${i}`;
+        use.set(k, (use.get(k) || 0) + 1);
+      }
+    }
+    return use;
+  }
+
+  /** A closed box, as points and triangles. */
+  function boxMesh(w = 20) {
+    const h = w / 2;
+    const points = [
+      [-h, -h, -h], [h, -h, -h], [h, h, -h], [-h, h, -h],
+      [-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]
+    ];
+    const tris = [
+      [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+      [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+      [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]
+    ];
+    return { points, tris };
+  }
+
+  test('relief: refining keeps the mesh watertight', () => {
+    /*
+     * The whole difficulty of refining. Divide a triangle into four and its
+     * neighbour is left undivided with a new point sitting in the middle of
+     * their shared edge, touching nothing: a T-junction, which is a crack you
+     * cannot see until the slicer finds it and the print has a slot in it.
+     *
+     * So every edge that is too long gets one midpoint, shared, and each
+     * triangle is rebuilt from how many of its own edges were split. This
+     * checks the result rather than the method: every edge used exactly twice
+     * is the definition of watertight.
+     */
+    const box = boxMesh(20);
+    const fine = refineMesh(box.points, box.tris, 2);
+
+    assert(fine.tris.length > 500, `it actually refined, got ${fine.tris.length}`);
+    for (const [k, n] of edgeUse(fine.tris)) {
+      assert(n === 2, `edge ${k} is used ${n} times, so there is a crack`);
+    }
+
+    let longest = 0;
+    for (const [a, b, c] of fine.tris) {
+      for (const [i, j] of [[a, b], [b, c], [c, a]]) {
+        longest = Math.max(
+          longest,
+          Math.hypot(
+            fine.points[i][0] - fine.points[j][0],
+            fine.points[i][1] - fine.points[j][1],
+            fine.points[i][2] - fine.points[j][2]
+          )
+        );
+      }
+    }
+    assert(longest <= 2 + 1e-6, `nothing longer than the target, worst ${longest.toFixed(3)}`);
+  });
+
+  test('relief: refining makes no triangle with nothing in it', () => {
+    /*
+     * The bug that cost the most, and it produced no useful message at all: the
+     * whole body was refused as not manifold, with nothing to say which
+     * triangle was at fault.
+     *
+     * Where two of a triangle's three edges are split, the leftover shape is a
+     * pentagon. Filling it by fanning from one of the new midpoints makes a
+     * triangle out of that midpoint and the two ends of its own edge, which are
+     * three points in a line. A fan from a corner cannot do that.
+     */
+    const box = boxMesh(20);
+    for (const target of [7, 5.5, 3.3, 2.1]) {
+      const fine = refineMesh(box.points, box.tris, target);
+      for (const [a, b, c] of fine.tris) {
+        const p = fine.points;
+        const ux = p[b][0] - p[a][0];
+        const uy = p[b][1] - p[a][1];
+        const uz = p[b][2] - p[a][2];
+        const vx = p[c][0] - p[a][0];
+        const vy = p[c][1] - p[a][1];
+        const vz = p[c][2] - p[a][2];
+        const area =
+          Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+        assert(area > 1e-9, `a triangle with no area at target ${target}`);
+      }
+    }
+  });
+
+  test('relief: points in the same place are joined before refining', () => {
+    // An STL writes every corner out per triangle, so the two triangles either
+    // side of an edge use different indices for it, and every edge would be
+    // split twice into two midpoints joined to nothing.
+    const loose = { points: [], tris: [] };
+    const box = boxMesh(10);
+    for (const [a, b, c] of box.tris) {
+      const base = loose.points.length;
+      loose.points.push([...box.points[a]], [...box.points[b]], [...box.points[c]]);
+      loose.tris.push([base, base + 1, base + 2]);
+    }
+    assert(loose.points.length === 36, 'every corner written out separately');
+
+    const welded = weldPoints(loose.points, loose.tris);
+    assert(welded.points.length === 8, `a box has eight corners, got ${welded.points.length}`);
+    for (const [, n] of edgeUse(welded.tris)) assert(n === 2, 'and it closes up');
+  });
+
+  test('relief: the surface moves out where light and in where dark', () => {
+    // Mid grey is the surface as it was: the convention every height map uses,
+    // and what lets a pattern be drawn without deciding in advance whether it
+    // is raised or sunk.
+    const box = boxMesh(20);
+    const fine = refineMesh(box.points, box.tris, 4);
+    const normals = vertexNormals(fine.points, fine.tris);
+    const along = (moved, i) =>
+      (moved[i][0] - fine.points[i][0]) * normals[i][0] +
+      (moved[i][1] - fine.points[i][1]) * normals[i][1] +
+      (moved[i][2] - fine.points[i][2]) * normals[i][2];
+
+    const flat = displace(fine.points, fine.tris, () => 0.5, { depth: 2, scale: 0.1 });
+    let worst = 0;
+    flat.forEach((p, i) => {
+      worst = Math.max(
+        worst,
+        Math.hypot(
+          p[0] - fine.points[i][0],
+          p[1] - fine.points[i][1],
+          p[2] - fine.points[i][2]
+        )
+      );
+    });
+    near(worst, 0, 1e-9, 'mid grey leaves the surface alone');
+
+    // White is half the depth outwards, since the movement is measured either
+    // side of the surface rather than all one way.
+    const out = displace(fine.points, fine.tris, () => 1, { depth: 2, scale: 0.1 });
+    near(Math.max(...out.map((_, i) => along(out, i))), 1, 1e-9, 'white stands out');
+
+    const dark = displace(fine.points, fine.tris, () => 0, { depth: 2, scale: 0.1 });
+    near(Math.min(...dark.map((_, i) => along(dark, i))), -1, 1e-9, 'and black cuts in');
+  });
+
+  test('relief: a picture read down three axes lands on every face', () => {
+    /*
+     * The reason there is no unwrapping. A face square to an axis takes that one
+     * reading outright; a corner takes a mixture, which is what carries a
+     * pattern over an edge instead of stopping at it.
+     */
+    const opts = { scale: 1, sharpness: 4 };
+    near(
+      sampleTriplanar(() => 0.25, [0, 0, 0], [0, 0, 1], opts),
+      0.25,
+      1e-9,
+      'a flat face takes one reading'
+    );
+    near(
+      sampleTriplanar(() => 0.7, [3, -2, 9], [0.3, -0.5, 0.8], opts),
+      0.7,
+      1e-9,
+      'and a flat picture reads flat whichever way it is faced'
+    );
+
+    // A corner at forty five degrees takes two readings, so a picture that is
+    // one value down one axis and another down the next comes back between them.
+    const s = Math.SQRT1_2;
+    const both = sampleTriplanar(
+      (u, v) => (Math.abs(u) < 1e-9 && Math.abs(v) < 1e-9 ? 0 : 1),
+      [0, 0, 1],
+      [s, 0, s],
+      { scale: 1, sharpness: 1 }
+    );
+    assert(both >= 0 && both <= 1, `a corner blends within the picture, got ${both}`);
+  });
+
+  test('relief: a texture on some faces leaves the rest alone', () => {
+    // A vertex whose triangles were all picked moves fully, one whose were none
+    // does not move at all, and the boundary is eased over one triangle rather
+    // than dropped off a cliff, because a step at the boundary is a crack.
+    const box = boxMesh(20);
+    const fine = refineMesh(box.points, box.tris, 5);
+    const top = [];
+    fine.tris.forEach((t, i) => {
+      if (t.every((v) => Math.abs(fine.points[v][2] - 10) < 1e-9)) top.push(i);
+    });
+    assert(top.length > 4, 'found the top face');
+
+    const mask = faceMask(fine.points, fine.tris, top);
+    assert(
+      fine.points.some((p, i) => Math.abs(p[2] - 10) < 1e-9 && mask[i] === 1),
+      'the middle of the face takes it all'
+    );
+    assert(
+      fine.points.every((p, i) => Math.abs(p[2] - 10) < 1e-9 || mask[i] < 1),
+      'and nothing off the face does'
+    );
+
+    const moved = displace(fine.points, fine.tris, () => 1, { depth: 2, scale: 0.1, mask });
+    fine.points.forEach((p, i) => {
+      if (Math.abs(p[2] + 10) < 1e-9) {
+        near(moved[i][2], -10, 1e-9, 'the far side of the part never moved');
+      }
+    });
   });
 
   test('wood: the grain runs the long way and the tree is under the board', () => {

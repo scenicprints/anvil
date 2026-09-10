@@ -47,6 +47,7 @@ import {
 import * as SH from './sheet.js';
 import * as SM from './sheetmetal.js';
 import { blendSheetEdges } from './surfaceblend.js';
+import * as RELIEF from './relief.js';
 import * as MT from './meshtools.js';
 import * as FM from './form.js';
 
@@ -1449,6 +1450,9 @@ export function rebuild(doc, options = {}) {
           doMeshAlign(feature, scope, scopeObj, errors);
           break;
 
+        case 'textureRelief':
+          doTextureRelief(feature, scope, scopeObj, errors);
+          break;
         case 'textureExtrude':
           doTextureExtrude(feature, scope, scopeObj, errors);
           break;
@@ -9771,6 +9775,163 @@ export function rebuild(doc, options = {}) {
           invert: !!feature.invert
         })
       });
+    }
+  }
+
+  /**
+   * A texture that wraps the whole body and comes out in the print.
+   *
+   * The difference from Texture Extrude, which is still here and still right
+   * for a scan, is three things. It works on a solid. It wraps: the picture is
+   * read three times, once down each axis, and blended by which way the surface
+   * faces, so the pattern carries over an edge and round a corner instead of
+   * smearing down the sides. And it refines the surface first, because a
+   * surface can only carry as much detail as it has vertices and a box has
+   * eight.
+   *
+   * That last part is what costs. The triangle count is reported rather than
+   * hidden, because a big panel at fine detail is millions of them and the
+   * person waiting should know why.
+   */
+  function doTextureRelief(feature, scope, ks, errs) {
+    const held = doc.imageData?.[feature.image];
+    if (!held?.gray) throw new Error('That image is not in this document any more');
+
+    const targets = pickBodies(feature, bodies, { sheets: 'either' });
+    if (!targets.length) throw new Error('Pick a body to put the texture on');
+
+    const depth = safeEval(feature.depth, scope, 0.6);
+    const size = Math.max(0.1, safeEval(feature.size, scope, 20));
+    const angle = (safeEval(feature.angle, scope, 0) * Math.PI) / 180;
+    // How small a triangle has to be before the picture can land on it. A
+    // quarter of a millimetre is about a printer's nozzle, and finer than that
+    // is triangles nothing downstream can use.
+    const detail = Math.max(0.05, safeEval(feature.detail, scope, 0.4));
+    if (!(Math.abs(depth) > 1e-6)) throw new Error('A texture of no depth is nothing');
+
+    const { width: iw, height: ih, gray } = held;
+    /*
+     * The picture, read at a point, wrapping round and round.
+     *
+     * Wrapping rather than clamping: a pattern is a finish and a finish does
+     * not stop halfway along a part. Bilinear rather than nearest, because a
+     * height map read nearest gives a surface made of little square steps, and
+     * those are visible in a print in a way they are not on a screen.
+     */
+    const sample = (u, v) => {
+      const x = (((u % 1) + 1) % 1) * (iw - 1);
+      const y = (1 - (((v % 1) + 1) % 1)) * (ih - 1);
+      const x0 = Math.floor(x);
+      const y0 = Math.floor(y);
+      const fx = x - x0;
+      const fy = y - y0;
+      const x1 = Math.min(iw - 1, x0 + 1);
+      const y1 = Math.min(ih - 1, y0 + 1);
+      const at = (px, py) => gray[py * iw + px] / 255;
+      return (
+        at(x0, y0) * (1 - fx) * (1 - fy) +
+        at(x1, y0) * fx * (1 - fy) +
+        at(x0, y1) * (1 - fx) * fy +
+        at(x1, y1) * fx * fy
+      );
+    };
+
+    for (const b of targets) {
+      const mesh = meshOf(b);
+      if (!mesh?.triVerts?.length) continue;
+
+      const points = [];
+      const stride = mesh.numProp;
+      for (let i = 0; i < mesh.vertProperties.length; i += stride) {
+        points.push([
+          mesh.vertProperties[i],
+          mesh.vertProperties[i + 1],
+          mesh.vertProperties[i + 2]
+        ]);
+      }
+      const tris = [];
+      for (let i = 0; i < mesh.triVerts.length; i += 3) {
+        tris.push([mesh.triVerts[i], mesh.triVerts[i + 1], mesh.triVerts[i + 2]]);
+      }
+
+      /*
+       * Which triangles the texture goes on.
+       *
+       * Worked out before refining and carried through it, because after
+       * refining there are no original triangles left to point at. Each new
+       * triangle inherits from the one it came out of, which is what `keep`
+       * tracks: the face references are resolved once, against the body as it
+       * was picked.
+       */
+      let chosen = null;
+      if (feature.faces?.length) {
+        try {
+          const topo = buildTopology(mesh, topologyOptions(b));
+          const faces = resolveFaceRefs(topo, feature.faces);
+          if (faces.length) {
+            chosen = new Set();
+            for (const f of faces) for (const t of f.tris) chosen.add(t);
+          }
+        } catch {
+          // A body whose faces cannot be read takes the texture all over,
+          // which is the same answer as picking none of them.
+        }
+      }
+
+      // Welded first: refinement splits edges by index, so the two triangles
+      // either side of an edge have to agree which two points it runs between.
+      const solid0 = RELIEF.weldPoints(points, tris);
+      const refined = RELIEF.refineMesh(solid0.points, solid0.tris, detail, 2000000);
+      if (refined.tris.length >= 2000000) {
+        errs.push({
+          feature: feature.id,
+          message:
+            'That much detail on a part this size runs past two million triangles, so it stopped there. A coarser detail, or a smaller area, will finish.'
+        });
+      }
+
+      let mask = null;
+      if (chosen) {
+        // Which refined triangles came from chosen ones, read straight off the
+        // parentage the refinement kept as it went.
+        const owner = [];
+        refined.parent.forEach((from, i) => {
+          if (chosen.has(solid0.from ? solid0.from[from] : from)) owner.push(i);
+        });
+        mask = RELIEF.faceMask(refined.points, refined.tris, owner);
+      }
+
+      const moved = RELIEF.displace(refined.points, refined.tris, sample, {
+        depth,
+        scale: 1 / size,
+        angle,
+        sharpness: Math.max(1, safeEval(feature.sharpness, scope, 4)),
+        mode: feature.mode || 'both',
+        mask
+      });
+
+      const verts = new Float32Array(moved.length * 3);
+      moved.forEach((p, i) => {
+        verts[i * 3] = p[0];
+        verts[i * 3 + 1] = p[1];
+        verts[i * 3 + 2] = p[2];
+      });
+      const idx = new Uint32Array(refined.tris.length * 3);
+      refined.tris.forEach((t, i) => {
+        idx[i * 3] = t[0];
+        idx[i * 3 + 1] = t[1];
+        idx[i * 3 + 2] = t[2];
+      });
+
+      if (b.solid) {
+        // Back to a solid, so everything downstream still works on it: it can
+        // be cut, joined, measured and exported like anything else.
+        replaceBody(bodies, b, { solid: K.ofMesh(verts, idx, ks) });
+      } else {
+        replaceBody(bodies, b, {
+          sheet: { numProp: 3, vertProperties: verts, triVerts: idx }
+        });
+      }
     }
   }
 
