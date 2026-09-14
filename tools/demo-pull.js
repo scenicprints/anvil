@@ -1,11 +1,16 @@
 /**
- * Pulling straight off the selection, both ways.
+ * Pulling, both ways.
  *
- * Click a face, drag the arrow that appears, watch the body follow, then type
- * the exact number over the one you dragged to. The same gesture on a sketch
- * profile extrudes it. Both have to work in both directions, which is the part
- * that was wrong first: an extrude has no negative length, it is a length one
- * way and a flag that turns it round.
+ * Pick a face, ask for Press Pull, drag the arrow that appears, watch the body
+ * follow, then type the exact number over the one you dragged to. A sketch
+ * profile and Extrude are the same gesture. Both have to work in both
+ * directions, which is the part that was wrong first: an extrude has no
+ * negative length, it is a length one way and a flag that turns it round.
+ *
+ * The arrow used to stand on the selection itself, with no command asked for.
+ * That is gone: it covered the faces around the one that had been picked and
+ * took the clicks meant for them, so picking two faces, or colouring one, or
+ * sketching on one, all meant fighting an extrude nobody had asked for.
  *
  * This drives real pointer events at real screen positions and measures what
  * came back, rather than calling the functions behind the gesture. That
@@ -146,6 +151,12 @@ async function dropSelection() {
   await wait(150);
 }
 
+/** Ask for the command the arrow belongs to. It belongs to one now. */
+async function ask(command) {
+  dev.runCommand(command);
+  await wait(900);
+}
+
 /* ---- a box, and its top face pulled each way ---- */
 dev.setTab('solid');
 dev.runCommand('primBox');
@@ -171,9 +182,6 @@ const top = Number(dev.bodies[0].solid.boundingBox().max[2].toFixed(3));
  */
 report.acrossTheFace = [];
 for (const [x, y] of [[0, 0], [-9, -9], [9, -9], [9, 9], [-9, 9], [0, -6], [6, 0]]) {
-  // Let go of the last one first. Otherwise its arrow is standing on the face,
-  // and half of these points land on the arrow rather than on the face under
-  // it, which is the arrow doing its job and tells us nothing about picking.
   await dropSelection();
   const s = screen([x, y, top]);
   await clickAt(s.clientX, s.clientY);
@@ -184,18 +192,24 @@ for (const [x, y] of [[0, 0], [-9, -9], [9, -9], [9, 9], [-9, 9], [0, -6], [6, 0
     arrow: arrow()?.len ?? 0
   });
 }
+// And an arrow on none of them. Every one of these points used to have to let
+// go of the last pick first, because the arrow the last pick stood up was
+// covering the face the next one was aimed at.
 report.everyPointPickedTheFace = report.acrossTheFace.every(
-  (p) => p.faces === 1 && p.edges === 0 && p.arrow > 40
+  (p) => p.faces === 1 && p.edges === 0 && p.arrow === 0
 );
 
 await dropSelection();
 await clickAt(cx, cy);
+report.noHandleUntilAsked = !dev.state.pullHandle;
+await ask('pressPull');
 report.handleOnFace = !!dev.state.pullHandle;
 report.faceOut = await pull(70, { commit: 8 });
 await undo();
 
 await dropSelection();
 await clickAt(cx, cy);
+await ask('pressPull');
 report.faceIn = await pull(-70, { commit: -8 });
 await undo();
 
@@ -214,6 +228,7 @@ report.faceSymmetric =
 // the arrow could be typed at, because there was nothing on screen to type in.
 await dropSelection();
 await clickAt(cx, cy);
+await ask('pressPull');
 {
   const input = document.querySelector('.pull-entry input');
   report.boxIsThereBeforeAnyDrag = !!input;
@@ -238,9 +253,10 @@ await clickAt(cx, cy);
 }
 await undo();
 
-/* ---- an edge pulls a fillet, which is the third thing Press Pull routes ---- */
-// A profile opens Extrude and a face opens Offset Face, and both already
-// worked. Clicking an edge used to do nothing at all.
+/* ---- an edge is picked, and picking it is all that happens ---- */
+// Clicking an edge used to stand a fillet arrow on it, which is the same
+// intrusion as the one on a face and went the same way. Fillet is a command
+// that takes the edge already picked, which is one keystroke and no ambush.
 await dropSelection();
 {
   const mid = dev.state.vp.worldToScreen(15, 0, 10);
@@ -251,19 +267,19 @@ await dropSelection();
     arrow: arrow()?.len ?? 0,
     box: !!valueBox()
   };
-  const input = valueBox();
-  if (input) {
-    input.focus();
-    input.value = '3';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await wait(600);
-    report.filletWhileTyping = {
-      title: document.getElementById('inspectorTitle')?.textContent,
-      radius: dev.state.editing?.feature?.sets?.[0]?.radius,
-      volume: Number(dev.bodies[0].solid.volume().toFixed(1))
-    };
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    await wait(800);
+  report.pickingAnEdgeIsJustPicking =
+    report.edgePick.edges === 1 && report.edgePick.arrow === 0 && !report.edgePick.box;
+
+  await ask('fillet');
+  report.filletTookThePickedEdge = {
+    title: document.getElementById('inspectorTitle')?.textContent,
+    edges: dev.state.editing?.feature?.sets?.[0]?.edges?.length ?? 0
+  };
+  const set = dev.state.editing?.feature?.sets?.[0];
+  if (set) {
+    set.radius = '3';
+    document.getElementById('inspectorOk').click();
+    await wait(900);
   }
   const after = Number(dev.bodies[0].solid.volume().toFixed(1));
   // A 3 mm round along a 30 mm square corner takes r^2(1 - pi/4) off per unit
@@ -277,6 +293,7 @@ await undo();
 /* ---- escaping out of a pull leaves nothing behind ---- */
 await dropSelection();
 await clickAt(cx, cy);
+await ask('pressPull');
 {
   const a = arrow();
   report.escapeHadAnArrow = !!a;
@@ -345,6 +362,8 @@ const clickProfile = async () => {
 };
 await clickProfile();
 report.profileChosen = dev.state.selection.profiles.length;
+report.noArrowOnABareProfile = (arrow()?.len ?? 0) === 0;
+await ask('extrude');
 report.arrowOnAFreshProfile = arrow()?.len ?? 0;
 report.freshProfileHasAnArrowToAimAt = report.arrowOnAFreshProfile > 40;
 
@@ -354,6 +373,7 @@ report.profileIn = await pull(-70, { commit: 10 });
 await undo();
 await clickProfile();
 report.profileChosenAgain = dev.state.selection.profiles.length;
+await ask('extrude');
 report.profileOut = await pull(70, { commit: 10 });
 
 // Pulled against the arrow, the material goes the other way: below the face it

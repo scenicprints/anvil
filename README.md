@@ -1223,6 +1223,15 @@ being worked on is still steel, and changing its colour must not change what it
 weighs. Both live on the document rather than in the timeline: rolling back past
 a material should not turn a steel bracket into a plastic one.
 
+Colour goes on a body or on the faces picked, and the dialog opens on whichever
+of the two was pointed at. A face carries its colour as a description of itself
+rather than as its number in the list, the same description a fillet uses to
+find its edge again, so changing a dimension above it moves the colour with the
+face instead of leaving it on whatever face is seventh afterwards. A picked face
+also names its body, which is what every other body command reads now: asking
+for a colour with one face picked used to leave the set of picked bodies empty,
+and empty meant all of them, so it recoloured the whole document.
+
 **Compute All** throws the rebuild cache away and builds the whole timeline
 again. It is not the everyday command it is in Fusion, because Anvil rebuilds as
 it goes. It is here for the one case that matters: the cache holds what the last
@@ -1786,16 +1795,21 @@ takes the small ones, and a box dragged each way takes what it should.
 `demo-step.js` writes a STEP file entity by entity, reads it back, and checks
 the solid it makes measures exactly what the file described. `demo-recognise.js` drills a plate, reads it back as four holes in two sizes,
 clicks a size to select it, then exports the same body to STL and reads it again
-with no history at all to check it says the same thing. `demo-pull.js` clicks a face, drags the arrow that appears, checks the body grew
-while the drag was happening, types an exact size over what was dragged to, and
-does the same to a sketch profile. It also clicks seven places across one face
-and measures how long the arrow is on screen at each, and it escapes out of a
-pull and looks at what is left behind, because those are the three ways this
-interaction has actually broken: a hidden edge on the far side of the part
-winning over the face in front of it, so nothing could be picked in the middle
-of a face; the arrow coming up as a zero-length dot pointing at the camera after
-a sketch was finished; and the value box outliving the feature it belonged to
-and floating beside the pointer for the rest of the session. An earlier version
+with no history at all to check it says the same thing. `demo-pull.js` picks a face, asks for Press Pull, drags the arrow that appears,
+checks the body grew while the drag was happening, types an exact size over what
+was dragged to, and does the same to a sketch profile with Extrude. It also
+clicks seven places across one face, and it escapes out of a pull and looks at
+what is left behind, because those are the three ways this interaction has
+actually broken: a hidden edge on the far side of the part winning over the face
+in front of it, so nothing could be picked in the middle of a face; the arrow
+coming up as a zero-length dot pointing at the camera after a sketch was
+finished; and the value box outliving the feature it belonged to and floating
+beside the pointer for the rest of the session.
+`demo-faceselect.js` is the other half of that: it checks that picking a face
+does nothing but pick it, that a second face can be added with Shift, that
+colouring reaches the faces picked or the body under them and no further, that
+Bodies only picks bodies, and that the arrow comes back the moment Press Pull is
+asked for. An earlier version
 of this demo pressed things with `element.click()`, which dispatches no pointer
 events at all, and passed every run while all three were broken. Anything that
 tests a gesture has to make the gesture. `demo-extrude.js` covers the same
@@ -2091,13 +2105,23 @@ is no version history view, though the versions are kept.
 Everything else in Fusion's Solid, Surface, Sheet Metal, Mesh, Form, Assemble,
 Construct, Inspect and Sketch tabs is here, option by option, as of v2.80.0.
 
-**Pull it, rather than asking for a command.** Click a planar face and an arrow
-stands on it, with a distance box beside the arrow. Type the number, or drag the
-arrow and watch the body follow as it happens with the number keeping up. Either
-one on its own is enough: typing needs no drag first, and dragging fills the box
-in. Enter accepts, Escape throws the whole thing away. A sketch profile does the
-same and extrudes instead: one gesture, two features, because a face and a
+**Ask for Press Pull or Extrude, then drag it.** With a planar face picked,
+Press Pull stands an arrow on it with a distance box beside the arrow. Type the
+number, or drag the arrow and watch the body follow as it happens with the
+number keeping up. Either one on its own is enough: typing needs no drag first,
+and dragging fills the box in. Enter accepts, Escape throws the whole thing
+away. A sketch profile and Extrude are the same gesture, because a face and a
 profile want different things done to them but the same thing said.
+
+The arrow used to stand on the selection itself, with nothing asked for: click a
+face and there it was, ready to drag. That read well and worked badly. It is
+ninety five pixels long, drawn over the top of everything, and offered the click
+before the model is, so it covered the faces around the one that had been picked
+and took the clicks meant for them. Shift clicking a second face opened Press
+Pull instead of adding to the selection. Colouring a face, or sketching on one,
+meant working around an extrude nobody had asked for. And standing up turned the
+camera, so the rest of the part moved between the first pick and the second.
+Picking is quiet now, and the arrow belongs to the command.
 
 The box used to exist only during a drag, so the only way to give a size was to
 drag out a wrong one and type over it. The number is usually already known and
@@ -2107,12 +2131,10 @@ too, or it is a box you have to find and click before it will take anything,
 which from the keyboard is the same as not being there. Focus is only taken from
 the viewport: a field somebody is already typing in keeps it.
 
-**A click on the arrow is a click, not a drag of nothing.** Pressing it and
-letting go without moving used to start the feature at zero, so clicking a face
-a second time, or clicking anywhere near the arrow the first click had put up,
-dropped you into Press Pull. From the outside that is the app deciding on its
-own to extrude, and it is what made a face impossible to simply select and then
-sketch on. A press that never moved now falls through to ordinary selection.
+**A click on the arrow is a click, not a drag of nothing.** The dialog the arrow
+belongs to may be waiting to be pointed at, and the arrow is standing in front of
+the thing to point at. A press on it that never moves goes through to whatever is
+behind it, rather than counting as a drag of zero.
 
 **Extrude takes the only profile on screen without being asked.** Fusion's own
 Extrude reference says it does: "When you invoke the Extrude tool, and there is

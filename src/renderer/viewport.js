@@ -9,7 +9,7 @@
 
 import * as THREE from './three.js';
 import { applyWrap, wrapTexture } from './wrap.js';
-import { buildGeometry, buildEdges } from './meshutil.js';
+import { buildGeometry, buildEdges, faceColourArray } from './meshutil.js';
 
 // Surfaces are drawn in a warmer tone than solids, so which is which reads at
 // a glance rather than needing the browser to be checked.
@@ -1559,6 +1559,25 @@ export class Viewport {
         geom.setAttribute(
           'color',
           new THREE.Float32BufferAttribute(rec.vertexColours, 3)
+        );
+        entry.mat.vertexColors = true;
+        entry.mat.color.set(0xffffff);
+      } else if (!rec.chrome && rec.faceColours?.length && !rec.displayMesh) {
+        // Faces coloured by hand, which is the everyday version of the same
+        // thing. Not while a section is on: that draws a mesh cut to the
+        // plane, and the triangles a face is made of are numbered for the
+        // whole one.
+        geom.setAttribute(
+          'color',
+          new THREE.Float32BufferAttribute(
+            faceColourArray(
+              rec.topology,
+              (shown.triVerts?.length || 0) / 3,
+              baseColourOf(rec),
+              rec.faceColours
+            ),
+            3
+          )
         );
         entry.mat.vertexColors = true;
         entry.mat.color.set(0xffffff);

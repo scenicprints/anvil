@@ -104,6 +104,7 @@ import {
   meshReaderFor,
   buildGeometry,
   buildEdges,
+  faceColourArray,
   to3MF,
   zipStore
 } from '../src/renderer/meshutil.js';
@@ -1186,6 +1187,50 @@ async function run() {
       'every edge of a box is an outside corner'
     );
     assert(topo.faces.every((f) => f.planar), 'every face of a box is flat');
+    res.dispose();
+  });
+
+  test('appearance: a face colour covers that face and nothing else', () => {
+    const doc = newDocument();
+    doc.features = [prim('box', { width: '40', depth: '30', height: '20' })];
+    const res = rebuild(doc);
+    const mesh = K.meshData(res.bodies[0].solid);
+    const topo = buildTopology(mesh);
+    const triCount = mesh.triVerts.length / 3;
+    const geom = buildGeometry(mesh);
+
+    const colours = faceColourArray(topo, triCount, 0xe0dcd2, [
+      { face: 2, colour: '#b8564a' }
+    ]);
+    // One colour per vertex of the geometry actually drawn, or three.js reads
+    // off the end of it and the body comes out in garbage.
+    assert(
+      colours.length === geom.getAttribute('position').count * 3,
+      `expected ${geom.getAttribute('position').count * 3} numbers, got ${colours.length}`
+    );
+
+    const painted = new Set(topo.faces[2].tris);
+    const want = new THREE.Color('#b8564a');
+    const base = new THREE.Color(0xe0dcd2);
+    const matches = (t, k, c) => {
+      const o = t * 9 + k * 3;
+      return (
+        Math.abs(colours[o] - c.r) < 1e-6 &&
+        Math.abs(colours[o + 1] - c.g) < 1e-6 &&
+        Math.abs(colours[o + 2] - c.b) < 1e-6
+      );
+    };
+    for (let t = 0; t < triCount; t++) {
+      const c = painted.has(t) ? want : base;
+      for (let k = 0; k < 3; k++) {
+        assert(
+          matches(t, k, c),
+          `triangle ${t} corner ${k} is the wrong colour`
+        );
+      }
+    }
+    assert(painted.size > 0, 'the face being coloured has triangles');
+    assert(painted.size < triCount, 'and it is not the whole box');
     res.dispose();
   });
 

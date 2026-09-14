@@ -362,6 +362,9 @@ function rebuildAll() {
         // document alone. Clear Analysis puts it back.
         appearance:
           state.colourBy?.of.get(b.id) ?? (state.doc.appearance?.byBody?.[b.id] || null),
+        // And the faces of it that were given a colour of their own, which is
+        // painted over that one rather than instead of it.
+        faceColours: faceColoursFor(b.id, topology),
         // An image wrapped over the whole body, carried with the image itself
         // so the viewport has everything it needs to draw it.
         wrap: wrapFor(b.id),
@@ -567,7 +570,8 @@ function handleViewportDown(e) {
   // manipulator is not read as the start of an orbit.
   if (state.editForm && editFormPointerDown(e)) return true;
 
-  // The pull arrow standing on the selection, for the same reason.
+  // The pull arrow, which belongs to an open Extrude or Press Pull, for the
+  // same reason.
   if (state.pullHandle && pullPointerDown(e)) return true;
 
   // A dialog that is waiting to be pointed at gets the click first.
@@ -697,6 +701,7 @@ function handleViewportDown(e) {
 /** Fold a pick into the selection, or hand it to whatever dialog asked for it. */
 function acceptPick(hit, e) {
   const additive = e.shiftKey || e.ctrlKey;
+  const filter = activeFilter();
 
   if (state.picking) {
     state.picking.onPick(hit, additive);
@@ -717,10 +722,17 @@ function acceptPick(hit, e) {
     renderSketchDisplay();
   } else if (hit.kind === 'edge') {
     toggle(state.selection.edges, `${hit.bodyId}:${hit.edgeId}`, additive);
-  } else if (hit.kind === 'face' && hit.faceId !== null) {
+  } else if (hit.kind === 'face' && hit.faceId !== null && filter.faces) {
     toggle(state.selection.faces, `${hit.bodyId}:${hit.faceId}`, additive);
   } else if (hit.bodyId) {
-    toggle(state.selection.bodies, hit.bodyId, additive);
+    // Bodies only and Components only both land here, because a click on a
+    // part lands on a face of it whatever the setting says. Reading the
+    // setting here rather than only where the click is let through is what
+    // makes those two entries in the Priority menu do anything at all: they
+    // were filtering nothing, and a face was selected either way.
+    for (const id of filter.wholeBody ? componentSiblings(hit.bodyId) : [hit.bodyId]) {
+      toggle(state.selection.bodies, id, additive);
+    }
   }
 
   state.vp.setSelection(state.selection.bodies);
@@ -728,6 +740,37 @@ function acceptPick(hit, e) {
   renderTree();
   refreshPullHandle();
   updateHints();
+}
+
+/** Every body in the same component, which is what Components only means. */
+function componentSiblings(bodyId) {
+  const bodies = state.result?.bodies || [];
+  const me = bodies.find((b) => b.id === bodyId);
+  if (!me?.component) return [bodyId];
+  return bodies.filter((b) => b.component === me.component).map((b) => b.id);
+}
+
+/**
+ * Which bodies a body command is about.
+ *
+ * A face names its body as surely as the body does, and which of the two got
+ * clicked is about what was easy to hit rather than about what was meant. Read
+ * straight off `selection.bodies`, a face pick left that set empty, every one
+ * of these commands took empty as "all of them", and asking for a colour with
+ * one face picked recoloured the entire document.
+ */
+function chosenBodyIds() {
+  const ids = new Set(state.selection.bodies);
+  for (const key of [...state.selection.faces, ...state.selection.edges]) {
+    ids.add(splitKey(key).bodyId);
+  }
+  return [...ids];
+}
+
+/** That list narrowed to the chosen bodies, or left whole when none are. */
+function narrowToChosen(list) {
+  const picked = new Set(chosenBodyIds());
+  return picked.size ? list.filter((b) => picked.has(b.id)) : list;
 }
 
 function toggle(set, key, additive) {
@@ -3417,29 +3460,6 @@ function singleSelectedFace() {
 }
 
 /**
- * The one selected edge, when exactly one is selected and it is an edge a
- * fillet could stand on.
- *
- * A tangent edge is turned away: where two faces meet smoothly there is no
- * outward direction to drag along and no corner to round.
- */
-function singleSelectedEdge() {
-  if (state.selection.edges.size !== 1 || state.selection.faces.size) return null;
-  const { bodyId, index } = splitKey([...state.selection.edges][0]);
-  const record = (state.records || []).find((r) => r.id === bodyId);
-  const edge = record?.topology?.edges[index];
-  if (!edge?.refPoint || !edge.nA || !edge.nB) return null;
-  const z = [
-    edge.nA[0] + edge.nB[0],
-    edge.nA[1] + edge.nB[1],
-    edge.nA[2] + edge.nB[2]
-  ];
-  const len = Math.hypot(z[0], z[1], z[2]);
-  if (len < 1e-6) return null;
-  return { record, edge, out: [z[0] / len, z[1] / len, z[2] / len] };
-}
-
-/**
  * A sketch attached to a face. The reference is stored so the sketch can find
  * the face again after a rebuild, and the frame it was created with is kept as
  * a fallback for when the face is gone.
@@ -4009,10 +4029,15 @@ function updateHints() {
     if (regions) bits.push(`${regions} profile${regions === 1 ? '' : 's'} selected`);
     bits.push(navHint(false));
   } else {
+    const faces = state.selection.faces.size;
+    const edges = state.selection.edges.size;
     if (state.selection.bodies.size) {
       bits.push(`${state.selection.bodies.size} body selected`);
       const props = bodyProperties();
       if (props) bits.push(props);
+    } else if (faces || edges) {
+      if (faces) bits.push(`${faces} face${faces === 1 ? '' : 's'} selected`);
+      if (edges) bits.push(`${edges} edge${edges === 1 ? '' : 's'} selected`);
     } else {
       bits.push(navHint(true));
     }
@@ -6914,9 +6939,8 @@ function cmdIntersect() {
     setStatus('Intersect works inside a sketch.');
     return;
   }
-  const ids = state.selection.bodies.size
-    ? [...state.selection.bodies]
-    : (state.result?.bodies || []).map((b) => b.id);
+  const picked = chosenBodyIds();
+  const ids = picked.length ? picked : (state.result?.bodies || []).map((b) => b.id);
   if (!ids.length) {
     setStatus('Nothing to take a section of yet.');
     return;
@@ -7174,9 +7198,8 @@ function worldToSketchLocal(plane, p) {
 
 /** Every outside edge of the bodies in play, for filleting a whole part at once. */
 function selectAllConvexEdges() {
-  const targets = state.selection.bodies.size
-    ? [...state.selection.bodies]
-    : (state.records || []).map((r) => r.id);
+  const picked = chosenBodyIds();
+  const targets = picked.length ? picked : (state.records || []).map((r) => r.id);
   state.selection.edges.clear();
   for (const bodyId of targets) {
     const rec = (state.records || []).find((r) => r.id === bodyId);
@@ -9189,9 +9212,7 @@ function startCentreOfMass() {
     setStatus('Nothing to weigh yet. A surface has no mass.');
     return;
   }
-  const chosen = state.selection.bodies.size
-    ? records.filter((r) => state.selection.bodies.has(r.id))
-    : records;
+  const chosen = narrowToChosen(records);
 
   const mats = state.doc.materials || {};
   const entries = chosen.map((r) => ({
@@ -9253,9 +9274,7 @@ function startInterference() {
     setStatus('Interference needs two solid bodies to compare.');
     return;
   }
-  const chosen = state.selection.bodies.size
-    ? bodies.filter((b) => state.selection.bodies.has(b.id))
-    : bodies;
+  const chosen = narrowToChosen(bodies);
   if (chosen.length < 2) {
     setStatus('Select at least two bodies, or none to check them all.');
     return;
@@ -12553,9 +12572,7 @@ async function cmdPrint3D() {
     setStatus('Nothing solid to print. A surface has no thickness.');
     return;
   }
-  const chosen = state.selection.bodies.size
-    ? solids.filter((b) => state.selection.bodies.has(b.id))
-    : solids;
+  const chosen = narrowToChosen(solids);
 
   const kept = state.print3d || { format: '3mf', bed: '256, 256, 256', open: true };
   const meshes = chosen.map((b) => K.meshData(b.solid));
@@ -13910,13 +13927,8 @@ function editJoint(joint) {
 }
 
 function bodySelectionOrAll() {
-  if (state.selection.bodies.size) return [...state.selection.bodies];
-  // A picked face or edge names its body just as well.
-  const fromGeometry = new Set();
-  for (const key of [...state.selection.faces, ...state.selection.edges]) {
-    fromGeometry.add(splitKey(key).bodyId);
-  }
-  return fromGeometry.size ? [...fromGeometry] : 'all';
+  const picked = chosenBodyIds();
+  return picked.length ? picked : 'all';
 }
 
 /* ------------------------------------------------------------------ */
@@ -14273,23 +14285,26 @@ function startPressPull() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Pulling, straight off the selection                                 */
+/* Pulling, on an open Extrude or Press Pull                           */
 /* ------------------------------------------------------------------ */
 
 /**
- * The arrow that stands on whatever is selected, waiting to be pulled.
+ * The arrow for a dialog that is already open, waiting to be pulled.
  *
- * Clicking a face and dragging it is the obvious way to say "make this
- * thicker", and asking for a command and then a second pick of the thing
- * already pointed at is two steps of ceremony in front of one intention. So a
- * single planar face, or a single sketch profile, grows a handle: drag it and
- * the body follows as it happens.
+ * It used to stand on the selection instead: click one face and an arrow grew
+ * out of it, ready to be dragged. That read well and worked badly. The arrow
+ * is ninety five pixels long, drawn over the top of everything, and offered
+ * the click before anything else is, so it covered the faces around the one
+ * that had been picked and took the clicks meant for them. Shift clicking a
+ * second face opened Press Pull instead of adding to the selection, and every
+ * command that wants a face first had an extrude standing in front of it that
+ * nobody had asked for. Appearing at all turned the camera as well, which
+ * moved the rest of the part out from under the pointer between the first
+ * pick and the second.
  *
- * A face pulls itself; a profile extrudes. They are different features and the
- * same gesture, which is the point.
- */
-/**
- * The arrow for an extrude dialog that is already open.
+ * So the arrow belongs to the command now. Ask for Extrude or Press Pull and
+ * it is there to drag; pick a face without asking for anything and a face is
+ * all that is picked.
  *
  * Reaching for the ribbon's Extrude is the other way into the same feature, and
  * it used to be a dead end. The dialog opens with a distance of zero, on
@@ -14306,23 +14321,19 @@ function startPressPull() {
  */
 function editingPullTarget() {
   const f = state.editing?.feature;
-  if (!f || f.type !== 'extrude') return null;
+  if (!f) return null;
+
+  // Press Pull offsets the faces it was given, and one arrow along the first
+  // face's own normal is the whole of what it needs. The distance carries its
+  // sign, so dragging back into the body cuts, which is the press half of it.
+  if (f.type === 'offsetFace') return faceArrow(f.bodies?.[0], f.faces?.[0], f);
+
+  if (f.type !== 'extrude') return null;
   // Only the plain case. A revolve turns rather than travels, and to-object and
   // two-sided extrudes are not one length along one axis.
   if (f.extent !== 'distance' || f.direction === 'two') return null;
 
-  if (f.faces?.length) {
-    const record = (state.records || []).find((r) => r.id === f.faces[0].bodyId);
-    if (!record?.topology) return null;
-    const [face] = resolveFaceRefs(record.topology, [f.faces[0].face]);
-    if (!face?.planar) return null;
-    const b = basisFor(face.normal);
-    return {
-      kind: 'editing',
-      frame: { origin: face.centre, x: b.x, y: b.y, z: face.normal },
-      feature: f
-    };
-  }
+  if (f.faces?.length) return faceArrow(f.faces[0].bodyId, f.faces[0].face, f);
 
   const plane = f.sketch ? state.result?.sketchPlanes?.[f.sketch] : null;
   const regions = f.sketch ? state.result?.sketchRegions?.[f.sketch] : null;
@@ -14345,56 +14356,25 @@ function editingPullTarget() {
   };
 }
 
+/** An arrow standing on a face of a body, pointing the way that face points. */
+function faceArrow(bodyId, ref, feature) {
+  const record = (state.records || []).find((r) => r.id === bodyId);
+  if (!record?.topology || !ref) return null;
+  const [face] = resolveFaceRefs(record.topology, [ref]);
+  if (!face?.planar) return null;
+  const b = basisFor(face.normal);
+  return {
+    kind: 'editing',
+    frame: { origin: face.centre, x: b.x, y: b.y, z: face.normal },
+    feature
+  };
+}
+
 function pullTarget() {
-  // An open dialog gets its own arrow rather than none at all.
-  if (state.editing && !state.sketcher.active && !state.picking && !state.editForm) {
-    return editingPullTarget();
-  }
-  if (state.sketcher.active || state.editing || state.picking || state.editForm) return null;
-
-  if (state.selection.faces.size === 1 && !state.selection.edges.size) {
-    const found = singleSelectedFace();
-    if (!found) return null;
-    const b = basisFor(found.face.normal);
-    return {
-      kind: 'face',
-      frame: { origin: found.face.centre, x: b.x, y: b.y, z: found.face.normal },
-      record: found.record,
-      face: found.face
-    };
-  }
-
-  // Fusion's Press Pull is a router: a profile opens Extrude, a face opens
-  // Offset Face, and an edge opens Fillet. The arrow was already the first two.
-  // The bisector of the two faces is the direction a fillet grows in, whether
-  // it is rounding a corner off or filling one in.
-  const edge = singleSelectedEdge();
-  if (edge) {
-    const b = basisFor(edge.out);
-    return {
-      kind: 'edge',
-      frame: { origin: edge.edge.refPoint, x: b.x, y: b.y, z: edge.out },
-      record: edge.record,
-      edge: edge.edge
-    };
-  }
-
-  if (state.selection.profiles.length === 1 && !state.selection.faces.size) {
-    const pick = state.selection.profiles[0];
-    const plane = state.result?.sketchPlanes?.[pick.sketch];
-    const region = state.result?.sketchRegions?.[pick.sketch]?.find(
-      (r) => r.id === pick.regionId
-    );
-    if (!plane || !region) return null;
-    const at = regionCentreWorld(region, plane);
-    if (!at) return null;
-    return {
-      kind: 'profile',
-      frame: { origin: at, x: plane.x, y: plane.y, z: plane.n },
-      pick
-    };
-  }
-  return null;
+  // A sketch, a dialog waiting to be pointed at, or a form being shaped all
+  // want the click for themselves.
+  if (state.sketcher.active || state.picking || state.editForm) return null;
+  return state.editing ? editingPullTarget() : null;
 }
 
 /** The middle of a sketch region, in the world, so the arrow stands on it. */
@@ -14455,41 +14435,20 @@ function pullPointerDown(e) {
   const frame = target.frame;
   // Normally the view was already turned when the arrow appeared, so this does
   // nothing. It is here for the one case that is left: orbiting to end-on after
-  // selecting and then pressing. A jump at that moment is jarring, and it is
-  // still better than a drag along an arrow with no length to drag along.
+  // the dialog opened and then pressing. A jump at that moment is jarring, and
+  // it is still better than a drag along an arrow with no length to drag along.
   turnToSeeAxis(frame.z);
-  const start = { x: e.clientX, y: e.clientY };
 
-  // The arrow on an open dialog drives the feature that dialog is editing.
-  // Nothing is created and nothing is opened: it is already there, waiting for
-  // the one number it has not been given.
-  if (target.kind === 'editing') {
-    state.pullDrag = {
-      target,
-      frame,
-      start,
-      feature: target.feature,
-      moved: false,
-      typed: false,
-      existing: true
-    };
-    showPullValue(e);
-    try {
-      state.vp.canvas.setPointerCapture(e.pointerId);
-      state.pullDrag.pointerId = e.pointerId;
-    } catch {
-      /* capture is a convenience, not a requirement */
-    }
-    return true;
-  }
-
-  // Recorded before the dialog opens, not after. Opening it rebuilds, and a
-  // rebuild takes the handle away again unless it can see that a drag has hold
-  // of it, which left the arrow vanishing under the pointer that grabbed it.
-  const feature = pullFeatureFor(target);
-  state.pullDrag = { target, frame, start, feature, moved: false, typed: false };
-  openPullEditor(target, feature);
-
+  // Nothing is created and nothing is opened: the feature is already there,
+  // waiting for the one number it has not been given.
+  state.pullDrag = {
+    target,
+    frame,
+    start: { x: e.clientX, y: e.clientY },
+    feature: target.feature,
+    moved: false,
+    typed: false
+  };
   showPullValue(e);
   try {
     state.vp.canvas.setPointerCapture(e.pointerId);
@@ -14498,74 +14457,6 @@ function pullPointerDown(e) {
     /* capture is a convenience, not a requirement */
   }
   return true;
-}
-
-/** The feature a pull on this target creates. */
-function pullFeatureFor(target) {
-  if (target.kind === 'edge') {
-    return {
-      id: uid('f'),
-      type: 'fillet',
-      bodies: [target.record.id],
-      sets: [
-        {
-          edges: [edgeReference(target.edge)],
-          radius: '0',
-          filletType: 'constant',
-          endRadius: null,
-          chamferType: 'equal',
-          distance2: '1',
-          angle: '45'
-        }
-      ]
-    };
-  }
-  if (target.kind === 'face') {
-    return {
-      id: uid('f'),
-      type: 'offsetFace',
-      bodies: [target.record.id],
-      faces: [faceReference(target.face)],
-      distance: '0'
-    };
-  }
-  return {
-    id: uid('f'),
-    type: 'extrude',
-    sketch: target.pick.sketch,
-    seeds: [target.pick.seed],
-    distance: '0',
-    // An extrude goes one way and is turned round by `flip`. It has no
-    // "other side" setting: `two` means both at once, with a length each.
-    direction: 'one',
-    flip: false,
-    // Join only where the sketch is drawn on a body. Anywhere else it is a new
-    // part, not an addition to whatever happens to exist already.
-    op:
-      state.result?.bodies.length && state.doc.sketches[target.pick.sketch]?.plane?.face
-        ? 'join'
-        : 'new',
-    targets: 'all',
-    taper: '0',
-    extent: 'distance'
-  };
-}
-
-/**
- * Put the feature in and open its dialog, without moving the camera or taking
- * the focus. The feature goes in straight away and is driven from there, so
- * what is on screen is the real rebuild rather than a preview that might
- * disagree with it.
- */
-function openPullEditor(target, feature) {
-  const title = { edge: 'Fillet', face: 'Press Pull' }[target.kind] || 'Extrude';
-  const fields =
-    target.kind === 'edge'
-      ? blendFieldsFor(feature, 'fillet')
-      : target.kind === 'face'
-        ? pressPullFields()
-        : extrudeFields();
-  openFeatureEditor(feature, title, fields, false, { keepView: true, keepFocus: true });
 }
 
 function pullPointerMove(e) {
@@ -14597,30 +14488,17 @@ function pullPointerUp(e) {
   state.pullDrag = null;
   refreshPullHandle();
 
-  // A press on the arrow that never moved is a click, not a drag, and what it
-  // is a click on is whatever the arrow is standing on. Taken as a drag of
-  // nothing it started a feature: clicking a face a second time, or clicking
-  // anywhere near the arrow the first click put up, opened Press Pull at zero.
-  // From the outside that is the app deciding on its own to extrude, and it is
-  // what makes a face impossible to simply select and then sketch on.
-  if (!d.moved && !d.typed && e) {
-    if (d.existing && state.editing?.pickInto) {
-      hidePullValue();
-      const profile = profilePickArmed() ? pickProfile(e.clientX, e.clientY) : null;
-      if (profile) return pickIntoEdit({ kind: 'profile', ...profile });
-      const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
-      if (hit) return pickIntoEdit(hit);
-      return true;
-    }
-    if (!d.existing) {
-      // The feature was put in at the press, so backing out of it here leaves
-      // no trace, and the click falls through to ordinary selection.
-      cancelEdit();
-      refreshPullHandle();
-      const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
-      if (hit) acceptPick(hit, e);
-      return true;
-    }
+  // A press on the arrow that never moved is a click, not a drag. The dialog
+  // it belongs to may be waiting to be pointed at, and the arrow stands in
+  // front of the thing being pointed at, so the click goes through to whatever
+  // is behind it rather than being counted as a drag of nothing.
+  if (!d.moved && !d.typed && e && state.editing?.pickInto) {
+    hidePullValue();
+    const profile = profilePickArmed() ? pickProfile(e.clientX, e.clientY) : null;
+    if (profile) return pickIntoEdit({ kind: 'profile', ...profile });
+    const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
+    if (hit) return pickIntoEdit(hit);
+    return true;
   }
 
   const input = state.pullValueEl?.querySelector('input');
@@ -14673,18 +14551,12 @@ function setPullDistance(mm) {
   const d = state.pullDrag;
   if (!d) return;
   const rounded = Math.abs(mm) < 1e-9 ? 0 : Number(mm.toFixed(4));
-  // A fillet has a radius rather than a distance, and no sign at all: dragged
-  // back past nothing there is no fillet, not an inside-out one.
-  if (d.feature.type === 'fillet') {
-    d.feature.sets[0].radius = String(Math.max(0, rounded));
-  } else {
-    d.feature.distance = String(rounded);
-    // A face offset carries its sign, and cuts in when it is negative. An
-    // extrude has no sign: it is a length one way, turned round by `flip`.
-    if (d.feature.type === 'extrude') {
-      d.feature.distance = String(Math.abs(rounded));
-      d.feature.flip = rounded < 0;
-    }
+  d.feature.distance = String(rounded);
+  // A face offset carries its sign, and cuts in when it is negative. An
+  // extrude has no sign: it is a length one way, turned round by `flip`.
+  if (d.feature.type === 'extrude') {
+    d.feature.distance = String(Math.abs(rounded));
+    d.feature.flip = rounded < 0;
   }
   // The same number the dialog's own field shows. A feature stores what the
   // expression evaluates to, with no unit conversion in between, so converting
@@ -14712,7 +14584,7 @@ function showPullValue(e) {
   const wrap = document.createElement('label');
   wrap.className = 'sk-entry-field';
   const cap = document.createElement('span');
-  cap.textContent = state.pullHandle?.kind === 'edge' ? 'Radius' : 'Distance';
+  cap.textContent = 'Distance';
   const input = document.createElement('input');
   input.type = 'text';
   input.spellcheck = false;
@@ -14727,19 +14599,12 @@ function showPullValue(e) {
     const scope = resolveParameters(state.doc.parameters).scope;
     if (!Number.isFinite(safeEval(text, scope, NaN))) return;
 
-    // Typing a size into the box is the same request as dragging to one, so it
-    // makes the feature the same way a drag does. Without this the box was
-    // inert until something had been dragged, which is the wrong way round:
-    // typing the number you already know is the quicker of the two.
-    if (!state.editing && state.pullHandle && state.pullHandle.kind !== 'editing') {
-      const target = state.pullHandle;
-      openPullEditor(target, pullFeatureFor(target));
-      input.focus();
-    }
+    // Typing the size is the same request as dragging to it. The arrow is only
+    // ever up while the dialog that owns it is open, so there is always a
+    // feature there to give the number to.
     const feature = state.editing?.feature;
     if (!feature) return;
-    if (feature.type === 'fillet' && feature.sets?.length) feature.sets[0].radius = text;
-    else feature.distance = text;
+    feature.distance = text;
     renderFields();
     scheduleRebuild();
   });
@@ -17279,9 +17144,7 @@ function cmdProjectToSurface() {
     return;
   }
   const sk = state.sketcher.sketch;
-  const targets = (state.records || []).filter((r) =>
-    state.selection.bodies.size ? state.selection.bodies.has(r.id) : true
-  );
+  const targets = narrowToChosen(state.records || []);
   if (!targets.length) {
     setStatus('Select the body or surface to project onto.');
     return;
@@ -17381,9 +17244,7 @@ function cmdSpunProfile() {
     setStatus('Spun Profile needs a solid body to measure.');
     return;
   }
-  const chosen = state.selection.bodies.size
-    ? solids.filter((b) => state.selection.bodies.has(b.id))
-    : solids;
+  const chosen = narrowToChosen(solids);
 
   const kept = state.spun || { axis: 'world:z', stations: '64' };
   showInspector(
@@ -18871,9 +18732,7 @@ function cmdPhysicalMaterial() {
     setStatus('Nothing to give a material to yet.');
     return;
   }
-  const chosen = state.selection.bodies.size
-    ? bodies.filter((b) => state.selection.bodies.has(b.id))
-    : bodies;
+  const chosen = narrowToChosen(bodies);
   const mats = state.doc.materials || {};
   const current = mats.byBody?.[chosen[0].id] || mats.default || 'pla';
 
@@ -18935,45 +18794,156 @@ function cmdAppearance() {
     setStatus('Nothing to colour yet.');
     return;
   }
-  const chosen = state.selection.bodies.size
-    ? bodies.filter((b) => state.selection.bodies.has(b.id))
-    : bodies;
-  const kept = state.doc.appearance?.byBody?.[chosen[0].id] || '';
+  const chosen = narrowToChosen(bodies);
+  const faces = [...state.selection.faces];
+  const keptBody = state.doc.appearance?.byBody?.[chosen[0].id] || '';
+  const keptFace = faces.length ? colourOnFace(faces[0]) : '';
+
+  // What was picked says which of the two was meant. The row is there to say
+  // otherwise, because a face is what is easy to click on a part whose body
+  // you actually mean, and clicking one used to colour the whole document.
+  let scope = faces.length ? 'faces' : 'bodies';
+  let colour = scope === 'faces' ? keptFace : keptBody;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
   showInspector(
     'Appearance',
     [
       {
+        key: 'scope',
+        label: 'Apply to',
+        type: 'select',
+        options: [
+          ['faces', faces.length === 1 ? 'The face picked' : 'The faces picked'],
+          ['bodies', chosen.length === 1 ? 'The whole body' : 'The whole of each body']
+        ],
+        get: () => scope,
+        set: (f, v) => {
+          scope = v;
+          colour = v === 'faces' ? keptFace : keptBody;
+        }
+      },
+      {
         key: 'colour',
         label: 'Colour',
         type: 'select',
-        value: kept,
-        options: APPEARANCE_OPTIONS
+        options: APPEARANCE_OPTIONS,
+        get: () => colour,
+        set: (f, v) => {
+          colour = v;
+        }
       },
       {
         key: '__note',
         label: '',
         type: 'note',
-        text: `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'}. Colour is what it looks like, not what it is made of, and it does not change what it weighs.`
+        // Read at every redraw, so switching the row above rewrites it.
+        get text() {
+          if (scope === 'faces' && !faces.length) {
+            return 'No face is picked. Pick one in the viewport, or colour the whole body instead.';
+          }
+          const what =
+            scope === 'faces'
+              ? plural(faces.length, 'face', 'faces')
+              : plural(chosen.length, 'body', 'bodies');
+          return `${what}. Colour is what it looks like, not what it is made of, and it does not change what it weighs.`;
+        }
       }
     ],
-    (v) => {
+    () => {
+      if (scope === 'faces') {
+        if (!faces.length) {
+          setStatus('Pick a face first, or colour the whole body.');
+          return;
+        }
+        pushUndo('appearance');
+        state.doc.appearance = state.doc.appearance || {};
+        setFaceColours(faces, colour);
+        state.dirty = true;
+        rebuildAll();
+        setStatus(
+          colour
+            ? `${plural(faces.length, 'face', 'faces')} recoloured.`
+            : `${plural(faces.length, 'face is', 'faces are')} back to the body colour.`
+        );
+        return;
+      }
       pushUndo('appearance');
       state.doc.appearance = state.doc.appearance || {};
       state.doc.appearance.byBody = state.doc.appearance.byBody || {};
       for (const b of chosen) {
-        if (v.colour) state.doc.appearance.byBody[b.id] = v.colour;
+        if (colour) state.doc.appearance.byBody[b.id] = colour;
         else delete state.doc.appearance.byBody[b.id];
       }
       state.dirty = true;
       rebuildAll();
       setStatus(
-        v.colour
-          ? `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'} recoloured.`
+        colour
+          ? `${plural(chosen.length, 'body', 'bodies')} recoloured.`
           : 'Back to the ordinary colour.'
       );
     }
   );
+}
+
+/** What colour is on this face already, so the dialog opens showing it. */
+function colourOnFace(key) {
+  const { bodyId, index } = splitKey(key);
+  const record = (state.records || []).find((r) => r.id === bodyId);
+  if (!record?.topology) return '';
+  for (const entry of state.doc.appearance?.faces || []) {
+    if (entry.body !== bodyId) continue;
+    const [at] = resolveFaceRefs(record.topology, [entry.ref]);
+    if (at && at.id === index) return entry.colour;
+  }
+  return '';
+}
+
+/**
+ * Put a colour on the faces picked, or take it off them.
+ *
+ * Written down as a description of the face rather than as its number, because
+ * the number is only true of the rebuild it came from: change a dimension
+ * above it and the same face is face nine where it was face seven. The
+ * description is the one a fillet uses to find its edge again after that same
+ * change, so the colour stays where it was put.
+ */
+function setFaceColours(keys, colour) {
+  const app = state.doc.appearance;
+  app.faces = app.faces || [];
+  for (const key of keys) {
+    const { bodyId, index } = splitKey(key);
+    const record = (state.records || []).find((r) => r.id === bodyId);
+    const face = record?.topology?.faces[index];
+    if (!face) continue;
+    // Whatever was on this face comes off, whether it is being replaced or
+    // cleared. Which entry that is has to be resolved rather than compared:
+    // an entry names its face by description, not by number.
+    app.faces = app.faces.filter((entry) => {
+      if (entry.body !== bodyId) return true;
+      const [at] = resolveFaceRefs(record.topology, [entry.ref]);
+      return !at || at.id !== index;
+    });
+    if (colour) app.faces.push({ body: bodyId, ref: faceReference(face), colour });
+  }
+}
+
+/**
+ * The faces of one body carrying a colour of their own, for this rebuild.
+ *
+ * Resolved here, once, so the viewport is handed face numbers it can paint
+ * with and has nothing to work out. A face whose description no longer matches
+ * anything simply loses its colour rather than colouring the wrong face.
+ */
+function faceColoursFor(bodyId, topology) {
+  if (!topology) return null;
+  const out = [];
+  for (const entry of state.doc.appearance?.faces || []) {
+    if (entry.body !== bodyId) continue;
+    const [face] = resolveFaceRefs(topology, [entry.ref]);
+    if (face) out.push({ face: face.id, colour: entry.colour });
+  }
+  return out.length ? out : null;
 }
 
 /**
@@ -19723,9 +19693,7 @@ function cmdSelectPriority(kind) {
 
 function cmdRecognise() {
   if (state.sketcher.active) finishSketch();
-  const chosen = (state.result?.bodies || []).filter((b) =>
-    state.selection.bodies.size ? state.selection.bodies.has(b.id) : true
-  );
+  const chosen = narrowToChosen(state.result?.bodies || []);
   const body = chosen.length === 1 ? chosen[0] : null;
   if (!body) {
     setStatus(

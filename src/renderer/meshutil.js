@@ -13,6 +13,45 @@ import * as THREE from './three.js';
 const DEFAULT_CREASE = 32; // degrees
 
 /**
+ * A body's colour with the faces that carry one of their own painted over it.
+ *
+ * Three numbers per vertex of the geometry `buildGeometry` makes, which is one
+ * triangle after another with no vertex shared between them. That is what lets
+ * a face take its colour right up to its own edge: coloured per vertex of the
+ * kernel mesh instead, where the two faces at a corner share the vertex, every
+ * colour would bleed across the corner into the face beside it.
+ *
+ * Vertex colours are read in the working space, and `THREE.Color` converts a
+ * hex string to it, so a face and a body given the same shade come out the
+ * same shade.
+ */
+export function faceColourArray(topology, triCount, baseHex, painted) {
+  const base = new THREE.Color(baseHex);
+  const out = new Float32Array(triCount * 9);
+  for (let i = 0; i < triCount * 3; i++) {
+    out[i * 3] = base.r;
+    out[i * 3 + 1] = base.g;
+    out[i * 3 + 2] = base.b;
+  }
+  const paint = new THREE.Color();
+  for (const one of painted || []) {
+    const face = topology?.faces?.[one.face];
+    if (!face) continue;
+    paint.set(one.colour);
+    for (const t of face.tris) {
+      if (t < 0 || t >= triCount) continue;
+      for (let k = 0; k < 3; k++) {
+        const o = t * 9 + k * 3;
+        out[o] = paint.r;
+        out[o + 1] = paint.g;
+        out[o + 2] = paint.b;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Build a BufferGeometry with crease-angle normals.
  * Vertices are split wherever the joining angle exceeds the crease threshold.
  */
