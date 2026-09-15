@@ -2105,6 +2105,26 @@ is no version history view, though the versions are kept.
 Everything else in Fusion's Solid, Surface, Sheet Metal, Mesh, Form, Assemble,
 Construct, Inspect and Sketch tabs is here, option by option, as of v2.80.0.
 
+**Teach me** walks you through building a part, one step at a time, pointing at
+what to press. Nine chapters, each making something that makes sense on its own:
+a bracket, a knob, an enclosure, a sheet metal tray, a bottle, a handle, a
+scanned part repaired, an engineering pass over a finished model, and the
+presentation tools. Between them they reach all 315 tools the program has, and
+`test/coverage.test.js` fails the run if a tool is ever added that no chapter
+teaches.
+
+While a step is live the ribbon does what the step says and nothing else, said
+out loud rather than the click going quiet. The model, the dialogs, the camera,
+Undo and the tabs stay yours throughout, because a lesson you cannot look around
+or back out of is a cage. Skip is always there, and skipping writes down the
+step, the document and anything the rebuild complained about, which is the other
+half of why this exists: a step states what should be true afterwards, so a step
+that cannot be finished is a bug report with the evidence already attached. The
+ledger counts what you have used whether a lesson is running or not, so ordinary
+modelling counts towards the 315 as well.
+
+The design is in **[TEACHER.md](TEACHER.md)**.
+
 **Ask for Press Pull or Extrude, then drag it.** With a planar face picked,
 Press Pull stands an arrow on it with a distance box beside the arrow. Type the
 number, or drag the arrow and watch the body follow as it happens with the

@@ -108,6 +108,8 @@ import {
   meshSize,
   spunProfile
 } from './analysis.js';
+import * as TEACH from './teacher.js';
+import { CHAPTERS } from './lessons/index.js';
 
 /* ------------------------------------------------------------------ */
 /* State                                                               */
@@ -409,6 +411,9 @@ function rebuildAll() {
   // move with it. Not during a drag: the frame it is being dragged along has
   // to hold still, or the thing being pulled runs away from the pointer.
   if (!state.pullDrag) refreshPullHandle();
+  // The model has changed, so whatever a lesson step was waiting for may have
+  // just happened. This is the tap that ticks a step.
+  TEACH.noteRebuild();
 
   const ms = Math.round(performance.now() - t0);
   const errCount = visibleErrors().length + Object.keys(res.paramErrors).length;
@@ -817,15 +822,26 @@ function splitKey(key) {
 
 function refreshHighlight() {
   if (!state.vp) return;
+  // A lesson pointing at a face has to survive the next rebuild, and every
+  // rebuild comes through here. Painted alongside the selection rather than
+  // instead of it, because what is picked and what is being pointed at are
+  // two different things and both are worth seeing.
+  const taught = state.teachHighlight || {};
   state.vp.setHighlight({
-    faces: [...state.selection.faces].map((k) => {
-      const { bodyId, index } = splitKey(k);
-      return { bodyId, faceId: index };
-    }),
-    edges: [...state.selection.edges].map((k) => {
-      const { bodyId, index } = splitKey(k);
-      return { bodyId, edgeId: index };
-    }),
+    faces: [
+      ...[...state.selection.faces].map((k) => {
+        const { bodyId, index } = splitKey(k);
+        return { bodyId, faceId: index };
+      }),
+      ...(taught.faces || [])
+    ],
+    edges: [
+      ...[...state.selection.edges].map((k) => {
+        const { bodyId, index } = splitKey(k);
+        return { bodyId, edgeId: index };
+      }),
+      ...(taught.edges || [])
+    ],
     hoverFace: state.hoverFace,
     hoverEdge: state.hoverEdge
   });
@@ -1355,6 +1371,33 @@ function wireUI() {
     btn.addEventListener('click', () => runCommand(btn.dataset.cmd));
   });
 
+  /*
+   * Teacher Mode, handed what it needs rather than reaching for it.
+   *
+   * It reads the document to know whether a step is done and paints a
+   * highlight to say which face it means, and that is the whole of its contact
+   * with the application. Keeping it to this list is what lets the engine be
+   * tested against a lesson without the rest of the program being involved.
+   */
+  TEACH.init({
+    getState: () => state,
+    setStatus,
+    setTab,
+    menuCommands,
+    lessons: () => CHAPTERS,
+    exportText: (name, ext, label, data) => window.anvil.exportText(name, ext, label, data),
+    highlight: (what) => {
+      if (!what) {
+        state.teachHighlight = null;
+        refreshHighlight();
+        return;
+      }
+      state.teachHighlight = what;
+      state.vp.setHighlight({ ...what, hoverFace: null, hoverEdge: null });
+    }
+  });
+  window.addEventListener('resize', () => TEACH.reposition());
+
   // Tool options, read straight off the sketcher rather than kept in the
   // document: they say how the next shape is drawn, not what the model is.
   const wireToolOpt = (id, key, parse) => {
@@ -1418,6 +1461,7 @@ function wireUI() {
   document.querySelectorAll('[data-con]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!state.sketcher.active) return;
+      TEACH.noteConstraint(btn.dataset.con);
       state.sketcher.applyConstraint(btn.dataset.con);
     });
   });
@@ -1510,6 +1554,7 @@ function setTab(name) {
  * remembered across the plane pick and put in your hand when the sketch opens.
  */
 function reachForTool(tool) {
+  TEACH.noteTool(tool);
   if (state.sketcher.active) {
     state.sketcher.setTool(tool);
     syncToolButtons();
@@ -1750,8 +1795,50 @@ function wireKeys() {
 /* Commands                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The commands that live only inside a family menu.
+ *
+ * The ledger counts what the application has by reading the application, and a
+ * menu item has no button of its own to be read from, so this is where the
+ * rest of them come from.
+ */
+function menuCommands() {
+  const out = [...OFF_RIBBON];
+  for (const rows of Object.values(RIBBON_MENUS)) for (const [id] of rows) out.push(id);
+  return out;
+}
+
+/**
+ * Commands with no button and no menu entry of their own.
+ *
+ * Reached from the timeline, from a right click, or from the command search,
+ * which means the ledger cannot find them by reading the ribbon and would
+ * quietly count a smaller program than the one that is here. Written down
+ * rather than derived because there is nowhere to derive it from at runtime,
+ * and `test/coverage.test.js` fails the run when this list and the switch stop
+ * agreeing, so it cannot drift.
+ */
+const OFF_RIBBON = [
+  'deleteFeature',
+  'faceGroupEdit',
+  'hideSelected',
+  'offsetFace',
+  'offsetPlane',
+  'suppress'
+];
+
 async function runCommand(cmd) {
+  // Told before rather than after, because half of these open a dialog and
+  // come back long before anything has happened. What the command did is
+  // noticed at the rebuild; this is only that it was asked for.
+  TEACH.noteCommand(cmd);
   switch (cmd) {
+    case 'teacher':
+      cmdTeacher();
+      break;
+    case 'teacherLedger':
+      cmdTeacherLedger();
+      break;
     case 'new':
       await cmdNew();
       break;
@@ -18781,6 +18868,96 @@ function cmdPhysicalMaterial() {
 }
 
 /**
+ * Pick a chapter and start walking it.
+ *
+ * The list says how far through each one you are rather than only its name,
+ * because a campaign of nine chapters is something you come back to, and the
+ * question on coming back is always which one you were in the middle of.
+ */
+function cmdTeacher() {
+  if (TEACH.isOpen()) {
+    TEACH.close();
+    setStatus('Lesson closed.');
+    return;
+  }
+  const l = TEACH.ledger();
+  showInspector(
+    'Teach me',
+    [
+      {
+        key: 'chapter',
+        label: 'Chapter',
+        type: 'select',
+        value: CHAPTERS[0]?.id || '',
+        options: CHAPTERS.map((c) => [c.id, `${c.title} (${c.steps.length} steps)`])
+      },
+      {
+        key: '__note',
+        label: '',
+        type: 'note',
+        text: `${l.ticked} of ${l.total} tools used so far. While a step is live the ribbon does what the step says and nothing else; the model, the dialogs, the camera and Undo stay yours.`
+      },
+      {
+        key: '__note2',
+        label: '',
+        type: 'note',
+        text: 'Skip is always there. A step you cannot finish is written down with the document attached, which is the point of it.'
+      }
+    ],
+    (v) => {
+      const chapter = CHAPTERS.find((c) => c.id === v.chapter);
+      if (!chapter) {
+        setStatus('No such chapter.');
+        return;
+      }
+      TEACH.openChapter(chapter);
+      setStatus(`${chapter.title}. ${chapter.steps.length} steps.`);
+    }
+  );
+}
+
+/** What has been used, what has not, and what no chapter has claimed. */
+function cmdTeacherLedger() {
+  const l = TEACH.ledger();
+  showInspector(
+    'Coverage',
+    [
+      {
+        key: '__n1',
+        label: '',
+        type: 'note',
+        text: `${l.ticked} of ${l.total} tools used.`
+      },
+      {
+        key: '__n2',
+        label: '',
+        type: 'note',
+        text: l.missing.length
+          ? `Not used yet (${l.missing.length}): ${l.missing.slice(0, 60).join(', ')}${l.missing.length > 60 ? ' and more' : ''}`
+          : 'Every tool in the application has been used at least once.'
+      },
+      {
+        key: '__n3',
+        label: '',
+        type: 'note',
+        text: l.unclaimed.length
+          ? `No chapter teaches these (${l.unclaimed.length}): ${l.unclaimed.slice(0, 40).join(', ')}${l.unclaimed.length > 40 ? ' and more' : ''}`
+          : 'Every tool is taught by some chapter.'
+      },
+      {
+        key: '__n4',
+        label: '',
+        type: 'note',
+        text: l.depth.length
+          ? `Option branches reached (${l.depth.length}): ${l.depth.slice(0, 40).join(', ')}`
+          : 'No option branches recorded yet.'
+      }
+    ],
+    () => {}
+  );
+}
+
+/**
  * What a body looks like, which is nothing to do with what it is made of.
  *
  * Fusion keeps these apart and it is right to: a steel bracket shown in red to
@@ -24004,6 +24181,10 @@ window.anvilDev = {
   // camera is. These are here so a probe can measure it rather than infer it.
   axisDragAmount,
   pullTarget,
+  // Teacher Mode is mostly interaction, and interaction is what a probe has to
+  // be able to look at from outside.
+  teacher: TEACH,
+  chapters: CHAPTERS,
   edgeReference,
   // Shaping a form is all drags, and where a control point has to go to put the
   // surface somewhere is arithmetic a probe should check directly rather than

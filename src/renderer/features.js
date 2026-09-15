@@ -10206,6 +10206,11 @@ export function rebuild(doc, options = {}) {
       );
     };
 
+    // Whether any body took the texture at all. A feature that names faces and
+    // finds none of them on anything now does nothing, and doing nothing
+    // quietly is how a texture goes missing with no way to tell why.
+    let touched = 0;
+
     for (const b of targets) {
       const mesh = meshOf(b);
       if (!mesh?.triVerts?.length) continue;
@@ -10235,9 +10240,40 @@ export function rebuild(doc, options = {}) {
        */
       let chosen = null;
       if (feature.faces?.length) {
+        /*
+         * Unwrapped first.
+         *
+         * A picked face is stored as { bodyId, face }, and a reference is the
+         * inner half of that. Handed the wrapper, `resolveFaceRefs` matches
+         * nothing at all: the wrapper has no `planar`, so every flat face is
+         * skipped on the first test, and no `p`, so the first curved one
+         * throws reading its position. The catch below turned that into "take
+         * the texture all over", so picking faces did nothing and the picture
+         * went onto the back and the sides as well. Face Groups, a hundred
+         * lines down, has taken both shapes all along.
+         */
+        const wanted = feature.faces
+          .filter((r) => !r.bodyId || r.bodyId === b.id)
+          .map((r) => r.face || r);
+        // Faces were named and none of them are on this body, so none of it is
+        // textured. Falling through would texture the whole of it.
+        if (!wanted.length) continue;
         try {
           const topo = buildTopology(mesh, topologyOptions(b));
-          const faces = resolveFaceRefs(topo, feature.faces);
+          const faces = resolveFaceRefs(topo, wanted);
+          // A reference that no longer matches anything is a face with no
+          // texture on it and nothing on screen to say why, which is the same
+          // gap read from the other end.
+          if (faces.length < wanted.length) {
+            errs.push({
+              feature: feature.id,
+              message: `${wanted.length - faces.length} of ${wanted.length} textured face${
+                wanted.length === 1 ? '' : 's'
+              } could not be found on this body any more, so the texture is missing from ${
+                wanted.length - faces.length === 1 ? 'it' : 'them'
+              }.`
+            });
+          }
           if (faces.length) {
             chosen = new Set();
             for (const f of faces) for (const t of f.tris) chosen.add(t);
@@ -10302,6 +10338,14 @@ export function rebuild(doc, options = {}) {
           sheet: { numProp: 3, vertProperties: verts, triVerts: idx }
         });
       }
+      touched++;
+    }
+
+    if (feature.faces?.length && !touched) {
+      errs.push({
+        feature: feature.id,
+        message: 'None of the faces this texture was put on are on the bodies it covers, so nothing was textured.'
+      });
     }
   }
 

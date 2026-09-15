@@ -9,7 +9,9 @@ the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
 Current version: **2.80.0**. 620 tests in the window, plus 55 checks of the
-library, profiles and the version counter in plain node.
+library, profiles and the version counter in plain node, and a campaign
+coverage check that fails the run when a tool is added and no Teacher Mode
+chapter teaches it.
 
 Batches 11 to 20b have shipped, and all four workspaces in Batch 21: Render,
 Animation, Simulation and Generative Design. **Batches 22 to 25 have now shipped
