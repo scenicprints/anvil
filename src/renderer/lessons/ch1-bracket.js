@@ -10,7 +10,11 @@
  * sideways. Getting that across early is worth more than another solid tool.
  */
 
-import { cmd, inMenu, tool, con, step, made, madeN, ran, all, changed, grewBy, shrankBy, noErrors, bodies } from './kit.js';
+import {
+  cmd, inMenu, tool, con, step, made, madeN, ran,
+  all, changed, grewBy, shrankBy, noErrors, bodies,
+  sketch, useTool, done
+} from './kit.js';
 
 export default {
   id: 'bracket',
@@ -22,13 +26,14 @@ export default {
       cmd('newSketch'),
       'newSketch',
       made('sketch'),
-      { tab: 'solid' }
+      { tab: 'solid', play: sketch('XY', 'rectangle', []) }
     ),
     step(
       'Draw a rough rectangle. Two corners, and do not aim: the size comes later.',
       tool('rectangle'),
       ['tool:rectangle', 'tool:select'],
-      (s) => s.sketches().some((k) => (k.entities || []).length >= 4)
+      (s) => s.sketches().some((k) => (k.entities || []).length >= 4),
+      { play: useTool('rectangle', [[-40, -30], [40, 30]]) }
     ),
     step(
       'Now say how big it is. Dimension the long side to 80.',
@@ -46,7 +51,8 @@ export default {
       'Finish the sketch.',
       cmd('finishSketch'),
       'finishSketch',
-      (s) => !s.doc.sketches || Object.keys(s.doc.sketches).length >= 1
+      (s) => !s.doc.sketches || Object.keys(s.doc.sketches).length >= 1,
+      { play: done() }
     ),
     step(
       'Extrude it 6 mm. That is the base of the bracket.',

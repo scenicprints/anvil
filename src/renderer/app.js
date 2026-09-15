@@ -111,6 +111,9 @@ import {
 import * as TEACH from './teacher.js';
 import { CHAPTERS } from './lessons/index.js';
 
+/** The hooks Teacher Mode was handed, kept so a probe can drive the same ones. */
+let TEACH_HOOKS = {};
+
 /* ------------------------------------------------------------------ */
 /* State                                                               */
 /* ------------------------------------------------------------------ */
@@ -1379,7 +1382,7 @@ function wireUI() {
    * with the application. Keeping it to this list is what lets the engine be
    * tested against a lesson without the rest of the program being involved.
    */
-  TEACH.init({
+  TEACH_HOOKS = {
     getState: () => state,
     setStatus,
     setTab,
@@ -1394,6 +1397,81 @@ function wireUI() {
      * already work open is the whole of the safety here: a lesson must never
      * be the reason somebody's model went away.
      */
+    /*
+     * What a lesson step needs to drive itself.
+     *
+     * Only the auto-player uses this. A step that says how to play itself has
+     * to reach the sketcher and the open dialog, and those live in here, so the
+     * handful of things it needs are handed over deliberately rather than the
+     * whole module being opened up. A person needs none of it: they click.
+     */
+    drive: {
+      sketchOn: (plane) => {
+        startSketchOn(plane || 'XY');
+      },
+      tool: (name) => {
+        if (state.sketcher.active) state.sketcher.setTool(name);
+      },
+      /** A click at a point on the sketch plane, in the sketch's own units. */
+      sketchAt: (x, y) => {
+        if (!state.sketcher.active) return false;
+        const at = state.sketcher.planeToScreen(x, y);
+        const r = state.vp.canvas.getBoundingClientRect();
+        const ev = {
+          clientX: r.left + at.x,
+          clientY: r.top + at.y,
+          button: 0,
+          pointerId: 1,
+          isPrimary: true,
+          bubbles: true
+        };
+        state.vp.canvas.dispatchEvent(new PointerEvent('pointermove', { ...ev, buttons: 0 }));
+        state.vp.canvas.dispatchEvent(new PointerEvent('pointerdown', { ...ev, buttons: 1 }));
+        state.vp.canvas.dispatchEvent(new PointerEvent('pointerup', { ...ev, buttons: 0 }));
+        return true;
+      },
+      finishSketch: () => {
+        if (state.sketcher.active) finishSketch();
+      },
+      /** Set a field on whatever dialog is open, the way typing into it would. */
+      field: (name, value) => {
+        const f = state.editing?.feature;
+        if (!f) return false;
+        f[name] = value;
+        renderFields();
+        rebuildAll();
+        return true;
+      },
+      read: (name) => state.editing?.feature?.[name],
+      commit: () => {
+        if (state.editing) commitEdit();
+      },
+      cancel: () => {
+        if (state.editing) cancelEdit();
+      },
+      /** Pick geometry, for a step whose command wants some before it will run. */
+      select: (kind, which = 0) => {
+        const rec = (state.records || [])[0];
+        if (!rec?.topology) return false;
+        clearGeometrySelection(false);
+        if (kind === 'body') {
+          state.selection.bodies.add(rec.id);
+        } else if (kind === 'edge' || kind === 'edges') {
+          const edges = rec.topology.edges.filter((e) => e.convex);
+          const take = kind === 'edges' ? edges : edges.slice(which, which + 1);
+          for (const e of take) state.selection.edges.add(`${rec.id}:${e.id}`);
+        } else {
+          const flat = rec.topology.faces
+            .filter((f) => f.planar)
+            .sort((a, b) => b.area - a.area);
+          const take = kind === 'faces' ? flat.slice(0, 2) : flat.slice(which, which + 1);
+          for (const f of take) state.selection.faces.add(`${rec.id}:${f.id}`);
+        }
+        state.vp.setSelection(state.selection.bodies);
+        refreshHighlight();
+        return true;
+      }
+    },
     seedDocument: (seed) => {
       if (!seed || (state.doc.features || []).length) return false;
       pushUndo('lesson start');
@@ -1413,7 +1491,8 @@ function wireUI() {
       state.teachHighlight = what;
       state.vp.setHighlight({ ...what, hoverFace: null, hoverEdge: null });
     }
-  });
+  };
+  TEACH.init(TEACH_HOOKS);
   window.addEventListener('resize', () => TEACH.reposition());
 
   // Tool options, read straight off the sketcher rather than kept in the
@@ -24212,6 +24291,11 @@ window.anvilDev = {
   teacher: TEACH,
   chapters: CHAPTERS,
   parseSTL,
+  // Read when it is asked for, not when this object is built: the hooks are
+  // assembled during startup and this is written out long before that.
+  get teacherDrive() {
+    return TEACH_HOOKS.drive;
+  },
   edgeReference,
   // Shaping a form is all drags, and where a control point has to go to put the
   // surface somewhere is arithmetic a probe should check directly rather than

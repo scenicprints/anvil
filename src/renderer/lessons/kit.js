@@ -87,3 +87,78 @@ export const all = (...checks) => (s) => {
   }
   return true;
 };
+
+/* ------------------------------------------------------------------ */
+/* Playing a step                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How a step drives itself, for the auto-player and for nobody else.
+ *
+ * A person reads the instruction and clicks. These exist so a chapter can be
+ * walked with nobody watching, which is what stops one rotting quietly between
+ * the day it is written and the day somebody sits through it.
+ *
+ * The default, pressing the control and accepting the dialog, covers the steps
+ * that need nothing picked first. Everything below is for the ones that do.
+ */
+
+/**
+ * Pick something, then press the control, then type into the dialog.
+ *
+ * Written, proved on its own, and not yet trusted on a chapter: driven from
+ * inside a playthrough the four steps it was tried on committed their feature
+ * before the value landed, and a script that fails files its report against
+ * the application rather than against itself. That is worse than no script at
+ * all, so the steps it was on are back on the default until this is right.
+ */
+export const withPick = (kind, fields = null, which = 0) => async (c) => {
+  c.drive.select?.(kind, which);
+  await c.wait(80);
+  // Held open when there is something to type, or accepting it commits the
+  // feature at whatever it opened with and the number never lands.
+  await c.press(c.step || {}, { answer: !fields });
+  if (!fields) return;
+
+  /*
+   * Wait for the dialog before typing into it.
+   *
+   * A command that rebuilds on the way in takes longer to open than the fixed
+   * pause after the press, and a value set before there is anything to set it
+   * on is silently dropped. That is how a scripted extrude committed at zero
+   * and reported itself as the app's fault.
+   */
+  for (let i = 0; i < 40 && c.drive.read?.('type') === undefined; i++) await c.wait(50);
+  for (const [k, v] of Object.entries(fields)) c.drive.field?.(k, v);
+  await c.wait(250);
+  c.drive.commit?.();
+  await c.wait(500);
+};
+
+/** Open a sketch on a plane and draw with one tool, click by click. */
+export const sketch = (plane, tool, points) => async (c) => {
+  c.drive.sketchOn?.(plane);
+  await c.wait(700);
+  if (tool) c.drive.tool?.(tool);
+  await c.wait(120);
+  for (const [x, y] of points || []) {
+    c.drive.sketchAt?.(x, y);
+    await c.wait(140);
+  }
+};
+
+/** Reach for a sketch tool inside a sketch that is already open. */
+export const useTool = (tool, points = []) => async (c) => {
+  c.drive.tool?.(tool);
+  await c.wait(120);
+  for (const [x, y] of points) {
+    c.drive.sketchAt?.(x, y);
+    await c.wait(140);
+  }
+};
+
+/** Leave the sketch. */
+export const done = () => async (c) => {
+  c.drive.finishSketch?.();
+  await c.wait(600);
+};

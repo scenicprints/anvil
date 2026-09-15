@@ -397,10 +397,17 @@ is the same gesture, so there is a default: press the control the ring is round,
 opening its group first if it is folded, and accept whatever dialog opens. A
 step that needs something else carries its own `play`.
 
-A step the default cannot satisfy comes back marked `never`, and that list is
-the point of the whole exercise. It is either a lesson that needs a script or a
-feature that does not work, and both are worth knowing before anybody sits
-through the chapter. `tools/demo-campaign.js` plays all nine and reports it.
+A step the default cannot satisfy comes back marked `never`, and one it drove
+into a wrong result comes back `wrong`. `tools/demo-campaign.js` plays all nine
+and reports both.
+
+**The player accuses nobody.** It accepts whatever a dialog offers, and half the
+dialogs here open at a deliberate zero waiting to be given a size, so a wrong
+result under the player usually means nothing typed a number rather than that
+anything is broken. It files no reports for that reason. What it is for is rot:
+a step that used to be satisfied and no longer is has changed underneath the
+lesson, and that is worth knowing. Finding actual faults is what a person
+walking the chapter does, and a person knows whether they did the step.
 
 ## Still open
 

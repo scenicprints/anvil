@@ -468,6 +468,20 @@ function snapshot() {
  * in.
  */
 function file(kind, why) {
+  /*
+   * The auto-player accuses nobody.
+   *
+   * It presses the control and accepts whatever the dialog offers, and half
+   * the dialogs in this program open at a deliberate zero waiting to be told
+   * a size. So when a step it played comes back wrong, the likeliest reason by
+   * far is that nothing typed a number, and filing that as a fault in Anvil
+   * sends somebody hunting a bug that is not there.
+   *
+   * What the player reports is marks: which steps it could satisfy and which
+   * it could not. A report is what a person walking the chapter files, and a
+   * person knows whether they did the step.
+   */
+  if (T.auto) return null;
   const step = T.lesson?.steps[T.index];
   const report = {
     when: new Date().toISOString(),
@@ -829,7 +843,7 @@ function render(done = false) {
  * hundred and thirty three, so it is not here. What the remaining steps want is
  * a `play` of their own, written the way the probes in `tools/` are.
  */
-async function press(step) {
+async function press(step, { answer: accept = true } = {}) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   // A folded group has to be opened before what is inside it can be pressed.
   const real = targetReal();
@@ -840,7 +854,10 @@ async function press(step) {
   }
   (real || shown)?.click();
   await wait(220);
-  await answer();
+  // A step that means to type something into the dialog says so, because
+  // accepting it first commits the feature at whatever it opened with and the
+  // number arrives too late to mean anything.
+  if (accept) await answer();
 }
 
 /** Accept whatever a dialog is offering, which is what a default is for. */
@@ -871,7 +888,11 @@ export async function play(lesson, { pause = 40 } = {}) {
     const step = lesson.steps[i];
     let err = null;
     try {
-      if (step.play) await step.play({ ...snapshot(), wait, api, press, answer });
+      if (step.play) {
+        // `step` goes in too, so a helper can fall back on the default press
+        // for the half of the gesture it does not want to reinvent.
+        await step.play({ ...snapshot(), step, wait, api, press, answer, drive: api.drive || {} });
+      }
       else await press(step);
     } catch (e) {
       err = e.message;
