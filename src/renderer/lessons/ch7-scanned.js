@@ -9,13 +9,71 @@
 
 import { cmd, inMenu, step, made, ran, all, changed, noErrors } from './kit.js';
 
+/**
+ * A scan, near enough: a sphere of triangles with some of them missing.
+ *
+ * Built rather than shipped as a file, so the chapter has something to repair
+ * on any machine and the holes are in known places. Dropping triangles is what
+ * a scanner does when it cannot see a surface, and it is the fault every one of
+ * the tools below exists to deal with.
+ */
+function brokenScan(rings = 14, segments = 20) {
+  const verts = [];
+  for (let i = 0; i <= rings; i++) {
+    const phi = (i / rings) * Math.PI;
+    for (let j = 0; j < segments; j++) {
+      const theta = (j / segments) * Math.PI * 2;
+      verts.push(
+        20 * Math.sin(phi) * Math.cos(theta),
+        20 * Math.sin(phi) * Math.sin(theta),
+        20 * Math.cos(phi)
+      );
+    }
+  }
+  const at = (i, j) => i * segments + (j % segments);
+  const tris = [];
+  for (let i = 0; i < rings; i++) {
+    for (let j = 0; j < segments; j++) {
+      const a = at(i, j);
+      const b = at(i + 1, j);
+      const c = at(i + 1, j + 1);
+      const d = at(i, j + 1);
+      // The holes. Three patches the scanner never saw, in places you have to
+      // turn the part round to find, which is also true of the real thing.
+      const missing =
+        (i === 4 && j > 3 && j < 8) ||
+        (i === 9 && j > 12 && j < 15) ||
+        (i === 2 && j === 17);
+      if (missing) continue;
+      tris.push(a, b, c);
+      tris.push(a, c, d);
+    }
+  }
+  return { verts, tris };
+}
+
 export default {
   id: 'scanned',
+  start() {
+    return {
+      meshData: { lessonScan: brokenScan() },
+      features: [
+        {
+          id: 'lesson-scan',
+          type: 'insertMesh',
+          data: 'lessonScan',
+          label: 'Scan',
+          scale: '1',
+          at: [0, 0, 0]
+        }
+      ]
+    };
+  },
   title: 'A part somebody scanned',
   blurb: 'A broken mesh, repaired, grouped and turned into a solid.',
   steps: [
     step(
-      'Bring in a mesh. Any STL or OBJ will do; a scan is better, because a scan is broken.',
+      'A scan is already here, holes and all. Insert Mesh is how one of your own gets in.',
       inMenu('insertParts', 'insertMesh'),
       'insertMesh',
       made('insertMesh'),

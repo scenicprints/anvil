@@ -105,6 +105,7 @@ import {
   buildGeometry,
   buildEdges,
   faceColourArray,
+  expandVertexColours,
   to3MF,
   zipStore
 } from '../src/renderer/meshutil.js';
@@ -1187,6 +1188,51 @@ async function run() {
       'every edge of a box is an outside corner'
     );
     assert(topo.faces.every((f) => f.planar), 'every face of a box is flat');
+    res.dispose();
+  });
+
+  test('analysis: a colour per vertex reaches every vertex that is drawn', () => {
+    const doc = newDocument();
+    doc.features = [prim('cylinder', { diameter: '20', height: '20' })];
+    const res = rebuild(doc);
+    const mesh = K.meshData(res.bodies[0].solid);
+    const geom = buildGeometry(mesh);
+    const drawn = geom.getAttribute('position').count;
+    const vertCount = mesh.vertProperties.length / mesh.numProp;
+
+    // The fault this is here for: the two counts are nothing like each other,
+    // so a colour array in the kernel's numbering cannot be handed over as it
+    // comes. On a closed solid there are about twice as many triangles as
+    // vertices, so the geometry wants about six times the colours.
+    assert(drawn > vertCount * 2, `expected many more drawn vertices than kernel ones, got ${drawn} against ${vertCount}`);
+
+    // One colour per kernel vertex, each a different shade so a misplaced one
+    // shows up rather than blending in.
+    const colours = new Float32Array(vertCount * 3);
+    for (let i = 0; i < vertCount; i++) {
+      colours[i * 3] = i / vertCount;
+      colours[i * 3 + 1] = 1 - i / vertCount;
+      colours[i * 3 + 2] = 0.5;
+    }
+
+    const spread = expandVertexColours(mesh, colours);
+    assert(
+      spread.length === drawn * 3,
+      `expected ${drawn * 3} colour numbers and got ${spread.length}`
+    );
+
+    // And every drawn vertex carries the colour of the kernel vertex it came
+    // from, which is what makes it the right answer rather than merely the
+    // right size.
+    const tris = mesh.triVerts;
+    for (let t = 0; t < tris.length / 3; t++) {
+      for (let k = 0; k < 3; k++) {
+        const v = tris[t * 3 + k];
+        const o = t * 9 + k * 3;
+        near(spread[o], colours[v * 3], 1e-6, `triangle ${t} corner ${k} red`);
+        near(spread[o + 1], colours[v * 3 + 1], 1e-6, `triangle ${t} corner ${k} green`);
+      }
+    }
     res.dispose();
   });
 

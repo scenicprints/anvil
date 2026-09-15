@@ -1386,6 +1386,24 @@ function wireUI() {
     menuCommands,
     lessons: () => CHAPTERS,
     exportText: (name, ext, label, data) => window.anvil.exportText(name, ext, label, data),
+    /*
+     * The starting model a chapter needs, laid into an empty document only.
+     *
+     * Chapter 7 repairs a broken mesh and chapter 8 asks whether a part is any
+     * good, and neither question can be put to nothing. Refusing when there is
+     * already work open is the whole of the safety here: a lesson must never
+     * be the reason somebody's model went away.
+     */
+    seedDocument: (seed) => {
+      if (!seed || (state.doc.features || []).length) return false;
+      pushUndo('lesson start');
+      state.doc.meshData = state.doc.meshData || {};
+      Object.assign(state.doc.meshData, seed.meshData || {});
+      state.doc.features.push(...(seed.features || []));
+      state.dirty = true;
+      rebuildAll();
+      return true;
+    },
     highlight: (what) => {
       if (!what) {
         state.teachHighlight = null;
@@ -18889,7 +18907,15 @@ function cmdTeacher() {
         label: 'Chapter',
         type: 'select',
         value: CHAPTERS[0]?.id || '',
-        options: CHAPTERS.map((c) => [c.id, `${c.title} (${c.steps.length} steps)`])
+        options: CHAPTERS.map((c) => {
+          const held = TEACH.progress(c.id);
+          return [
+            c.id,
+            held && held.index > 0
+              ? `${c.title} (step ${held.index + 1} of ${c.steps.length})`
+              : `${c.title} (${c.steps.length} steps)`
+          ];
+        })
       },
       {
         key: '__note',
@@ -24185,6 +24211,7 @@ window.anvilDev = {
   // be able to look at from outside.
   teacher: TEACH,
   chapters: CHAPTERS,
+  parseSTL,
   edgeReference,
   // Shaping a form is all drags, and where a control point has to go to put the
   // surface somewhere is arithmetic a probe should check directly rather than

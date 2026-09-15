@@ -33,6 +33,10 @@ const T = {
   reports: [],
   ledger: new Set(),
   depth: new Set(),
+  // How far through each chapter you got. A campaign of nine is something you
+  // come back to, and the question on coming back is always which one you were
+  // in the middle of.
+  progress: {},
   before: null,
   recent: [],
   // How much of the command log was already there when this step began, so a
@@ -48,6 +52,7 @@ const T = {
 
 const LEDGER_KEY = 'anvil.teacher.ledger';
 const DEPTH_KEY = 'anvil.teacher.depth';
+const PROGRESS_KEY = 'anvil.teacher.progress';
 
 /**
  * Everything blocking must never touch.
@@ -100,6 +105,7 @@ function load() {
   try {
     for (const t of JSON.parse(localStorage.getItem(LEDGER_KEY) || '[]')) T.ledger.add(t);
     for (const t of JSON.parse(localStorage.getItem(DEPTH_KEY) || '[]')) T.depth.add(t);
+    T.progress = JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}');
   } catch {
     /* a ledger that cannot be read starts again rather than stopping anything */
   }
@@ -111,6 +117,25 @@ function save() {
     localStorage.setItem(DEPTH_KEY, JSON.stringify([...T.depth]));
   } catch {
     /* nothing here is worth failing a lesson over */
+  }
+}
+
+/** Where each chapter was left, for the chooser and for coming back to one. */
+export function progress(id) {
+  return id ? T.progress[id] || null : T.progress;
+}
+
+function remember() {
+  if (!T.lesson) return;
+  T.progress[T.lesson.id] = {
+    index: T.index,
+    total: T.lesson.steps.length,
+    done: T.marks.filter((m) => m === 'done').length
+  };
+  try {
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify(T.progress));
+  } catch {
+    /* losing the bookmark is not worth failing a lesson over */
   }
 }
 
@@ -181,11 +206,30 @@ function tick(ids) {
 /* Running a chapter                                                   */
 /* ------------------------------------------------------------------ */
 
-export function openChapter(lesson) {
+export function openChapter(lesson, { resume = true, seed = true } = {}) {
   T.lesson = lesson;
-  T.index = 0;
   T.marks = lesson.steps.map(() => null);
+  // Back where you left off, unless the chapter was finished, in which case
+  // starting again is what opening it means.
+  const held = resume ? T.progress[lesson.id] : null;
+  T.index = held && held.index < lesson.steps.length ? held.index : 0;
   T.open = true;
+
+  /*
+   * Some chapters need something to work on.
+   *
+   * Chapter 7 repairs a broken mesh and chapter 8 asks whether a part is any
+   * good, and neither question can be put to an empty document. Only ever into
+   * an empty one: a chapter must not walk over work that is already open.
+   */
+  if (seed && lesson.start && api.seedDocument) {
+    try {
+      api.seedDocument(lesson.start());
+    } catch (err) {
+      file('seed', `The chapter could not lay out its starting model: ${err.message}`);
+    }
+  }
+
   buildPanel();
   enter();
 }
@@ -216,6 +260,7 @@ function enter() {
   T.before = snapshot();
   if (step.tab && api.setTab) api.setTab(step.tab);
   document.body.classList.add('teaching');
+  remember();
   render();
   spotlight();
   // A step whose condition is already true when it is reached has nothing to
@@ -321,6 +366,7 @@ function poll() {
 
   T.marks[T.index] = 'done';
   tick(step.covers);
+  remember();
 
   if (step.check) {
     let verdict = true;
@@ -763,36 +809,85 @@ function render(done = false) {
  * player is either a broken lesson or a broken feature, and either way it is
  * found in a batch run rather than at step fourteen on a Sunday.
  */
+/**
+ * What a step does when it has not said how to play itself.
+ *
+ * Almost every step in the campaign is the same gesture: press the thing the
+ * ring is round, answer the dialog it opens by accepting what it offers, and
+ * let the condition decide whether that worked. Writing that out three hundred
+ * times would be three hundred chances to write it slightly differently, so it
+ * is written once and steps that need something else say so.
+ *
+ * A step that cannot be played this way comes back marked `never`, which is
+ * the auto-player earning its keep: either the lesson needs a script or the
+ * feature is broken, and both are worth knowing before anybody sits through it.
+ *
+ * On the campaign as it stands this reaches about a fifth of the steps, and the
+ * rest want geometry picked or a dialog filled with real numbers. Selecting
+ * something plausible first was tried, the biggest flat face or every outside
+ * edge depending on the command, and moved the figure by one step out of two
+ * hundred and thirty three, so it is not here. What the remaining steps want is
+ * a `play` of their own, written the way the probes in `tools/` are.
+ */
+async function press(step) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // A folded group has to be opened before what is inside it can be pressed.
+  const real = targetReal();
+  const shown = targetEl();
+  if (shown && shown !== real && shown.classList.contains('grp-trigger')) {
+    shown.click();
+    await wait(80);
+  }
+  (real || shown)?.click();
+  await wait(220);
+  await answer();
+}
+
+/** Accept whatever a dialog is offering, which is what a default is for. */
+async function answer() {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const panel = document.getElementById('inspector');
+  if (!panel || panel.classList.contains('hidden')) return;
+  document.getElementById('inspectorOk')?.click();
+  await wait(320);
+}
+
 export async function play(lesson, { pause = 40 } = {}) {
-  openChapter(lesson);
+  // From the top, and on whatever document is open rather than seeding one:
+  // the player is checking the steps, not rehearsing the chapter.
+  openChapter(lesson, { resume: false, seed: false });
   T.auto = true;
+  // Where this chapter's reports start. Handing back every report ever filed
+  // made each chapter look like it had inherited the faults of the one before,
+  // which is a confident way to send somebody hunting the wrong thing.
+  const from = T.reports.length;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const out = [];
   for (let i = 0; i < lesson.steps.length; i++) {
     T.index = i;
     T.marks[i] = null;
+    T.since = T.recent.length;
     T.before = snapshot();
     const step = lesson.steps[i];
     let err = null;
-    if (step.play) {
-      try {
-        await step.play({ ...snapshot(), wait, api });
-      } catch (e) {
-        err = e.message;
-      }
+    try {
+      if (step.play) await step.play({ ...snapshot(), wait, api, press, answer });
+      else await press(step);
+    } catch (e) {
+      err = e.message;
     }
     await wait(pause);
     poll();
     out.push({
       step: i,
       say: step.say,
-      playable: !!step.play,
+      played: step.play ? 'script' : 'default',
       mark: T.marks[i] || 'never',
       error: err
     });
   }
   T.auto = false;
-  const reportsMade = T.reports.slice();
+  const reportsMade = T.reports.slice(from);
   close();
   return { chapter: lesson.id, steps: out, reports: reportsMade };
 }

@@ -2103,7 +2103,7 @@ works whatever shape it is, which is the case that matters for draft. And there
 is no version history view, though the versions are kept.
 
 Everything else in Fusion's Solid, Surface, Sheet Metal, Mesh, Form, Assemble,
-Construct, Inspect and Sketch tabs is here, option by option, as of v2.80.0.
+Construct, Inspect and Sketch tabs is here, option by option, as of v2.81.0.
 
 **Teach me** walks you through building a part, one step at a time, pointing at
 what to press. Nine chapters, each making something that makes sense on its own:

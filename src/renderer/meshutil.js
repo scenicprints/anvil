@@ -13,6 +13,37 @@ import * as THREE from './three.js';
 const DEFAULT_CREASE = 32; // degrees
 
 /**
+ * A colour per kernel vertex, spread onto the vertices actually drawn.
+ *
+ * `buildGeometry` hands three.js an unindexed mesh: three vertices per
+ * triangle, none of them shared, so a box of eight corners is drawn as thirty
+ * six. Everything that colours per vertex works in the kernel's numbering
+ * instead, where the box has eight, and handing that array over directly gives
+ * the attribute roughly a sixth of the vertices it needs. Three.js reads off
+ * the end of it, and every analysis on the Inspect tab came out as garbage
+ * rather than as an answer.
+ *
+ * So the colours are spread the same way the positions were: for each triangle,
+ * the colour of each of its three kernel vertices, in the order the geometry
+ * wrote them.
+ */
+export function expandVertexColours(mesh, colours) {
+  const tris = mesh.triVerts;
+  const triCount = tris.length / 3;
+  const out = new Float32Array(triCount * 9);
+  for (let t = 0; t < triCount; t++) {
+    for (let k = 0; k < 3; k++) {
+      const v = tris[t * 3 + k] * 3;
+      const o = t * 9 + k * 3;
+      out[o] = colours[v];
+      out[o + 1] = colours[v + 1];
+      out[o + 2] = colours[v + 2];
+    }
+  }
+  return out;
+}
+
+/**
  * A body's colour with the faces that carry one of their own painted over it.
  *
  * Three numbers per vertex of the geometry `buildGeometry` makes, which is one

@@ -9,7 +9,7 @@
 
 import * as THREE from './three.js';
 import { applyWrap, wrapTexture } from './wrap.js';
-import { buildGeometry, buildEdges, faceColourArray } from './meshutil.js';
+import { buildGeometry, buildEdges, faceColourArray, expandVertexColours } from './meshutil.js';
 
 // Surfaces are drawn in a warmer tone than solids, so which is which reads at
 // a glance rather than needing the browser to be checked.
@@ -1554,11 +1554,14 @@ export class Viewport {
       if (
         !rec.chrome &&
         rec.vertexColours &&
-        rec.vertexColours.length === shown.vertProperties.length
+        rec.vertexColours.length === (shown.vertProperties.length / shown.numProp) * 3
       ) {
+        // Spread onto the vertices that are drawn rather than the ones the
+        // kernel keeps. Handed over as it comes, the attribute is a sixth of
+        // the size the geometry needs.
         geom.setAttribute(
           'color',
-          new THREE.Float32BufferAttribute(rec.vertexColours, 3)
+          new THREE.Float32BufferAttribute(expandVertexColours(shown, rec.vertexColours), 3)
         );
         entry.mat.vertexColors = true;
         entry.mat.color.set(0xffffff);

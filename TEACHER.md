@@ -372,17 +372,50 @@ home, toggleProjection, rollbackStart, rollbackPrev, rollbackNext, rollbackEnd.
   `test/coverage.test.js` fails the run if that list and the command switch
   stop agreeing.
 
+## Resuming
+
+Where each chapter was left is kept per machine, so the chooser says "step 12 of
+41" rather than only the chapter's name, and opening one puts you back there. A
+chapter that was finished starts again, because that is what opening a finished
+thing means.
+
+## Chapters that need something to work on
+
+Chapter 7 repairs a broken mesh and chapter 8 asks whether a part is any good,
+and neither question can be put to an empty document. Both carry a `start` that
+lays one out: chapter 7 builds a sphere of triangles with three patches missing,
+which is what a scanner leaves behind, and chapter 8 a shelled box with rounded
+corners, which has enough faces for the selection rules to be worth using.
+
+`start` runs into an empty document and never into one with work in it. A
+lesson must not be the reason somebody's model went away.
+
+## The auto-player
+
+`play` walks a chapter with nobody watching. Almost every step in the campaign
+is the same gesture, so there is a default: press the control the ring is round,
+opening its group first if it is folded, and accept whatever dialog opens. A
+step that needs something else carries its own `play`.
+
+A step the default cannot satisfy comes back marked `never`, and that list is
+the point of the whole exercise. It is either a lesson that needs a script or a
+feature that does not work, and both are worth knowing before anybody sits
+through the chapter. `tools/demo-campaign.js` plays all nine and reports it.
+
 ## Still open
 
-- **Resuming.** Progress is held for the session only. Whether it belongs in the
-  document, beside it, or nowhere is not settled.
-- **Prepared documents.** Chapters start from whatever is open. Chapter 7 wants a
-  broken mesh and chapter 8 wants a part worth analysing, so both would be better
-  arriving with something.
-- **`play` is written and unused.** The auto-player walks a chapter and reports
-  which steps never satisfied, but no chapter has `play` on its steps yet, so
-  nothing is being auto-checked. That is the next real piece of work: a chapter
-  that can drive itself is a chapter that cannot rot.
+- **Most steps cannot play themselves.** The default reaches about a fifth of
+  the campaign. The rest want geometry picked or a dialog filled with real
+  numbers, and each needs a `play` of its own, written the way the probes in
+  `tools/` are. That is the remaining work on this, and it is the difference
+  between a campaign that is checked and one that is only counted.
+- **Picking something plausible for the player was tried and did not work.**
+  Selecting the biggest flat face, or every outside edge, before pressing moved
+  the figure by one step in two hundred and thirty three, so the table that did
+  it was taken back out rather than left in looking useful.
+- **Depth has no chapters behind it yet.** The option branches are declared by
+  the steps that claim them, and only a handful do so far, so the second number
+  is thin. It is honest, it is just small.
 
 ## Built
 

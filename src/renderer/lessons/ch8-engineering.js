@@ -14,11 +14,46 @@ import { cmd, inMenu, step, made, ran, all, noErrors } from './kit.js';
 
 export default {
   id: 'engineering',
+  /*
+   * A part to ask the questions of.
+   *
+   * This chapter makes no new shape, so with an empty document there is
+   * nothing for any of it to say. A shelled box with rounded corners has
+   * enough faces to make the selection rules worth using and enough walls to
+   * make the analyses report something other than nothing.
+   */
+  start() {
+    return {
+      features: [
+        {
+          id: 'lesson-block',
+          type: 'primitive',
+          shape: 'box',
+          op: 'new',
+          targets: 'all',
+          params: {
+            width: '80', depth: '60', height: '40', diameter: '20', topDiameter: '0',
+            tubeDiameter: '8', wall: '2', centered: true, x: '0', y: '0', z: '0'
+          }
+        },
+        // Hollowed before it is rounded. The other way round the fillet leaves
+        // four thousand triangles for the shell to hollow, and the shell gives
+        // up and says so, which is the right answer to the wrong order.
+        { id: 'lesson-hollow', type: 'shell', bodies: 'all', thickness: '2.5', faces: [] },
+        {
+          id: 'lesson-round',
+          type: 'fillet',
+          bodies: 'all',
+          sets: [{ radius: '6', all: true, filletType: 'constant', chamferType: 'equal', distance2: '1', angle: '45' }]
+        }
+      ]
+    };
+  },
   title: 'The engineering pass',
   blurb: 'Is it any good? Analyses, selection rules and the tools that answer.',
   steps: [
     step(
-      'Open something with a few dozen faces. The bracket will do. Then pick a face and grow the selection a ring.',
+      'There is a shelled box in front of you to ask questions of. Pick a face, then grow the selection a ring.',
       cmd('selectGrow'),
       ['selectGrow', 'selectShrink'],
       (s) => s.ranAny(['selectGrow', 'selectShrink']),
