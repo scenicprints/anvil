@@ -51,7 +51,7 @@ export default {
       'Finish the sketch.',
       cmd('finishSketch'),
       'finishSketch',
-      (s) => !s.doc.sketches || Object.keys(s.doc.sketches).length >= 1,
+      (s) => !s.sketching && Object.keys(s.doc.sketches || {}).length >= 1,
       { play: done() }
     ),
     step(

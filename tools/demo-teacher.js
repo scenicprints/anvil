@@ -113,10 +113,14 @@ report.chapterOpened =
   dev.runCommand('primBox');
   await wait(500);
   document.getElementById('inspectorOk')?.click();
-  await wait(1000);
+  await wait(500);
 
   report.tickedFromTheDocument = { noteBefore, noteAfter: noteText(), bodies: dev.bodies.length };
   report.aStepTicksOffTheDocument = noteText().startsWith('Done');
+
+  // And moves on by itself a moment later, with nothing pressed.
+  await wait(1200);
+  report.movedOnByItself = T.current()?.index === 1;
 }
 
 /* ---- Skip is always live, and files a report ---- */

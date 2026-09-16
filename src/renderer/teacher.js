@@ -39,9 +39,20 @@ const T = {
   progress: {},
   before: null,
   recent: [],
-  // How much of the command log was already there when this step began, so a
-  // step can ask what has been run since rather than ever.
+  // Every command gets the next number, so "since this step began" survives
+  // the log dropping its oldest entries.
+  seq: 0,
+  // Where the command log stood when this step began, so a step can ask what
+  // has been run since rather than ever, and where it stood when the step
+  // before began, for a step the previous action already finished.
   since: 0,
+  prevSince: 0,
+  // True when the step's condition already held on arrival. Such a condition
+  // cannot tell doing the step apart from having done something like it
+  // earlier, so it also wants the step's own command to have been used.
+  stale: false,
+  advanceTimer: null,
+  ticker: null,
   panel: null,
   ring: null,
   open: false,
@@ -232,12 +243,38 @@ export function openChapter(lesson, { resume = true, seed = true } = {}) {
   }
 
   buildPanel();
-  enter();
+  startTicker();
+  enter({ carry: false });
+}
+
+/*
+ * Looking again, a few times a second.
+ *
+ * Commands and rebuilds already prompt a look, but most of what a step asks
+ * for happens without either: a line drawn and a dimension typed inside a
+ * sketch, a face picked, a setting changed. Waiting for one of those to cause
+ * a rebuild left steps done and unnoticed, which is the lesson not keeping up
+ * with you. Every condition is a cheap read of the document, so reading it on
+ * a timer costs nothing anyone can feel.
+ */
+function startTicker() {
+  if (T.ticker) return;
+  T.ticker = setInterval(() => {
+    if (!T.open || T.auto || !T.lesson) return;
+    if (T.index < T.lesson.steps.length && !T.marks[T.index]) poll();
+  }, 350);
+}
+
+function stopTicker() {
+  clearInterval(T.ticker);
+  T.ticker = null;
 }
 
 export function close() {
   T.open = false;
   T.lesson = null;
+  stopTicker();
+  cancelAdvance();
   clearRing();
   api?.highlight?.(null);
   if (T.panel) T.panel.classList.add('hidden');
@@ -253,22 +290,105 @@ export function isOpen() {
   return T.open;
 }
 
-/** Arriving at a step: remember where the model was, point at the control. */
-function enter() {
+/**
+ * Arriving at a step: remember where the model was, point at the control.
+ *
+ * `carry` says whether what was done during the step before may count towards
+ * this one. Moving forward it may, because one action often finishes two steps.
+ * Going back or opening a chapter it may not, or the step would tick itself off
+ * the moment you arrived and move straight on again.
+ */
+function enter({ carry = true } = {}) {
+  cancelAdvance();
   const step = T.lesson?.steps[T.index];
   if (!step) return finish();
-  T.since = T.recent.length;
-  T.before = snapshot();
+  T.prevSince = carry ? T.since : T.seq;
+  T.since = T.seq;
+  T.before = baseline();
+  T.stale = false;
+  try {
+    T.stale = !!step.done(snapshot());
+  } catch {
+    /* a condition that throws is reported when it is polled */
+  }
   if (step.tab && api.setTab) api.setTab(step.tab);
   document.body.classList.add('teaching');
   remember();
   render();
   spotlight();
-  // A step whose condition is already true when it is reached has nothing to
-  // do, which happens whenever a step asks for something a previous step left
-  // behind. Checking on arrival rather than only on the next command is what
-  // stops it sitting there already satisfied and waiting.
   poll();
+}
+
+/** The numbers a step's checks compare against, taken once on arrival. */
+function baseline() {
+  const snap = snapshot();
+  let volume = 0;
+  try {
+    volume = snap.volume();
+  } catch {
+    /* nothing to measure yet */
+  }
+  return { volume, bodies: snap.bodies.length };
+}
+
+/**
+ * Was this step's own command used, since `from`?
+ *
+ * The command the ring is round, or any the step says it covers. A step that
+ * names none accepts any command at all.
+ */
+function usedSince(step, from) {
+  const ids = new Set();
+  const p = step.point;
+  if (p && typeof p === 'object') {
+    if (p.cmd) ids.add(p.cmd);
+    if (p.tool) ids.add(`tool:${p.tool}`);
+    if (p.con) ids.add(`con:${p.con}`);
+  }
+  for (const c of step.covers || []) {
+    if (!c.includes(':') || c.startsWith('tool:') || c.startsWith('con:')) ids.add(c);
+  }
+  const recent = T.recent.filter((r) => r.n >= from);
+  if (!ids.size) return recent.length > 0;
+  return recent.some((r) => ids.has(r.id));
+}
+
+/*
+ * On to the next step by itself.
+ *
+ * A moment after a step is done, long enough to see it ticked, and never while
+ * a dialog or a question is still open: the step is often done when the
+ * feature appears, and moving the lesson on under a dialog that is still being
+ * answered would be pulling the page away mid sentence.
+ */
+const ADVANCE_AFTER = 900;
+
+function scheduleAdvance() {
+  if (T.auto || !T.lesson) return;
+  cancelAdvance();
+  const index = T.index;
+  const at = Date.now();
+  T.advanceTimer = setInterval(() => {
+    if (!T.open || T.index !== index || !T.marks[index]) return cancelAdvance();
+    if (Date.now() - at < ADVANCE_AFTER || busy()) return;
+    cancelAdvance();
+    advance();
+  }, 150);
+}
+
+function cancelAdvance() {
+  clearInterval(T.advanceTimer);
+  T.advanceTimer = null;
+}
+
+function busy() {
+  const shown = (id) => {
+    const el = document.getElementById(id);
+    return !!el && !el.classList.contains('hidden') && el.offsetParent !== null;
+  };
+  // Only the dialogs. A pick prompt or a menu can outlive what it was for, and
+  // one left on screen must not stop the lesson for good.
+  return shown('inspector') || shown('modal');
 }
 
 function finish() {
@@ -289,7 +409,8 @@ export function advance() {
 export function back() {
   if (T.index > 0) {
     T.index--;
-    enter();
+    T.marks[T.index] = null;
+    enter({ carry: false });
   }
 }
 
@@ -314,8 +435,8 @@ export function skip() {
 /* ------------------------------------------------------------------ */
 
 export function noteCommand(id) {
-  T.recent.push({ id, at: Date.now() });
-  if (T.recent.length > 40) T.recent.shift();
+  T.recent.push({ id, at: Date.now(), n: T.seq++ });
+  if (T.recent.length > 60) T.recent.shift();
   if (!T.open) {
     // The ledger records what you have used whether or not a lesson is running,
     // so ordinary work counts towards it too.
@@ -356,6 +477,11 @@ export function noteRebuild() {
 function poll() {
   const step = T.lesson?.steps[T.index];
   if (!step || T.marks[T.index]) return;
+  // Not while a dialog is open. A feature being edited is already in the
+  // document as a preview, at whatever it opened with, so judging it now would
+  // tick the step and check its size before the size had been typed. Cancelled,
+  // it goes away and the step was never done.
+  if (!T.auto && busy()) return;
   let ok = false;
   try {
     ok = !!step.done(snapshot());
@@ -364,6 +490,9 @@ function poll() {
     return;
   }
   if (!ok) return;
+  // Already true on arrival: only doing the step's own thing counts, whether
+  // during this step or as the action that finished the one before.
+  if (T.stale && !T.auto && !usedSince(step, T.prevSince)) return;
 
   T.marks[T.index] = 'done';
   tick(step.covers);
@@ -394,6 +523,7 @@ function poll() {
 
   render();
   spotlight();
+  scheduleAdvance();
 }
 
 /**
@@ -425,6 +555,7 @@ function snapshot() {
     selection: s.selection,
     bodies,
     before: T.before,
+    sketching: !!s.sketcher?.active,
     features: (type) => (doc.features || []).filter((f) => f.type === type),
     has: (type) => (doc.features || []).some((f) => f.type === type),
     last: (type) => [...(doc.features || [])].reverse().find((f) => f.type === type) || null,
@@ -447,8 +578,8 @@ function snapshot() {
      * in the document to assert on. Where there is something better to ask,
      * ask that instead.
      */
-    ran: (id) => T.recent.slice(T.since).some((r) => r.id === id),
-    ranAny: (ids) => T.recent.slice(T.since).some((r) => ids.includes(r.id)),
+    ran: (id) => T.recent.some((r) => r.n >= T.since && r.id === id),
+    ranAny: (ids) => T.recent.some((r) => r.n >= T.since && ids.includes(r.id)),
     selected: () => ({
       faces: s.selection?.faces.size || 0,
       edges: s.selection?.edges.size || 0,
@@ -789,11 +920,12 @@ function render(done = false) {
   const mark = T.marks[T.index];
   const note = T.panel.querySelector('.teacher-note');
   note.className = `teacher-note ${mark || ''}`;
+  const last = T.index >= total - 1;
   note.textContent =
     mark === 'done'
-      ? 'Done.'
+      ? last ? 'Done.' : 'Done. On to the next step.'
       : mark === 'wrong'
-        ? 'Done, but the result is wrong. Written down.'
+        ? 'Done, but the result is wrong. Written down, and on to the next step.'
         : mark === 'skipped'
           ? 'Skipped, and written down.'
           : '';
@@ -807,6 +939,7 @@ function render(done = false) {
     b.textContent = 'Next';
     b.addEventListener('click', () => {
       b.remove();
+      cancelAdvance();
       advance();
     });
     T.panel.querySelector('.teacher-foot').appendChild(b);
@@ -897,8 +1030,10 @@ export async function play(lesson, { pause = 40 } = {}) {
   for (let i = 0; i < lesson.steps.length; i++) {
     T.index = i;
     T.marks[i] = null;
-    T.since = T.recent.length;
-    T.before = snapshot();
+    T.prevSince = T.since;
+    T.since = T.seq;
+    T.before = baseline();
+    T.stale = false;
     const step = lesson.steps[i];
     let err = null;
     try {

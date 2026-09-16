@@ -8,7 +8,7 @@ which is usually a fresh agent with no memory of the last session.
 the places where Anvil deliberately falls short of Fusion. This file only covers
 what is *not* built yet.
 
-Current version: **2.81.4**. 622 tests in the window, plus 55 checks of the
+Current version: **2.81.5**. 622 tests in the window, plus 55 checks of the
 library, profiles and the version counter in plain node, and a campaign
 coverage check that fails the run when a tool is added and no Teacher Mode
 chapter teaches it.
