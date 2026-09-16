@@ -1087,6 +1087,19 @@ export function rebuild(doc, options = {}) {
       continue;
     }
 
+    // Which solids were already here, so only what this feature made or
+    // changed is looked at for pieces that have come apart, and where each body
+    // stood, so the piece still standing there keeps the body's name.
+    const solidsBefore = new Set(bodies.map((b) => b.solid));
+    const boxesBefore = new Map();
+    for (const b of bodies) {
+      try {
+        if (b.solid) boxesBefore.set(b.id, K.boundingBox(b.solid));
+      } catch {
+        /* a body with no box has nothing to be matched against */
+      }
+    }
+
     try {
       switch (feature.type) {
         case 'jointEdit':
@@ -1482,6 +1495,11 @@ export function rebuild(doc, options = {}) {
       }
     } catch (err) {
       errors.push({ feature: feature.id, message: err.message || String(err) });
+    }
+    try {
+      bodies = separatePieces(bodies, solidsBefore, boxesBefore, scopeObj);
+    } catch (err) {
+      errors.push({ feature: feature.id, message: `Separating pieces: ${err.message || err}` });
     }
     checkpoint(i);
   }
@@ -6974,6 +6992,119 @@ export function rebuild(doc, options = {}) {
   }
 
   /** Replace a body in place, keeping its id and its name. */
+  /**
+   * One body is one piece of material.
+   *
+   * A feature can leave a solid in pieces with daylight between them: two
+   * rectangles extruded from one sketch, a cut that goes right through, a
+   * pattern of copies standing apart, a mirror across a gap. The kernel is
+   * happy to call that one solid, and so this was one body, which meant
+   * clicking a plate lit up a slab sitting under a box on the other side of
+   * the model, and moving one moved both. Each such piece is its own body now.
+   *
+   * What counts as apart is the careful part, and the kernel's own answer is
+   * the wrong one. It reports as separate anything whose surfaces do not share
+   * vertices, and that includes pieces sitting face to face: a chamfer's corner
+   * blends, the corners of a thin wall, a cavity inside a shelled box. Split by
+   * that, a chamfered box becomes nine bodies and a hollow one becomes a solid
+   * box and a body made of air, which is what the tests said the first time.
+   * So pieces are grouped by whether their extents touch or overlap, and only
+   * groups with a real gap between them become bodies of their own. A piece
+   * inside another's extent stays with it, which is the conservative mistake:
+   * it can leave two things joined that are apart, never break one that is not.
+   *
+   * The body's name stays with the group standing where the body stood before
+   * the feature, so a mirror does not hand it to the reflection and a later
+   * feature pointed at it still reaches the part that was meant. A body the
+   * feature has only just made gives its name to the largest group.
+   */
+  function separatePieces(list, before, boxesBefore, ks) {
+    const GAP = 1e-3;
+    const near = (a, c) =>
+      [0, 1, 2].every((k) => a.min[k] <= c.max[k] + GAP && c.min[k] <= a.max[k] + GAP);
+    const merge = (a, c) => ({
+      min: a.min.map((v, k) => Math.min(v, c.min[k])),
+      max: a.max.map((v, k) => Math.max(v, c.max[k]))
+    });
+    const overlap = (a, c) => {
+      let vol = 1;
+      for (let k = 0; k < 3; k++) {
+        const d = Math.min(a.max[k], c.max[k]) - Math.max(a.min[k], c.min[k]);
+        if (d <= 0) return 0;
+        vol *= d;
+      }
+      return vol;
+    };
+
+    let out = null;
+    list.forEach((b, i) => {
+      const keep = () => {
+        if (out) out.push(b);
+      };
+      if (!b.solid || b.sheet || b.mesh || b.form || before.has(b.solid)) return keep();
+      let parts;
+      try {
+        parts = b.solid.decompose();
+      } catch {
+        return keep();
+      }
+      if (parts.length < 2) {
+        for (const part of parts) part.delete?.();
+        return keep();
+      }
+      for (const part of parts) ks.track(part);
+
+      // Gather pieces into groups whose extents touch, until nothing more joins.
+      let groups = parts.map((part) => ({ parts: [part], box: K.boundingBox(part) }));
+      let joined = true;
+      while (joined) {
+        joined = false;
+        for (let a = 0; a < groups.length && !joined; a++) {
+          for (let c = a + 1; c < groups.length; c++) {
+            if (!near(groups[a].box, groups[c].box)) continue;
+            groups[a] = {
+              parts: [...groups[a].parts, ...groups[c].parts],
+              box: merge(groups[a].box, groups[c].box)
+            };
+            groups.splice(c, 1);
+            joined = true;
+            break;
+          }
+        }
+      }
+      if (groups.length < 2) return keep();
+
+      const Manifold = b.solid.constructor;
+      for (const g of groups) {
+        g.solid = g.parts.length > 1 ? ks.track(Manifold.compose(g.parts)) : g.parts[0];
+        g.volume = Math.abs(g.solid.volume());
+      }
+      const was = boxesBefore.get(b.id);
+      const claim = (g) => (was ? overlap(g.box, was) : g.volume);
+      groups.sort((a, c) => {
+        const d = claim(c) - claim(a);
+        if (Math.abs(d) > 1e-9) return d;
+        // Equal claims are told apart by where they sit, so the same model
+        // always gives the same piece the same name.
+        for (let k = 0; k < 3; k++) {
+          const e = a.box.min[k] - c.box.min[k];
+          if (Math.abs(e) > 1e-9) return e;
+        }
+        return 0;
+      });
+
+      out = out || list.slice(0, i);
+      groups.forEach((g, k) => {
+        out.push(
+          k === 0
+            ? { ...b, solid: g.solid }
+            : { ...b, id: `${b.id}.${k}`, name: `${b.name || 'Body'} (${k + 1})`, solid: g.solid }
+        );
+      });
+    });
+    return out || list;
+  }
+
   function replaceBody(list, body, next) {
     const idx = list.indexOf(body);
     if (idx < 0) return;

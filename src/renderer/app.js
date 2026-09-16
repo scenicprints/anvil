@@ -109,6 +109,7 @@ import {
   spunProfile
 } from './analysis.js';
 import * as TEACH from './teacher.js';
+import { iconSvg, featureIconSvg } from './icons.js';
 import { CHAPTERS } from './lessons/index.js';
 
 /** The hooks Teacher Mode was handed, kept so a probe can drive the same ones. */
@@ -203,12 +204,14 @@ async function boot() {
   };
   state.vp.onPointerDown = (e) => handleViewportDown(e);
   state.vp.onPointerMove = (e) => {
+    if (state.moveDrag && moveGizmoMove(e)) return true;
     if (state.editForm?.drag && editFormPointerMove(e)) return true;
     if (state.pullDrag && pullPointerMove(e)) return true;
     if (state.band && bandPointerMove(e)) return true;
     return handleViewportMove(e);
   };
   state.vp.onPointerUp = (e) => {
+    if (state.moveDrag && moveGizmoUp(e)) return true;
     if (state.editForm?.drag && editFormPointerUp(e)) return true;
     if (state.pullDrag && pullPointerUp(e)) return true;
     if (state.band && bandPointerUp(e)) return true;
@@ -270,6 +273,7 @@ async function boot() {
   state.sketcher.onSelectionChanged = () => updateHints();
 
   wireUI();
+  drawIcons();
   buildToolbars();
   wireKeys();
 
@@ -390,7 +394,7 @@ function rebuildAll() {
   applyAnimationOffsets();
   state.vp.setCanvases(placedCanvases());
   state.vp.setDecals(placedDecals(records));
-  state.vp.setSelection(state.selection.bodies);
+  paintBodySelection();
   pruneSelection();
   refreshHighlight();
   renderSketchDisplay();
@@ -417,6 +421,7 @@ function rebuildAll() {
   // The model has changed, so whatever a lesson step was waiting for may have
   // just happened. This is the tap that ticks a step.
   TEACH.noteRebuild();
+  refreshMoveMarkers();
 
   const ms = Math.round(performance.now() - t0);
   const errCount = visibleErrors().length + Object.keys(res.paramErrors).length;
@@ -581,9 +586,12 @@ function handleViewportDown(e) {
   // The pull arrow, which belongs to an open Extrude or Press Pull, for the
   // same reason.
   if (state.pullHandle && pullPointerDown(e)) return true;
+  // And the six arrows on a translate move.
+  if (state.moveGizmo && moveGizmoDown(e)) return true;
 
   // A dialog that is waiting to be pointed at gets the click first.
   if (state.editing?.pickInto) {
+    state.pickAdditive = e.shiftKey || e.ctrlKey;
     const armed = state.editing.pickInto;
     const wantsPlane = armed === 'startObject' || armed === 'toObject';
     if (wantsPlane) {
@@ -743,7 +751,7 @@ function acceptPick(hit, e) {
     }
   }
 
-  state.vp.setSelection(state.selection.bodies);
+  paintBodySelection();
   refreshHighlight();
   renderTree();
   refreshPullHandle();
@@ -781,6 +789,46 @@ function narrowToChosen(list) {
   return picked.size ? list.filter((b) => picked.has(b.id)) : list;
 }
 
+/*
+ * Rows that pick whole bodies, and the list on the feature each one fills.
+ *
+ * Kept together so that every one of them behaves the same: while one is
+ * armed the pointer lights the body it is over rather than a face of it, and
+ * the bodies already chosen stay lit for as long as the dialog is open. Before
+ * this, picking bodies for a move lit only the face under the pointer and then
+ * nothing at all once it was clicked, so there was no way to see what the move
+ * was going to take.
+ */
+const BODY_PICKS = {
+  moveBodies: 'bodies',
+  targets: 'targets',
+  combineTools: 'tools',
+  surfaceBodies: 'surfaces',
+  surfaceCutters: 'cutters',
+  fillTools: 'tools'
+};
+
+/** The bodies an open dialog has picked into any row that is showing. */
+function dialogPickedBodies() {
+  const ed = state.editing;
+  if (!ed?.fields) return [];
+  const out = [];
+  for (const field of ed.fields) {
+    const key = BODY_PICKS[field.pick];
+    if (!key) continue;
+    if (field.showIf && !field.showIf(ed.feature)) continue;
+    const list = ed.feature?.[key];
+    if (Array.isArray(list)) out.push(...list);
+  }
+  return out;
+}
+
+/** Light the selected bodies, and the ones a dialog has picked, as one set. */
+function paintBodySelection() {
+  if (!state.vp) return;
+  state.vp.setSelection(new Set([...state.selection.bodies, ...dialogPickedBodies()]));
+}
+
 function toggle(set, key, additive) {
   if (additive && set.has(key)) set.delete(key);
   else set.add(key);
@@ -792,7 +840,7 @@ function clearGeometrySelection(redraw = true) {
   state.selection.edges.clear();
   state.selection.profiles = [];
   if (redraw) {
-    state.vp.setSelection(state.selection.bodies);
+    paintBodySelection();
     refreshHighlight();
     renderTree();
     refreshPullHandle();
@@ -862,13 +910,15 @@ function refreshHighlight() {
  * Worked out once per rebuild, because it walks every edge of every body.
  */
 function modelSnapPoints(skipBody) {
+  const skipping = [].concat(skipBody || []);
+  skipBody = skipping.length ? skipping : null;
   if (!skipBody && state.snapPointsFor === state.result && state.snapPoints) return state.snapPoints;
   const out = [];
   for (const rec of state.records || []) {
     // A point being dragged must not snap to the surface it is itself making.
     // It would chase itself: every move changes the shape, which moves the
     // thing it was aiming at.
-    if (skipBody && rec.id === skipBody) continue;
+    if (skipBody && skipBody.includes(rec.id)) continue;
     const topo = rec.topology;
     if (!topo) continue;
     for (const e of topo.edges) {
@@ -902,6 +952,246 @@ const SNAP_RANK = {
   'Middle of the face': 12
 };
 
+/**
+ * Exactly where a click would put a move's point, and what to call it.
+ *
+ * The hint and the click used to answer this separately and disagreed: with no
+ * corner nearby the hint said "On the face" while the click quietly took the
+ * middle of the face, somewhere else entirely. Both ask this now, so what is
+ * marked under the pointer is what the click takes.
+ */
+function moveTarget(clientX, clientY) {
+  const skip = state.editing?.pickInto === 'movePointTo' ? movingBodies() : [];
+  const snap = snapModelPoint(clientX, clientY, { skipBody: skip });
+  if (snap) return { at: [...snap.at], label: snap.label };
+  const hit = state.vp.pickEntity(clientX, clientY, { edges: false });
+  if (!hit || skip.includes(hit.bodyId)) return null;
+  if (hit.kind === 'face' && hit.faceId !== null) {
+    const record = (state.records || []).find((r) => r.id === hit.bodyId);
+    const face = record?.topology?.faces[hit.faceId];
+    if (face) return { at: [...face.centre], label: 'Middle of the face' };
+  }
+  if (hit.point) return { at: [hit.point.x, hit.point.y, hit.point.z], label: 'Point on the face' };
+  return null;
+}
+
+/**
+ * The bodies a move is carrying, which its To point must not land on.
+ *
+ * Once both points are set the preview has already moved them, so their own
+ * corners sit exactly where the last To put them, and snapping to one of those
+ * moves a body onto itself.
+ */
+function movingBodies() {
+  const f = state.editing?.feature;
+  return f?.type === 'move' && Array.isArray(f.bodies) ? f.bodies : [];
+}
+
+/**
+ * Dots on the model for a move: where a click would land, and the points it has
+ * already taken, with a line from the one to the other.
+ *
+ * A label beside the cursor said what kind of place had been found and never
+ * where it was, and a picked point was a row of numbers in the dialog. Neither
+ * could be checked by looking at the part.
+ */
+function refreshMoveMarkers(hover = null) {
+  if (!state.vp?.setMarkers) return;
+  const f = state.editing?.feature;
+  if (!f || f.type !== 'move') {
+    state.vp.setMarkers(null);
+    return;
+  }
+  const points = [];
+  const lines = [];
+  const kind = f.moveType || 'translate';
+  if ((kind === 'points' || kind === 'position') && f.fromPoint) {
+    points.push({ at: f.fromPoint, colour: 0x4a90d9 });
+  }
+  if (kind === 'points' && f.toPoint) {
+    points.push({ at: f.toPoint, colour: 0x57b06a });
+    if (f.fromPoint) lines.push([f.fromPoint, f.toPoint]);
+  }
+  if (kind === 'rotate' && f.pivot) points.push({ at: f.pivot, colour: 0xd3a03c });
+  if (hover) points.push({ at: hover, colour: 0xe2551f, size: 18 });
+  state.vp.setMarkers({ points, lines });
+}
+
+/* ------------------------------------------------------------------ */
+/* Six arrows on a translate move                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Where the arrows of a translate move stand, or nothing if they should not.
+ *
+ * Typing three numbers into a dialog is how a move was made, and it is the
+ * wrong way round for most moves: you can see where the part should go long
+ * before you know how far that is. So a translate stands six arrows on the
+ * middle of what it is carrying, one each way along each axis, and dragging
+ * one moves the part as it happens. The number it lands on can be typed over
+ * in the box beside the pointer.
+ *
+ * They follow the part as it moves, and stand aside while a row of the dialog
+ * is waiting for a pick, or they would take the click meant for a body.
+ */
+function moveGizmoFrame() {
+  const ed = state.editing;
+  const f = ed?.feature;
+  if (!f || f.type !== 'move' || ed.pickInto) return null;
+  if ((f.moveType || 'translate') !== 'translate' || f.moveObject === 'faces') return null;
+  const all = state.result?.bodies || [];
+  const ids = f.copy
+    ? all.filter((b) => b.id.startsWith(`${f.id}:copy`)).map((b) => b.id)
+    : Array.isArray(f.bodies)
+      ? f.bodies
+      : all.map((b) => b.id);
+  let lo = null;
+  let hi = null;
+  for (const b of all) {
+    if (!ids.includes(b.id) && !ids.some((id) => b.id.startsWith(`${id}.`))) continue;
+    let bb;
+    try {
+      bb = b.solid?.boundingBox();
+    } catch {
+      bb = null;
+    }
+    if (!bb) continue;
+    lo = lo ? lo.map((v, k) => Math.min(v, bb.min[k])) : [...bb.min];
+    hi = hi ? hi.map((v, k) => Math.max(v, bb.max[k])) : [...bb.max];
+  }
+  if (!lo) return null;
+  return {
+    origin: [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2],
+    x: [1, 0, 0],
+    y: [0, 1, 0],
+    z: [0, 0, 1]
+  };
+}
+
+const MOVE_AXIS_KEY = ['dx', 'dy', 'dz'];
+const MOVE_AXIS_NAME = ['X', 'Y', 'Z'];
+
+function moveGizmoDown(e) {
+  if (e.button !== 0 || !state.moveGizmo) return false;
+  const hit = state.vp.pickGizmo(e.clientX, e.clientY);
+  if (!hit || hit.kind !== 'move') return false;
+  const f = state.editing?.feature;
+  if (!f) return false;
+  const axis = hit.axis;
+  const sign = hit.sign === -1 ? -1 : 1;
+  const key = MOVE_AXIS_KEY[axis];
+  const scope = resolveParameters(state.doc.parameters).scope;
+  const dir = [0, 0, 0];
+  dir[axis] = sign;
+  state.moveDrag = {
+    axis,
+    sign,
+    key,
+    start: { x: e.clientX, y: e.clientY },
+    from: safeEval(f[key], scope, 0),
+    // Measured against the arrow as it stood when it was grabbed. The part, and
+    // the arrows with it, move under the pointer as it drags.
+    frame: { ...state.moveGizmo, z: dir },
+    moved: false
+  };
+  showMoveValue(e, axis, f[key]);
+  try {
+    state.vp.canvas.setPointerCapture(e.pointerId);
+    state.moveDrag.pointerId = e.pointerId;
+  } catch {
+    /* capture is a convenience */
+  }
+  return true;
+}
+
+function moveGizmoMove(e) {
+  const d = state.moveDrag;
+  const f = state.editing?.feature;
+  if (!d || !f) return false;
+  const along = axisDragAmount(d.frame, e.clientX - d.start.x, e.clientY - d.start.y);
+  const value = d.from + d.sign * along;
+  const rounded = Math.abs(value) < 1e-9 ? 0 : Number(value.toFixed(2));
+  f[d.key] = String(rounded);
+  d.moved = true;
+  const input = state.moveValueEl?.querySelector('input');
+  if (input) input.value = String(rounded);
+  placeMoveValue(e);
+  renderFields();
+  rebuildAll();
+  return true;
+}
+
+function moveGizmoUp(e) {
+  const d = state.moveDrag;
+  if (!d) return false;
+  try {
+    state.vp.canvas.releasePointerCapture(d.pointerId ?? e?.pointerId);
+  } catch {
+    /* already let go */
+  }
+  state.moveDrag = null;
+  refreshPullHandle();
+  // The box stays where the drag ended, focused, so the exact number can be
+  // typed straight over the one that was dragged to.
+  const input = state.moveValueEl?.querySelector('input');
+  if (input) {
+    input.focus();
+    input.select();
+  }
+  return true;
+}
+
+/** The box beside the pointer that says how far along the axis, and takes a number. */
+function showMoveValue(e, axis, current) {
+  hideMoveValue();
+  const box = document.createElement('div');
+  box.className = 'sk-entry pull-entry move-entry';
+  const wrap = document.createElement('label');
+  wrap.className = 'sk-entry-field';
+  const cap = document.createElement('span');
+  cap.textContent = `Move ${MOVE_AXIS_NAME[axis]}`;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.spellcheck = false;
+  input.value = String(current ?? '0');
+  input.addEventListener('input', () => {
+    const f = state.editing?.feature;
+    const text = input.value.trim();
+    const scope = resolveParameters(state.doc.parameters).scope;
+    if (!f || !Number.isFinite(safeEval(text, scope, NaN))) return;
+    // The text as typed, so a parameter name stays a parameter.
+    f[MOVE_AXIS_KEY[axis]] = text;
+    renderFields();
+    scheduleRebuild();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' || ev.key === 'Escape') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      hideMoveValue();
+    }
+  });
+  wrap.appendChild(cap);
+  wrap.appendChild(input);
+  box.appendChild(wrap);
+  document.getElementById('viewwrap').appendChild(box);
+  state.moveValueEl = box;
+  placeMoveValue(e);
+}
+
+function placeMoveValue(e) {
+  const box = state.moveValueEl;
+  if (!box || !e) return;
+  const r = document.getElementById('viewwrap').getBoundingClientRect();
+  box.style.left = `${e.clientX - r.left + 18}px`;
+  box.style.top = `${e.clientY - r.top + 18}px`;
+}
+
+function hideMoveValue() {
+  state.moveValueEl?.remove();
+  state.moveValueEl = null;
+}
+
 /** The place in the model nearest the pointer, or nothing within reach. */
 function snapModelPoint(clientX, clientY, opts = {}) {
   let best = null;
@@ -934,14 +1224,16 @@ function updateMoveSnapHint(e) {
     if (hint.dataset.owner === 'move') {
       hint.style.display = 'none';
       hint.dataset.owner = '';
+      refreshMoveMarkers();
     }
     return;
   }
-  const snap = snapModelPoint(e.clientX, e.clientY);
+  const target = moveTarget(e.clientX, e.clientY);
+  refreshMoveMarkers(target?.at || null);
   const rect = state.vp.canvas.getBoundingClientRect();
   hint.dataset.owner = 'move';
-  hint.style.display = 'block';
-  hint.textContent = snap ? snap.label : 'On the face';
+  hint.style.display = target ? 'block' : 'none';
+  hint.textContent = target ? target.label : '';
   hint.style.left = `${e.clientX - rect.left + 14}px`;
   hint.style.top = `${e.clientY - rect.top + 14}px`;
 }
@@ -975,6 +1267,17 @@ function handleViewportMove(e) {
   }
   if (overProfile) {
     state.vp.setHover(null);
+    return;
+  }
+
+  if (BODY_PICKS[state.editing?.pickInto]) {
+    const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
+    if (state.hoverFace || state.hoverEdge) {
+      state.hoverFace = null;
+      state.hoverEdge = null;
+      refreshHighlight();
+    }
+    state.vp.setHover(hit?.bodyId || null);
     return;
   }
 
@@ -1467,7 +1770,7 @@ function wireUI() {
           const take = kind === 'faces' ? flat.slice(0, 2) : flat.slice(which, which + 1);
           for (const f of take) state.selection.faces.add(`${rec.id}:${f.id}`);
         }
-        state.vp.setSelection(state.selection.bodies);
+        paintBodySelection();
         refreshHighlight();
         return true;
       }
@@ -1546,6 +1849,24 @@ function wireUI() {
 
   document.querySelectorAll('[data-menu]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.menu;
+      // A drawing family is one gesture made several ways, and most people
+      // settle on one of them. Pressing it takes the one you use most; the
+      // caret, or a right click, is still there for the others.
+      const wantsList = state.familyList || !!e.target.closest?.('.caret');
+      state.familyList = false;
+      if (btn.classList.contains('tool-menu') && !wantsList) {
+        const tool = familyDefault(name);
+        if (tool) {
+          reachForTool(tool);
+          return;
+        }
+      }
+      showRibbonMenu(name, btn);
+    });
+    btn.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       showRibbonMenu(btn.dataset.menu, btn);
     });
@@ -1634,11 +1955,32 @@ function wireUI() {
   $('#modalCancel').addEventListener('click', () => closeModal(null));
 }
 
+/*
+ * Tabs that moved.
+ *
+ * The camera, the display switches and the preferences used to have a View
+ * tab of their own, and a saved view or a lesson written then still asks for
+ * it by that name.
+ */
+const TAB_ALIASES = { view: 'utilities' };
+
 function setTab(name) {
+  name = TAB_ALIASES[name] || name;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document
     .querySelectorAll('.ribbon-panel')
     .forEach((p) => p.classList.toggle('active', p.dataset.panel === name));
+  syncSketchTab();
+}
+
+/*
+ * The Sketch tab is there while there is a sketch open, the way Fusion's is,
+ * rather than sitting beside Solid all the time as a place where every tool
+ * first has to start a sketch. It is still there after looking at another tab
+ * mid-sketch, so the way back is never lost.
+ */
+function syncSketchTab() {
+  document.body.classList.toggle('sketching', !!state.sketcher?.active);
 }
 
 /**
@@ -1652,6 +1994,7 @@ function setTab(name) {
  */
 function reachForTool(tool) {
   TEACH.noteTool(tool);
+  noteFamilyUse(tool);
   if (state.sketcher.active) {
     state.sketcher.setTool(tool);
     syncToolButtons();
@@ -1720,8 +2063,11 @@ function syncToolButtons() {
   // With the commands folded into flyouts, the tool in your hand would
   // otherwise be invisible: it is lit inside a panel nobody is looking at. The
   // group that holds it says so, and says which one.
+  for (const pin of document.querySelectorAll('.pin')) {
+    pin.classList.toggle('on', !!pin._real?.classList.contains('on'));
+  }
   for (const group of document.querySelectorAll('.group')) {
-    const lit = group.querySelector('button.on');
+    const lit = group.querySelector('.grp-pop button.on');
     group.classList.toggle('has-on', !!lit);
     const name = group.querySelector('.grp-name');
     if (!name) continue;
@@ -3731,6 +4077,10 @@ function exitSketch() {
   state.vp.setSlice(null);
   state.vp.setBodyOpacity($('#chkTransparent').checked ? 0.45 : 1);
   syncToolButtons();
+  syncSketchTab();
+  // Leaving a sketch any way but Finish still leaves the Sketch tab, which is
+  // about to vanish, so the ribbon goes back to the model.
+  if (document.querySelector('.tab.active')?.dataset.tab === 'sketch') setTab('solid');
   updateHints();
 }
 
@@ -3740,6 +4090,7 @@ function finishSketch() {
   const chosen = state.sketcher.selectedRegionObjects();
   exitSketch();
   setTab('solid');
+  syncSketchTab();
   rebuildAll();
 
   // Anything picked inside the sketch carries out to the model, so Extrude can
@@ -3792,33 +4143,6 @@ function renderTimeline() {
   const rollback = currentRollback();
   const errorIds = new Set(visibleErrors().map((e) => e.feature));
 
-  const icons = {
-    sketch: '✎',
-    extrude: '⬆',
-    revolve: '↻',
-    hole: '◎',
-    primitive: '▣',
-    mirror: '⇋',
-    patternRect: '⁙',
-    patternCircular: '⊛',
-    move: '✥',
-    scale: '⤢',
-    combine: '⊕',
-    fillet: '◡',
-    chamfer: '◺',
-    shell: '⊔',
-    offsetFace: '⇅',
-    loft: '◇',
-    sweep: '⌁',
-    rib: '⌷',
-    draft: '◿',
-    split: '⊟',
-    thread: '⌸',
-    construction: '▱',
-    patternPath: '⋯',
-    patternFeature: '⁘'
-  };
-
   state.doc.features.forEach((f, i) => {
     const node = document.createElement('div');
     node.className = 'tl-item';
@@ -3827,7 +4151,7 @@ function renderTimeline() {
     if (f.suppressed) node.classList.add('suppressed');
     if (errorIds.has(f.id)) node.classList.add('err');
     node.title = featureLabel(state.doc, f);
-    node.innerHTML = `<span>${icons[f.type] || '●'}</span><span class="tl-n">${i + 1}</span>`;
+    node.innerHTML = `<span class="tl-ico">${featureIconSvg(f.type, 20) || '●'}</span><span class="tl-n">${i + 1}</span>`;
 
     node.addEventListener('click', () => {
       state.selection.features.clear();
@@ -3890,9 +4214,29 @@ function toggleSuppress() {
 /* Browser tree                                                        */
 /* ------------------------------------------------------------------ */
 
+const TREE_ICONS = {
+  Parameters: 'parameters',
+  'Selection Sets': 'createSelectionSet',
+  Origin: 'construct',
+  Sketches: 'newSketch',
+  Components: 'newComponent',
+  Joints: 'newJoint',
+  Images: 'insertCanvas',
+  Notes: 'addNote',
+  Construction: 'construct',
+  Bodies: 'primBox',
+  Surfaces: 'patch',
+  Meshes: 'tessellate',
+  Forms: 'formBox',
+  Problems: 'designAdvice'
+};
+
 function renderTree() {
   el.tree.innerHTML = '';
 
+  // What each row is, drawn the way the ribbon draws the command that makes
+  // one: a folder for a heading, and the thing itself under it.
+  let section = '';
   const addNode = (label, opts = {}) => {
     const n = document.createElement('div');
     n.className = `node${opts.child ? ' child' : ''}${opts.head ? ' group-head' : ''}${
@@ -3902,6 +4246,15 @@ function renderTree() {
     caret.className = 'caret';
     caret.textContent = opts.head ? '▾' : '';
     n.appendChild(caret);
+
+    if (opts.head) section = label.replace(/\s*\(.*$/, '');
+    const glyph = opts.head ? 'library' : TREE_ICONS[section];
+    if (glyph) {
+      const ico = document.createElement('span');
+      ico.className = 'node-ico';
+      ico.innerHTML = iconSvg(glyph, 16);
+      n.appendChild(ico);
+    }
 
     const text = document.createElement('span');
     text.textContent = label;
@@ -4154,7 +4507,7 @@ function renderTree() {
       onClick: () => {
         state.selection.bodies.clear();
         state.selection.bodies.add(b.id);
-        state.vp.setSelection(state.selection.bodies);
+        paintBodySelection();
         renderTree();
         updateHints();
       }
@@ -4917,6 +5270,24 @@ function pointField(key, label, showIf) {
 }
 
 /** Move: shift it, turn it about something, or take it from here to there. */
+/**
+ * What a move wants picked next, once its bodies are chosen.
+ *
+ * A point to point move wants From and then To, one along a direction wants
+ * the direction, and a translate wants nothing picked at all: it has arrows to
+ * drag. Nothing is returned once everything it needs is in hand.
+ */
+function moveNextPick(f) {
+  const kind = f.moveType || 'translate';
+  if (kind === 'points' || kind === 'position') {
+    if (!f.fromPoint) return 'movePointFrom';
+    if (kind === 'points' && !f.toPoint) return 'movePointTo';
+    return null;
+  }
+  if (kind === 'direction') return f.direction ? null : 'moveDirection';
+  return null;
+}
+
 function moveFields() {
   const isType = (t) => (f) => (f.moveType || 'translate') === t;
   const onFaces = (f) => f.moveObject === 'faces';
@@ -4938,6 +5309,9 @@ function moveFields() {
       label: 'Bodies',
       type: 'pick',
       pick: 'moveBodies',
+      // After a body is clicked, on to whatever the move needs next. A Shift
+      // or Ctrl click stays put, for picking several.
+      next: moveNextPick,
       showIf: (f) => !onFaces(f),
       summary: (f) =>
         !f.bodies || f.bodies === 'all'
@@ -4965,6 +5339,15 @@ function moveFields() {
       key: 'moveType',
       label: 'Move type',
       type: 'select',
+      // Changing to a kind that needs a point goes straight to picking it, if
+      // the bodies are already chosen.
+      set: (f, v) => {
+        f.moveType = v;
+        if (Array.isArray(f.bodies) || f.moveObject === 'faces') {
+          const nextPick = moveNextPick(f);
+          if (nextPick) queueMicrotask(() => setEditPick(nextPick));
+        }
+      },
       options: [
         ['translate', 'Translate'],
         ['rotate', 'Rotate'],
@@ -7066,6 +7449,10 @@ function startFeatureDialog(type) {
       alongDistance: '10'
     };
     openFeatureEditor(feature, 'Move', moveFields());
+    // Straight into picking, because a move with nothing chosen does nothing.
+    // Bodies already selected count as chosen, so it goes on to whatever comes
+    // after them instead.
+    setEditPick(Array.isArray(feature.bodies) ? moveNextPick(feature) : 'moveBodies');
     return;
   }
 
@@ -7774,8 +8161,63 @@ const RIBBON_MENUS = {
  * they were in the document, which is what lets everything that points at them
  * by `data-cmd` carry on working.
  */
-/** How many of a group's commands stay out on the bar as bare icons. */
+/** How many of a group's commands stay out on the bar when none are named. */
 const PINNED_PER_GROUP = 5;
+
+/** The id a ribbon button's picture is kept under. */
+function iconIdFor(b) {
+  if (b.dataset.cmd) return b.dataset.cmd;
+  if (b.dataset.tool) return `tool:${b.dataset.tool}`;
+  if (b.dataset.con) return `con:${b.dataset.con}`;
+  if (b.dataset.menu) return b.dataset.menu;
+  return null;
+}
+
+/**
+ * Put a picture on every command.
+ *
+ * The markup names what a button does and nothing about how it looks; the
+ * drawings are all kept in one place, so they share a projection, a light and a
+ * palette, and a command added later gets one by name.
+ */
+function drawIcons() {
+  for (const b of document.querySelectorAll('#ribbon button')) {
+    const ico = b.querySelector('.ico');
+    const id = iconIdFor(b);
+    if (!ico || !id) continue;
+    const svg = iconSvg(id, 32);
+    if (svg) ico.innerHTML = svg;
+    // The keyboard shortcut, read off the end of the tooltip where it has
+    // always been written, and shown at the right of the row the way a menu
+    // shows it.
+    const key = (b.title || '').match(/\(([A-Za-z0-9+ ]{1,12})\)\s*$/);
+    if (key && !b.querySelector('.key')) {
+      const k = document.createElement('span');
+      k.className = 'key';
+      k.textContent = key[1];
+      b.appendChild(k);
+    }
+  }
+  for (const b of document.querySelectorAll('#timelinebar .tl-btn')) {
+    const svg = iconSvg(b.dataset.cmd, 14);
+    if (svg) b.innerHTML = svg;
+  }
+  // The file commands at the top keep their words, with a picture beside them.
+  for (const b of document.querySelectorAll('#topbar button[data-cmd], #topbar button[data-menu]')) {
+    const svg = iconSvg(b.dataset.cmd || b.dataset.menu, 18);
+    if (!svg || b.querySelector('svg')) continue;
+    const span = document.createElement('span');
+    span.className = 'hdr-ico';
+    span.innerHTML = svg;
+    b.prepend(span);
+    b.classList.add('hdr');
+  }
+  const search = document.getElementById('cmdopen');
+  const mag = search?.querySelector('.cmd-mag');
+  if (mag) mag.innerHTML = iconSvg('search', 16);
+  const teach = document.querySelector('#topbar [data-cmd="teacher"] .cmd-mag');
+  if (teach) teach.remove();
+}
 
 function buildToolbars() {
   for (const panel of document.querySelectorAll('.ribbon-panel')) {
@@ -7792,41 +8234,89 @@ function buildToolbars() {
         pop.appendChild(child);
       }
 
-      // The first few commands stay out on the bar as bare icons, the way a
-      // modelling toolbar does it, and the group's name under them opens the
-      // rest. What is used constantly is one click, everything is two, and the
-      // bar is one row rather than three.
+      // A group's most used commands stay out on the bar as icons, the way
+      // Fusion's ribbon does it, and the group's name under them opens the
+      // whole list. Which ones is written in the markup; a group that names
+      // none keeps its first few.
       const pinned = document.createElement('div');
       pinned.className = 'grp-pinned';
-      const candidates = [...pop.querySelectorAll(':scope > button')].filter(
-        (b) => b.classList.contains('big')
+      const named = [...pop.querySelectorAll('button[data-pin]')].sort(
+        (a, c) => Number(a.dataset.pin) - Number(c.dataset.pin)
       );
-      for (const b of candidates.slice(0, PINNED_PER_GROUP)) {
+      const candidates = named.length
+        ? named
+        : [...pop.querySelectorAll(':scope > button.big')].slice(0, group.dataset.icon ? 0 : PINNED_PER_GROUP);
+      for (const b of candidates) {
         const shortcut = document.createElement('button');
         shortcut.className = 'pin';
         shortcut.type = 'button';
-        shortcut.title = b.title || b.querySelector('.lbl')?.textContent?.trim() || '';
+        const lbl = b.querySelector('.lbl')?.textContent?.replace(/▾/g, '').trim() || '';
+        shortcut.title = b.title ? `${lbl}\n${b.title}` : lbl;
         shortcut.innerHTML = b.querySelector('.ico')?.outerHTML || '';
+        shortcut._real = b;
         // Points at the real button rather than copying what it does, so a
         // command has one definition and one place it is wired up.
         shortcut.addEventListener('click', (e) => {
           e.stopPropagation();
           closeGroups();
+          // Through the real button either way, so a lesson's block still sees
+          // the click; the flag only says which half of the icon it landed on.
+          if (e.target.closest?.('.pin-caret')) state.familyList = true;
           b.click();
         });
-        shortcut.dataset.pinFor = b.dataset.cmd || b.dataset.tool || b.dataset.menu || '';
+        if (b.classList.contains('tool-menu')) {
+          shortcut.classList.add('pin-family');
+          const caret = document.createElement('span');
+          caret.className = 'pin-caret';
+          caret.textContent = '\u25be';
+          caret.title = 'All the ways to draw one';
+          shortcut.appendChild(caret);
+          shortcut.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeGroups();
+            state.familyList = true;
+            b.click();
+          });
+        }
+        shortcut.dataset.pinFor = b.dataset.cmd || b.dataset.tool || b.dataset.menu || b.dataset.con || '';
         pinned.appendChild(shortcut);
       }
+      // A group of settings has no command to stand for it, so its picture
+      // opens it.
+      if (!candidates.length && group.dataset.icon) {
+        const opener = document.createElement('button');
+        opener.className = 'pin';
+        opener.type = 'button';
+        opener.title = name;
+        opener.innerHTML = `<span class="ico">${iconSvg(group.dataset.icon, 32)}</span>`;
+        opener.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleGroup(group);
+        });
+        pinned.appendChild(opener);
+      }
 
+      const solo = group.dataset.solo === '1';
       const trigger = document.createElement('button');
       trigger.className = 'grp-trigger';
       trigger.type = 'button';
-      trigger.innerHTML = `<span class="grp-name"></span><span class="grp-caret">\u25be</span>`;
+      trigger.innerHTML = solo
+        ? `<span class="grp-name"></span>`
+        : `<span class="grp-name"></span><span class="grp-caret">\u25be</span>`;
       trigger.querySelector('.grp-name').textContent = name;
       trigger.addEventListener('click', (e) => {
         e.stopPropagation();
+        // A group of one, like Finish Sketch, has nothing to list: its name
+        // is the command.
+        if (solo) {
+          closeGroups();
+          candidates[0]?.click();
+          return;
+        }
         toggleGroup(group);
       });
+      if (solo) group.classList.add('solo');
 
       if (label) label.remove();
       group.appendChild(pinned);
@@ -7839,16 +8329,16 @@ function buildToolbars() {
 
   // A command inside a flyout closes it, the way a menu item closes a menu.
   // A dropdown inside one does not, or its own list would have nothing to
-  // hang off.
+  // hang off, and nor does a setting, which is changed and looked at.
   document.addEventListener('click', (e) => {
     const inPop = e.target.closest?.('.grp-pop');
     if (!inPop) return;
-    if (e.target.closest('[data-menu]')) return;
+    if (e.target.closest('[data-menu], label, input, select, .toolopts')) return;
     closeGroups();
   });
 
   window.addEventListener('pointerdown', (e) => {
-    if (e.target instanceof Node && e.target.closest?.('.group')) return;
+    if (e.target instanceof Node && e.target.closest?.('.group, #markmenu')) return;
     closeGroups();
   }, true);
 }
@@ -7858,13 +8348,15 @@ function toggleGroup(group) {
   closeGroups();
   if (!open) {
     group.classList.add('open');
-    // Kept inside the window rather than hanging off the right of it.
+    // Kept inside the window rather than hanging off the right of it, and no
+    // taller than the window either: a long list scrolls.
     const pop = group.querySelector('.grp-pop');
     if (pop) {
       pop.style.left = '0px';
       const r = pop.getBoundingClientRect();
       const over = r.right - (window.innerWidth - 8);
       if (over > 0) pop.style.left = `${-over}px`;
+      pop.style.maxHeight = `${Math.max(200, window.innerHeight - r.top - 16)}px`;
     }
   }
 }
@@ -8023,6 +8515,64 @@ function closeCommandSearch() {
   document.getElementById('cmdsearch')?.remove();
 }
 
+/** The thing on screen that stands for a ribbon button, for placing a menu under. */
+function visibleAnchor(anchor, name) {
+  if (anchor?.offsetParent) return anchor;
+  for (const pin of document.querySelectorAll('.pin')) {
+    if (pin.dataset.pinFor === name && pin.offsetParent) return pin;
+  }
+  const trigger = anchor?.closest?.('.group')?.querySelector('.grp-trigger');
+  return trigger?.offsetParent ? trigger : anchor;
+}
+
+/*
+ * Which way of drawing a shape you reach for.
+ *
+ * Kept per machine, because it is a habit of the hands rather than a property
+ * of any model. Counted rather than simply remembered last, so trying the three
+ * point rectangle once does not change what the button does from then on. A
+ * tie, and a family never used, both go to the first in the list, which is
+ * what the button did before.
+ */
+const FAMILY_USE_KEY = 'anvil.familyUse';
+
+function familyUse() {
+  try {
+    return JSON.parse(localStorage.getItem(FAMILY_USE_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function familyOf(tool) {
+  for (const [name, rows] of Object.entries(RIBBON_MENUS)) {
+    if (rows.some(([id]) => id === `tool:${tool}`)) return name;
+  }
+  return null;
+}
+
+function familyDefault(name) {
+  const rows = (RIBBON_MENUS[name] || []).filter(([id]) => id.startsWith('tool:'));
+  if (!rows.length) return null;
+  const use = familyUse()[name] || {};
+  let best = rows[0];
+  for (const row of rows) if ((use[row[0]] || 0) > (use[best[0]] || 0)) best = row;
+  return best[0].slice(5);
+}
+
+function noteFamilyUse(tool) {
+  const name = familyOf(tool);
+  if (!name) return;
+  const all = familyUse();
+  const counts = (all[name] = all[name] || {});
+  counts[`tool:${tool}`] = (counts[`tool:${tool}`] || 0) + 1;
+  try {
+    localStorage.setItem(FAMILY_USE_KEY, JSON.stringify(all));
+  } catch {
+    /* a habit not remembered is not worth an error */
+  }
+}
+
 function showRibbonMenu(name, anchor) {
   closeMarkingMenu();
   const items = RIBBON_MENUS[name];
@@ -8030,11 +8580,24 @@ function showRibbonMenu(name, anchor) {
 
   const menu = document.createElement('div');
   menu.id = 'markmenu';
+  const def = familyDefault(name);
   for (const [cmd, label] of items) {
     const b = document.createElement('button');
-    b.textContent = label;
+    const svg = iconSvg(cmd, 20);
+    if (svg) {
+      b.classList.add('with-ico');
+      b.innerHTML = `<span class="mm-ico">${svg}</span>`;
+    }
+    const text = document.createElement('span');
+    text.textContent = label;
+    b.appendChild(text);
+    if (def && cmd === `tool:${def}`) {
+      b.classList.add('is-default');
+      b.title = 'What pressing the button takes';
+    }
     b.addEventListener('click', () => {
       closeMarkingMenu();
+      closeGroups();
       if (cmd.startsWith('tool:')) {
         reachForTool(cmd.slice(5));
       } else {
@@ -8047,10 +8610,25 @@ function showRibbonMenu(name, anchor) {
 
   // Under the button it belongs to, and pulled back inside the window rather
   // than hanging off the right edge.
-  const r = anchor.getBoundingClientRect();
+  //
+  // The button it belongs to is often not the one on screen. The bar shows the
+  // first few commands of each group as bare icons and keeps the real buttons
+  // folded away with no box at all, so measuring the real one put the menu at
+  // the top left corner of the window, over the title, which read as a menu
+  // that opens upward. It is measured against whatever is actually visible.
+  const shown = visibleAnchor(anchor, name);
+  const r = shown.getBoundingClientRect();
   const box = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(r.left, window.innerWidth - box.width - 8)}px`;
-  menu.style.top = `${Math.min(r.bottom, window.innerHeight - box.height - 8)}px`;
+  if (shown.closest?.('.grp-pop')) {
+    // A row in a group's list opens its own list beside it, the way a submenu
+    // does, rather than dropping it over the rows underneath.
+    const right = r.right + 2 + box.width <= window.innerWidth - 8;
+    menu.style.left = `${right ? r.right + 2 : Math.max(8, r.left - box.width - 2)}px`;
+    menu.style.top = `${Math.max(8, Math.min(r.top - 4, window.innerHeight - box.height - 8))}px`;
+  } else {
+    menu.style.left = `${Math.min(r.left, window.innerWidth - box.width - 8)}px`;
+    menu.style.top = `${Math.min(r.bottom, window.innerHeight - box.height - 8)}px`;
+  }
 
   armMenuClose(menu);
 }
@@ -14579,7 +15157,12 @@ function refreshPullHandle() {
   const target = state.pullDrag ? state.pullDrag.target : pullTarget();
   const appeared = !!target && !state.pullHandle;
   state.pullHandle = target;
-  state.vp.setGizmo(target ? target.frame : null, 'pull');
+  // One manipulator at a time: the pull arrow when a pull is on offer, and
+  // otherwise the six arrows of a translate move if one is open.
+  const moveFrame = target ? null : moveGizmoFrame();
+  state.moveGizmo = moveFrame;
+  if (!moveFrame && !state.moveDrag) hideMoveValue();
+  state.vp.setGizmo(target ? target.frame : moveFrame, target ? 'pull' : 'arrows');
 
   // An arrow pointing straight at the eye is a dot. There is nothing to aim at
   // and no direction to drag in, and that is exactly the state you are in the
@@ -15823,6 +16406,9 @@ function setEditPick(which) {
   );
   renderFields();
   updateHints();
+  // The arrows stand aside while a row is waiting for a pick, or they would
+  // take the click meant for the body underneath them.
+  if (!state.pullDrag) refreshPullHandle();
 }
 
 /**
@@ -15833,6 +16419,7 @@ function pickIntoEdit(hit) {
   const ed = state.editing;
   if (!ed || !ed.pickInto) return false;
   const f = ed.feature;
+  const armedAtClick = ed.pickInto;
 
   if (ed.pickInto === 'profiles') {
     if (hit.kind === 'profile') {
@@ -16348,18 +16935,19 @@ function pickIntoEdit(hit) {
           ? 'toPoint'
           : 'pivot';
     const p = state.lastPointer;
-    const snap = p ? snapModelPoint(p.x, p.y) : null;
-    let at = snap ? [...snap.at] : null;
-    if (!at && hit.kind === 'face' && hit.faceId !== null) {
-      const record = (state.records || []).find((r) => r.id === hit.bodyId);
-      const face = record?.topology?.faces[hit.faceId];
-      if (face) at = [...face.centre];
-    }
-    if (!at && hit.point) at = [hit.point.x, hit.point.y, hit.point.z];
-    if (!at) return true;
+    const target = p ? moveTarget(p.x, p.y) : null;
+    if (!target) return true;
+    const at = target.at;
     f[key] = at;
-    ed.pickInto = null;
-    setStatus(`Took the ${(snap?.label || 'point on the face').toLowerCase()} at ${at.map((n) => round(n, 2)).join(', ')}.`);
+    setStatus(`Took the ${target.label.toLowerCase()} at ${at.map((n) => round(n, 2)).join(', ')}.`);
+    // From is only ever half of a point to point move. Going straight on to To
+    // saves reaching back into the dialog for the second Select, which is what
+    // made the pair feel like two unrelated questions.
+    if (key === 'fromPoint' && (f.moveType || 'translate') === 'points' && !f.toPoint) {
+      setEditPick('movePointTo');
+    } else {
+      setEditPick(null);
+    }
   } else if (
     ed.pickInto === 'splitTools' ||
     ed.pickInto === 'splitFace' ||
@@ -16525,7 +17113,27 @@ function pickIntoEdit(hit) {
     if (!f.targets.length) f.targets = 'all';
   }
 
+  /*
+   * On to the next thing, for a row that says what comes after it.
+   *
+   * Only a row that names its successor moves on, because a list of edges for
+   * a fillet is picked a dozen at a time and jumping away after the first would
+   * be in the way. A Shift or Ctrl click never moves on, so several can still
+   * be picked into a row that normally takes one and continues.
+   */
+  if (ed.pickInto === armedAtClick && !state.pickAdditive) {
+    const row = (ed.fields || []).find(
+      (x) => x.pick === armedAtClick && (!x.showIf || x.showIf(f))
+    );
+    if (row?.next) {
+      const nextPick = row.next(f);
+      setEditPick(nextPick || null);
+    }
+  }
+
   renderFields();
+  paintBodySelection();
+  refreshMoveMarkers();
   // The callout carries a running count, so it has to be redrawn on every pick.
   syncPickBar();
   // Straight away rather than on the debounced rebuild, so the region answers
@@ -19591,7 +20199,7 @@ function bandPointerUp(e) {
     }
   }
 
-  state.vp.setSelection(state.selection.bodies);
+  paintBodySelection();
   refreshHighlight();
   refreshPullHandle();
   renderTree();
@@ -19831,7 +20439,7 @@ function cmdSelectByName() {
     state.selection.edges.clear();
     for (const b of hit) state.selection.bodies.add(b.id);
     refreshHighlight();
-    state.vp.setSelection(state.selection.bodies);
+    paintBodySelection();
     renderTree();
     setStatus(
       `${hit.length} bod${hit.length === 1 ? 'y' : 'ies'} chosen: ${hit

@@ -35,8 +35,8 @@
           <button data-cmd="saveAs" title="Save As (Ctrl+Shift+S)">Save As</button>
           <button data-menu="library" title="The library folder, and what a design is called">Library &#9662;</button>
           <span class="sep"></span>
-          <button data-cmd="undo" title="Undo (Ctrl+Z)">&#8630;</button>
-          <button data-cmd="redo" title="Redo (Ctrl+Y)">&#8631;</button>
+          <button data-cmd="undo" title="Undo (Ctrl+Z)"></button>
+          <button data-cmd="redo" title="Redo (Ctrl+Y)"></button>
           <span class="sep"></span>
           <button data-cmd="exportStl" title="Export for printing">
             Export STL
@@ -57,12 +57,13 @@
       <nav id="ribbon">
         <div class="tabs">
           <button class="tab active" data-tab="solid">Solid</button>
-          <button class="tab" data-tab="sketch">Sketch</button>
           <button class="tab" data-tab="surface">Surface</button>
-          <button class="tab" data-tab="sheet">Sheet Metal</button>
           <button class="tab" data-tab="mesh">Mesh</button>
+          <button class="tab" data-tab="sheet">Sheet Metal</button>
+          <button class="tab" data-tab="plastic">Plastic</button>
           <button class="tab" data-tab="form">Form</button>
-          <button class="tab" data-tab="view">View</button>
+          <button class="tab" data-tab="utilities">Utilities</button>
+          <button class="tab contextual" data-tab="sketch">Sketch</button>
         </div>
 
         <div class="panelbar">
@@ -70,233 +71,149 @@
           <div class="ribbon-panel active" data-panel="solid">
             <div class="group">
               <span class="glabel">Create</span>
-              <button data-cmd="newSketch" class="big" title="Create Sketch (S)">
-                <span class="ico">&#9998;</span><span class="lbl">Sketch</span></button>
-              <button data-cmd="extrude" class="big" title="Extrude (E)">
-                <span class="ico">&#11015;</span><span class="lbl">Extrude</span></button>
-              <button data-cmd="revolve" class="big" title="Revolve (R)">
-                <span class="ico">&#8635;</span><span class="lbl">Revolve</span></button>
-              <button data-cmd="hole" class="big" title="Hole (H)">
-                <span class="ico">&#9678;</span><span class="lbl">Hole</span></button>
-              <button data-menu="primitive" class="big" title="Box, cylinder, cone, sphere, torus, pipe"><span class="ico">&#9635;</span><span class="lbl">Primitive &#9662;</span></button>
-              <button data-cmd="coil" class="big" title="A section swept along a helix"><span class="ico">&#9691;</span><span class="lbl">Coil</span></button>
-              <button data-cmd="sweep" class="big" title="Sweep a profile along a path">
-                <span class="ico">&#8767;</span><span class="lbl">Sweep</span></button>
-              <button data-cmd="loft" class="big" title="Blend between profiles">
-                <span class="ico">&#9671;</span><span class="lbl">Loft</span></button>
-              <button data-cmd="rib" class="big" title="Thicken an open curve">
-                <span class="ico">&#9139;</span><span class="lbl">Rib</span></button>
-              <button data-cmd="web" class="big" title="Open sketch curves thickened into walls"><span class="ico">&#9776;</span><span class="lbl">Web</span></button>
-              <button data-cmd="emboss" class="big" title="Raise or sink a sketch on a face"><span class="ico">&#9635;</span><span class="lbl">Emboss</span></button>
-              <button data-cmd="thread" class="big" title="Modelled thread">
-                <span class="ico">&#9280;</span><span class="lbl">Thread</span></button>
-              <button data-menu="pattern" class="big" title="Rectangular, circular, along a path, or of a feature"><span class="ico">&#9636;</span><span class="lbl">Pattern &#9662;</span></button>
-              <button data-cmd="mirror" class="big"><span class="ico">&#8651;</span><span class="lbl">Mirror</span></button>
+              <button data-cmd="newSketch" class="big" title="Create Sketch (S)" data-pin="1"><span class="ico"></span><span class="lbl">Create Sketch</span></button>
+              <hr class="gsep" />
+              <button data-cmd="extrude" class="big" title="Extrude (E)" data-pin="2"><span class="ico"></span><span class="lbl">Extrude</span></button>
+              <button data-cmd="revolve" class="big" title="Revolve (R)" data-pin="3"><span class="ico"></span><span class="lbl">Revolve</span></button>
+              <button data-cmd="sweep" class="big" title="Sweep a profile along a path"><span class="ico"></span><span class="lbl">Sweep</span></button>
+              <button data-cmd="loft" class="big" title="Blend between profiles"><span class="ico"></span><span class="lbl">Loft</span></button>
+              <button data-cmd="rib" class="big" title="Thicken an open curve"><span class="ico"></span><span class="lbl">Rib</span></button>
+              <button data-cmd="web" class="big" title="Open sketch curves thickened into walls"><span class="ico"></span><span class="lbl">Web</span></button>
+              <button data-cmd="emboss" class="big" title="Raise or sink a sketch on a face"><span class="ico"></span><span class="lbl">Emboss</span></button>
+              <hr class="gsep" />
+              <button data-cmd="hole" class="big" title="Hole (H)" data-pin="4"><span class="ico"></span><span class="lbl">Hole</span></button>
+              <button data-cmd="thread" class="big" title="Modelled thread"><span class="ico"></span><span class="lbl">Thread</span></button>
+              <hr class="gsep" />
+              <button data-cmd="primBox" class="big"><span class="ico"></span><span class="lbl">Box</span></button>
+              <button data-cmd="primCyl" class="big"><span class="ico"></span><span class="lbl">Cylinder</span></button>
+              <button data-cmd="primSphere" class="big"><span class="ico"></span><span class="lbl">Sphere</span></button>
+              <button data-cmd="primTorus" class="big"><span class="ico"></span><span class="lbl">Torus</span></button>
+              <button data-cmd="coil" class="big" title="A section swept along a helix"><span class="ico"></span><span class="lbl">Coil</span></button>
+              <button data-cmd="primPipe" class="big"><span class="ico"></span><span class="lbl">Pipe</span></button>
+              <hr class="gsep" />
+              <button data-menu="pattern" class="big" title="Rectangular, circular, along a path, or of a feature" data-pin="5"><span class="ico"></span><span class="lbl">Pattern</span></button>
+              <button data-cmd="mirror" class="big"><span class="ico"></span><span class="lbl">Mirror</span></button>
+              <hr class="gsep" />
+              <button data-cmd="boundaryFill" class="big" title="Divide bodies with surfaces and keep the cells you want"><span class="ico"></span><span class="lbl">Boundary Fill</span></button>
+              <hr class="gsep" />
+              <button data-cmd="textureRelief" class="big" title="A texture that wraps the whole body and comes out in the print"><span class="ico"></span><span class="lbl">Texture Wrap</span></button>
+              <button data-cmd="makeTexture" class="big" title="Turn a picture into a texture, with the surface it would make shown while you set it up"><span class="ico"></span><span class="lbl">Make Texture</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Modify</span>
-              <button data-cmd="pressPull" class="big" title="Press Pull (Q)">
-                <span class="ico">&#8693;</span><span class="lbl">Press Pull</span></button>
-              <button data-cmd="fillet" class="big" title="Fillet (F)">
-                <span class="ico">&#9695;</span><span class="lbl">Fillet</span></button>
-              <button data-cmd="chamfer" class="big" title="Chamfer">
-                <span class="ico">&#9698;</span><span class="lbl">Chamfer</span></button>
-              <button data-cmd="textureRelief" class="big" title="A texture that wraps the whole body and comes out in the print">
-                <span class="ico">&#9638;</span><span class="lbl">Texture</span></button>
-              <button data-cmd="makeTexture" class="big" title="Turn a picture into a texture, with the surface it would make shown while you set it up">
-                <span class="ico">&#9641;</span><span class="lbl">Make Texture</span></button>
-              <button data-cmd="shell" class="big" title="Shell">
-                <span class="ico">&#9744;</span><span class="lbl">Shell</span></button>
-              <button data-cmd="fullRound" class="big" title="Round a flat face away entirely, from one side to the other">
-                <span class="ico">&#9096;</span><span class="lbl">Full Round</span></button>
-              <button data-cmd="draft" class="big" title="Taper faces for moulding or printing">
-                <span class="ico">&#9727;</span><span class="lbl">Draft</span></button>
-              
-              <button data-menu="split" class="big" title="Split a body, a face, or at the parting line"><span class="ico">&#9707;</span><span class="lbl">Split &#9662;</span></button>
-              <button data-cmd="align" class="big" title="Put a face of one body flat against another"><span class="ico">&#8860;</span><span class="lbl">Align</span></button>
-              <button data-cmd="deleteFace" class="big" title="Remove faces and close what they leave"><span class="ico">&#9673;</span><span class="lbl">Delete Face</span></button>
-              <button data-cmd="boundaryFill" class="big" title="Divide bodies with surfaces and keep the cells you want"><span class="ico">&#9639;</span><span class="lbl">Boundary Fill</span></button>
-              <button data-menu="plastic" class="big" title="Boss, rest, snap fit, lip"><span class="ico">&#9707;</span><span class="lbl">Plastic &#9662;</span></button>
-              <button data-cmd="replaceFace" class="big" title="Swap a face for a surface"><span class="ico">&#9640;</span><span class="lbl">Replace Face</span></button>
-              <button data-cmd="move" class="big" title="Move (M)">
-                <span class="ico">&#10021;</span><span class="lbl">Move</span></button>
-              <button data-cmd="scale" class="big"><span class="ico">&#10530;</span><span class="lbl">Scale</span></button>
-              <button data-cmd="combine" class="big" title="Combine (C)">
-                <span class="ico">&#8853;</span><span class="lbl">Combine</span></button>
-              <button data-cmd="measure" class="big" title="Measure (I)">
-                <span class="ico">&#9707;</span><span class="lbl">Measure</span>
-              </button>
-              <button data-menu="inspect" class="big" title="Section, mass, interference, draft">
-                <span class="ico">&#9673;</span><span class="lbl">Analyse &#9662;</span></button>
-              <button data-cmd="parameters" class="big" title="Change Parameters (P)">
-                <span class="ico">&#402;</span><span class="lbl">Parameters</span></button>
-              <button data-cmd="deleteBody" class="big"><span class="ico">&#10007;</span><span class="lbl">Delete</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Appearance</span>
-              <button data-cmd="physicalMaterial" class="big" title="What a body is made of, which is where its mass comes from">
-                <span class="ico">&#9679;</span><span class="lbl">Material</span></button>
-              <button data-cmd="appearance" class="big" title="What a body looks like, which is nothing to do with what it is made of">
-                <span class="ico">&#9673;</span><span class="lbl">Colour</span></button>
-              <button data-cmd="configurations" class="big" title="One document, several parts">
-                <span class="ico">&#9636;</span><span class="lbl">Configurations</span></button>
-              <button data-cmd="documentInfo" class="big" title="Part number, description, revision">
-                <span class="ico">&#8801;</span><span class="lbl">Properties</span></button>
-              <button data-cmd="addNote" class="big" title="Pin a note to a face or an edge">
-                <span class="ico">&#9998;</span><span class="lbl">Note</span></button>
-              <button data-cmd="namedVersions" class="big" title="Keep a named state of this document, and go back to it">
-                <span class="ico">&#9200;</span><span class="lbl">Versions</span></button>
-              <button data-cmd="computeAll" class="big" title="Throw the cache away and build the whole timeline again">
-                <span class="ico">&#8635;</span><span class="lbl">Compute All</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Make</span>
-              <button data-cmd="simulate" class="big" title="What happens to the part when it is pushed">
-                <span class="ico">&#9878;</span><span class="lbl">Stress</span></button>
-              <button data-cmd="generative" class="big" title="Let the load decide the shape">
-                <span class="ico">&#10022;</span><span class="lbl">Generate</span></button>
-              <button data-cmd="clearStress" class="big" title="Put the ordinary colour back">
-                <span class="ico">&#10005;</span><span class="lbl">Clear</span></button>
-              <button data-cmd="animate" class="big" title="Take the assembly apart, on a timeline">
-                <span class="ico">&#9655;</span><span class="lbl">Animate</span></button>
-              <button data-cmd="render" class="big" title="A still of the model, better than the screen draws it">
-                <span class="ico">&#9673;</span><span class="lbl">Render</span></button>
-              <button data-cmd="print3D" class="big" title="Write it for a printer and open it in the slicer">
-                <span class="ico">&#9636;</span><span class="lbl">3D Print</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Construct</span>
-              <button data-cmd="construct" class="big" title="Planes, axes and points to build on">
-                <span class="ico">&#9645;</span><span class="lbl">Geometry</span></button>
+              <button data-cmd="pressPull" class="big" title="Press Pull (Q)" data-pin="1"><span class="ico"></span><span class="lbl">Press Pull</span></button>
+              <button data-cmd="fillet" class="big" title="Fillet (F)" data-pin="2"><span class="ico"></span><span class="lbl">Fillet</span></button>
+              <button data-cmd="chamfer" class="big" title="Chamfer" data-pin="3"><span class="ico"></span><span class="lbl">Chamfer</span></button>
+              <button data-cmd="fullRound" class="big" title="Round a flat face away entirely, from one side to the other"><span class="ico"></span><span class="lbl">Full Round</span></button>
+              <button data-cmd="shell" class="big" title="Shell" data-pin="4"><span class="ico"></span><span class="lbl">Shell</span></button>
+              <button data-cmd="draft" class="big" title="Taper faces for moulding or printing"><span class="ico"></span><span class="lbl">Draft</span></button>
+              <hr class="gsep" />
+              <button data-cmd="scale" class="big"><span class="ico"></span><span class="lbl">Scale</span></button>
+              <button data-cmd="combine" class="big" title="Combine (C)" data-pin="5"><span class="ico"></span><span class="lbl">Combine</span></button>
+              <hr class="gsep" />
+              <button data-cmd="replaceFace" class="big" title="Swap a face for a surface"><span class="ico"></span><span class="lbl">Replace Face</span></button>
+              <button data-cmd="splitFace" class="big"><span class="ico"></span><span class="lbl">Split Face</span></button>
+              <button data-cmd="splitBody" class="big"><span class="ico"></span><span class="lbl">Split Body</span></button>
+              <button data-cmd="silhouetteSplit" class="big"><span class="ico"></span><span class="lbl">Silhouette Split</span></button>
+              <hr class="gsep" />
+              <button data-cmd="move" class="big" title="Move (M)" data-pin="6"><span class="ico"></span><span class="lbl">Move</span></button>
+              <button data-cmd="align" class="big" title="Put a face of one body flat against another"><span class="ico"></span><span class="lbl">Align</span></button>
+              <hr class="gsep" />
+              <button data-cmd="deleteFace" class="big" title="Remove faces and close what they leave"><span class="ico"></span><span class="lbl">Delete Face</span></button>
+              <button data-cmd="deleteBody" class="big"><span class="ico"></span><span class="lbl">Delete Body</span></button>
+              <hr class="gsep" />
+              <button data-cmd="physicalMaterial" class="big" title="What a body is made of, which is where its mass comes from"><span class="ico"></span><span class="lbl">Physical Material</span></button>
+              <button data-cmd="appearance" class="big" title="What a body looks like, which is nothing to do with what it is made of"><span class="ico"></span><span class="lbl">Appearance</span></button>
+              <hr class="gsep" />
+              <button data-cmd="parameters" class="big" title="Change Parameters (P)"><span class="ico"></span><span class="lbl">Parameters</span></button>
+              <button data-cmd="computeAll" class="big" title="Throw the cache away and build the whole timeline again"><span class="ico"></span><span class="lbl">Compute All</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Assemble</span>
-              <button data-cmd="newComponent" class="big" title="A part of its own">
-                <span class="ico">&#9707;</span><span class="lbl">Component</span></button>
-              <button data-menu="assemble" class="big" title="Joints, rigid groups, motion links, drive"><span class="ico">&#9901;</span><span class="lbl">Joint &#9662;</span></button>
+              <button data-cmd="newComponent" class="big" title="A part of its own" data-pin="1"><span class="ico"></span><span class="lbl">Component</span></button>
+              <button data-cmd="duplicateComponent" class="big"><span class="ico"></span><span class="lbl">Duplicate With Joints</span></button>
+              <button data-cmd="groundToParent" class="big"><span class="ico"></span><span class="lbl">Ground To Parent</span></button>
+              <hr class="gsep" />
+              <button data-cmd="newJoint" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Joint</span></button>
+              <button data-cmd="asBuiltJoint" class="big"><span class="ico"></span><span class="lbl">As-built Joint</span></button>
+              <button data-cmd="jointOrigin" class="big"><span class="ico"></span><span class="lbl">Joint Origin</span></button>
+              <button data-cmd="rigidGroup" class="big"><span class="ico"></span><span class="lbl">Rigid Group</span></button>
+              <hr class="gsep" />
+              <button data-cmd="constrainComponents" class="big"><span class="ico"></span><span class="lbl">Constrain Components</span></button>
+              <button data-cmd="motionLink" class="big"><span class="ico"></span><span class="lbl">Motion Link</span></button>
+              <button data-cmd="driveJoints" class="big"><span class="ico"></span><span class="lbl">Drive Joints</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Configure</span>
+              <button data-cmd="configurations" class="big" title="One document, several parts" data-pin="1"><span class="ico"></span><span class="lbl">Configurations</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Construct</span>
+              <button data-cmd="construct" class="big" title="Planes, axes and points to build on" data-pin="1"><span class="ico"></span><span class="lbl">Planes, Axes, Points</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Inspect</span>
+              <button data-cmd="measure" class="big" title="Measure (I)" data-pin="1"><span class="ico"></span><span class="lbl">Measure</span></button>
+              <button data-cmd="interference" class="big"><span class="ico"></span><span class="lbl">Interference</span></button>
+              <button data-cmd="curvatureComb" class="big"><span class="ico"></span><span class="lbl">Curvature Comb</span></button>
+              <button data-cmd="zebraAnalysis" class="big"><span class="ico"></span><span class="lbl">Zebra</span></button>
+              <button data-cmd="draftAnalysis" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Draft Analysis</span></button>
+              <button data-cmd="curvatureMap" class="big"><span class="ico"></span><span class="lbl">Curvature Map</span></button>
+              <button data-cmd="isocurveAnalysis" class="big"><span class="ico"></span><span class="lbl">Isocurve Analysis</span></button>
+              <button data-cmd="accessibility" class="big"><span class="ico"></span><span class="lbl">Accessibility</span></button>
+              <button data-cmd="minimumRadius" class="big"><span class="ico"></span><span class="lbl">Minimum Radius</span></button>
+              <button data-cmd="surfaceContinuity" class="big"><span class="ico"></span><span class="lbl">Surface Continuity</span></button>
+              <button data-cmd="environmentMap" class="big"><span class="ico"></span><span class="lbl">Environment Map</span></button>
+              <hr class="gsep" />
+              <button data-cmd="sectionAnalysis" class="big" data-pin="3"><span class="ico"></span><span class="lbl">Section Analysis</span></button>
+              <button data-cmd="centreOfMass" class="big"><span class="ico"></span><span class="lbl">Centre Of Mass</span></button>
+              <hr class="gsep" />
+              <button data-cmd="designAdvice" class="big"><span class="ico"></span><span class="lbl">Design Advice</span></button>
+              <button data-cmd="validate" class="big"><span class="ico"></span><span class="lbl">Validate</span></button>
+              <hr class="gsep" />
+              <button data-cmd="colourByComponent" class="big"><span class="ico"></span><span class="lbl">Colour by component</span></button>
+              <button data-cmd="colourByFeature" class="big"><span class="ico"></span><span class="lbl">Colour by feature</span></button>
+              <button data-cmd="clearAnalysis" class="big"><span class="ico"></span><span class="lbl">Clear Analysis</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Insert</span>
+              <button data-cmd="insertDerive" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Insert Derive</span></button>
+              <button data-cmd="refreshDerived" class="big"><span class="ico"></span><span class="lbl">Update Derived</span></button>
+              <button data-cmd="editInPlace" class="big"><span class="ico"></span><span class="lbl">Edit Source</span></button>
+              <button data-cmd="breakLink" class="big"><span class="ico"></span><span class="lbl">Break Link</span></button>
+              <hr class="gsep" />
+              <button data-cmd="insertDecal" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Decal</span></button>
+              <button data-cmd="insertCanvas" class="big" data-pin="3"><span class="ico"></span><span class="lbl">Canvas</span></button>
+              <button data-cmd="wrapImage" class="big"><span class="ico"></span><span class="lbl">Wrap Image</span></button>
+              <hr class="gsep" />
+              <button data-cmd="insertMesh" class="big" title="A STEP, STL, OBJ or 3MF off the disk" data-pin="4"><span class="ico"></span><span class="lbl">Insert Mesh</span></button>
+              <button data-cmd="insertComponent" class="big"><span class="ico"></span><span class="lbl">Insert Component</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Select</span>
-              <button data-cmd="selectAllEdges" class="big"><span class="ico">&#9707;</span><span class="lbl">All Edges</span></button>
-              <button data-menu="selectMore" class="big" title="Grow, shrink, invert, by size, seed and boundary"><span class="ico">&#9673;</span><span class="lbl">Select &#9662;</span></button>
-              <button data-menu="selectPriority" class="big" title="What a click is allowed to land on"><span class="ico">&#9930;</span><span class="lbl">Priority &#9662;</span></button>
-              <button data-cmd="showAll" class="big"><span class="ico">&#9723;</span><span class="lbl">Show All</span></button>
-              <button data-cmd="toggleHistory" class="big" title="Direct modelling, with no timeline">
-                <span class="ico">&#8801;</span><span class="lbl">History</span></button>
-            </div>
-          </div>
-
-          <!-- SKETCH -->
-          <div class="ribbon-panel" data-panel="sketch">
-            <div class="group">
-              <span class="glabel">Create</span>
-              <button data-tool="select" class="big tool"><span class="ico">&#8598;</span><span class="lbl">Select</span></button>
-              <button data-tool="line" class="big tool" title="Line (L)"><span class="ico">&#9585;</span><span class="lbl">Line</span></button>
-              <button data-menu="rectangle" class="big tool-menu" title="Two point, centre, or three point" data-tools="rectangle,centerRectangle,rectangle3">
-                <span class="ico">&#9645;</span><span class="lbl">Rectangle &#9662;</span></button>
-              <button data-menu="circle" class="big tool-menu" title="Centre, two point, or tangent to lines" data-tools="circle,circleDia,circleTan2,circleTan3">
-                <span class="ico">&#9675;</span><span class="lbl">Circle &#9662;</span></button>
-              <button data-menu="arc" class="big tool-menu" title="Centre point or three point" data-tools="arc,arc3,tangentArc">
-                <span class="ico">&#9692;</span><span class="lbl">Arc &#9662;</span></button>
-              <button data-menu="polygon" class="big tool-menu" title="Inscribed, circumscribed, or from an edge" data-tools="polygon,polygonCirc,polygonEdge">
-                <span class="ico">&#11041;</span><span class="lbl">Polygon &#9662;</span></button>
-              <button data-menu="slot" class="big tool-menu" title="Five ways to place a slot" data-tools="slot,slotOverall,slotCentre,slotArc3,slotArcCentre">
-                <span class="ico">&#9644;</span><span class="lbl">Slot &#9662;</span></button>
-              <button data-tool="point" class="big tool"><span class="ico">&#8226;</span><span class="lbl">Point</span></button>
-              <button data-tool="ellipse" class="big tool" title="Centre, long axis, then width">
-                <span class="ico">&#11053;</span><span class="lbl">Ellipse</span></button>
-              <button data-menu="spline" class="big tool-menu" title="Fit point, control point, or conic" data-tools="spline,splineCP,conic,blendCurve,blendCurveG1">
-                <span class="ico">&#8767;</span><span class="lbl">Spline &#9662;</span></button>
-              <button data-tool="text" class="big tool" title="Text as sketch outlines">
-                <span class="ico">A</span><span class="lbl">Text</span></button>
-              <button data-menu="insert" class="big" title="Trace an SVG or a DXF into this sketch">
-                <span class="ico">&#8681;</span><span class="lbl">Insert &#9662;</span></button>
-              <div class="toolopts">
-                <label class="fieldrow"><span>Sides</span>
-                  <input type="text" id="polySides" value="6" title="How many sides a polygon gets" /></label>
-                <label class="fieldrow"><span>Rho</span>
-                  <input type="text" id="conicRho" value="0.5" title="Under a half is an ellipse, a half is a parabola, over it a hyperbola" /></label>
-              </div>
-              <button data-menu="project" class="big" title="Project, copy, or section against the model"><span class="ico">&#8615;</span><span class="lbl">Project &#9662;</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Modify</span>
-              <button data-tool="fillet" class="big tool"><span class="ico">&#9695;</span><span class="lbl">Fillet</span></button>
-              <button data-tool="chamfer" class="big tool"><span class="ico">&#9698;</span><span class="lbl">Chamfer</span></button>
-              <button data-tool="trim" class="big tool" title="Trim (T)"><span class="ico">&#9986;</span><span class="lbl">Trim</span></button>
-              <button data-tool="offset" class="big tool" title="Offset (O)"><span class="ico">&#8848;</span><span class="lbl">Offset</span></button>
-              <button data-tool="breakCurve" class="big tool" title="Cut a line where something crosses it">
-                <span class="ico">&#9482;</span><span class="lbl">Break</span></button>
-              <button data-tool="extend" class="big tool" title="Run a line on to what it meets">
-                <span class="ico">&#8677;</span><span class="lbl">Extend</span></button>
-              <button data-cmd="sketchMove" class="big" title="Move or copy the selection by a distance">
-                <span class="ico">&#10021;</span><span class="lbl">Move</span>
-              </button>
-              <button data-cmd="sketchCopy" class="big" title="Copy the selection (Ctrl+C)">
-                <span class="ico">&#10697;</span><span class="lbl">Copy</span>
-              </button>
-              <button data-cmd="sketchPaste" class="big" title="Paste (Ctrl+V)">
-                <span class="ico">&#9114;</span><span class="lbl">Paste</span>
-              </button>
-              <button data-cmd="mirrorSketch" class="big" title="Mirror the selection about a line">
-                <span class="ico">&#8651;</span><span class="lbl">Mirror</span></button>
-              <button data-cmd="sketchPatternRect" class="big" title="A grid of copies of the selection">
-                <span class="ico">&#9638;</span><span class="lbl">Rect Pattern</span></button>
-              <button data-cmd="sketchPatternCirc" class="big" title="Copies of the selection turned about a centre">
-                <span class="ico">&#9673;</span><span class="lbl">Circ Pattern</span></button>
-              <button data-cmd="sketchScale" class="big" title="Resize the selection about a point">
-                <span class="ico">&#8599;</span><span class="lbl">Scale</span></button>
-              <button data-cmd="editText" class="big" title="Change the selected text">
-                <span class="ico">&#9998;</span><span class="lbl">Edit Text</span></button>
-              <button data-cmd="construction" class="big" title="Construction (X)">
-                <span class="ico">&#9476;</span><span class="lbl">Construction</span></button>
-              <button data-cmd="centerline" class="big" title="Centreline: a construction line a revolve and a mirror can find on their own">
-                <span class="ico">&#8210;</span><span class="lbl">Centreline</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Constraints</span>
-              <button data-tool="dimension" class="big tool" title="Dimension (D)">
-                <span class="ico">&#8596;</span><span class="lbl">Dimension</span></button>
-              <div class="cgrid">
-                <button data-con="horizontal" title="Horizontal">&#8212;</button>
-                <button data-con="vertical" title="Vertical">|</button>
-                <button data-con="parallel" title="Parallel">&#8741;</button>
-                <button data-con="perpendicular" title="Perpendicular">&#8869;</button>
-                <button data-con="collinear" title="Collinear, on one line">&#8801;</button>
-                <button data-con="tangent" title="Tangent">T</button>
-                <button data-con="equal" title="Equal">=</button>
-                <button data-con="concentric" title="Concentric">&#9678;</button>
-                <button data-con="coincident" title="Coincident">&#9679;</button>
-                <button data-con="midpoint" title="Midpoint">&#9651;</button>
-                <button data-con="symmetric" title="Symmetric">&#8596;</button>
-                <button data-con="fix" title="Fix">&#10005;</button>
-              </div>
-            </div>
-
-            <div class="group">
-              <span class="glabel">View</span>
-              <button data-cmd="lookAt" class="big" title="Turn the camera square to the sketch plane">
-                <span class="ico">&#9635;</span><span class="lbl">Look At</span></button>
-              <label class="chk"><input type="checkbox" id="chkSlice" /> Slice</label>
-              <label class="chk"><input type="checkbox" id="chkShowConstruction" checked /> Construction</label>
-              <label class="chk"><input type="checkbox" id="chkShowProjected" checked /> Projected</label>
-              <label class="chk"><input type="checkbox" id="chkShowPoints" checked /> Points</label>
-              <label class="chk"><input type="checkbox" id="chkShowDims" checked /> Dimensions</label>
-              <label class="chk"><input type="checkbox" id="chkShowConstraints" checked /> Constraints</label>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Finish</span>
-              <button data-cmd="finishSketch" class="big">
-                <span class="ico">&#10003;</span><span class="lbl">Finish</span></button>
+              <button data-menu="selectPriority" class="big" title="What a click is allowed to land on" data-pin="1"><span class="ico"></span><span class="lbl">Selection Priority</span></button>
+              <hr class="gsep" />
+              <button data-cmd="selectAllEdges" class="big"><span class="ico"></span><span class="lbl">All Edges</span></button>
+              <button data-cmd="selectGrow" class="big"><span class="ico"></span><span class="lbl">Grow</span></button>
+              <button data-cmd="selectShrink" class="big"><span class="ico"></span><span class="lbl">Shrink</span></button>
+              <button data-cmd="selectInvert" class="big"><span class="ico"></span><span class="lbl">Invert Selection</span></button>
+              <button data-cmd="selectTangent" class="big"><span class="ico"></span><span class="lbl">Tangent Run</span></button>
+              <button data-cmd="selectSimilar" class="big"><span class="ico"></span><span class="lbl">Select Similar</span></button>
+              <button data-cmd="selectSeedBoundary" class="big"><span class="ico"></span><span class="lbl">Seed And Boundary</span></button>
+              <button data-cmd="selectBySize" class="big"><span class="ico"></span><span class="lbl">Select By Size</span></button>
+              <button data-cmd="selectByName" class="big"><span class="ico"></span><span class="lbl">Select By Name</span></button>
+              <button data-cmd="createSelectionSet" class="big"><span class="ico"></span><span class="lbl">Create Selection Set</span></button>
+              <hr class="gsep" />
+              <button data-cmd="isolate" class="big"><span class="ico"></span><span class="lbl">Isolate</span></button>
+              <button data-cmd="unisolate" class="big"><span class="ico"></span><span class="lbl">Unisolate</span></button>
+              <button data-cmd="showAll" class="big"><span class="ico"></span><span class="lbl">Show All</span></button>
             </div>
           </div>
 
@@ -304,151 +221,192 @@
           <div class="ribbon-panel" data-panel="surface">
             <div class="group">
               <span class="glabel">Create</span>
-              <button data-cmd="surfaceExtrude" class="big" title="Drag curves into a surface">
-                <span class="ico">&#11015;</span><span class="lbl">Extrude</span></button>
-              <button data-cmd="surfaceRevolve" class="big" title="Turn curves about an axis">
-                <span class="ico">&#8635;</span><span class="lbl">Revolve</span></button>
-              <button data-cmd="surfaceSweep" class="big" title="Carry curves along a path">
-                <span class="ico">&#8767;</span><span class="lbl">Sweep</span></button>
-              <button data-cmd="surfaceLoft" class="big" title="A surface through a run of sections">
-                <span class="ico">&#9707;</span><span class="lbl">Loft</span></button>
-              <button data-cmd="patch" class="big" title="Fill a closed boundary">
-                <span class="ico">&#9645;</span><span class="lbl">Patch</span></button>
-              <button data-cmd="ruled" class="big" title="A band off a curve, or the surface between two">
-                <span class="ico">&#9636;</span><span class="lbl">Ruled</span></button>
-              <button data-cmd="offsetSurface" class="big" title="The same surface, held clear of the original">
-                <span class="ico">&#8801;</span><span class="lbl">Offset</span></button>
+              <button data-cmd="newSketch" class="big" title="Create Sketch (S)" data-pin="1"><span class="ico"></span><span class="lbl">Create Sketch</span></button>
+              <hr class="gsep" />
+              <button data-cmd="surfaceExtrude" class="big" title="Drag curves into a surface" data-pin="2"><span class="ico"></span><span class="lbl">Extrude</span></button>
+              <button data-cmd="surfaceRevolve" class="big" title="Turn curves about an axis" data-pin="3"><span class="ico"></span><span class="lbl">Revolve</span></button>
+              <button data-cmd="surfaceSweep" class="big" title="Carry curves along a path" data-pin="4"><span class="ico"></span><span class="lbl">Sweep</span></button>
+              <button data-cmd="surfaceLoft" class="big" title="A surface through a run of sections" data-pin="5"><span class="ico"></span><span class="lbl">Loft</span></button>
+              <button data-cmd="patch" class="big" title="Fill a closed boundary"><span class="ico"></span><span class="lbl">Patch</span></button>
+              <button data-cmd="ruled" class="big" title="A band off a curve, or the surface between two"><span class="ico"></span><span class="lbl">Ruled</span></button>
+              <button data-cmd="offsetSurface" class="big" title="The same surface, held clear of the original"><span class="ico"></span><span class="lbl">Offset</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Modify</span>
-              <button data-cmd="trimSurface" class="big" title="Cut a surface where another crosses it">
-                <span class="ico">&#9986;</span><span class="lbl">Trim</span></button>
-              <button data-cmd="extendSurface" class="big" title="Carry a surface past its own edge">
-                <span class="ico">&#8596;</span><span class="lbl">Extend</span></button>
-              <button data-cmd="untrimSurface" class="big" title="Put back what a trim took out of a surface">
-                <span class="ico">&#9723;</span><span class="lbl">Untrim</span></button>
-              <button data-cmd="mergeSurface" class="big" title="Make several surfaces into one, still a surface">
-                <span class="ico">&#9707;</span><span class="lbl">Merge</span></button>
-              <button data-cmd="stitch" class="big" title="Weld surfaces, and make a solid if they close">
-                <span class="ico">&#9868;</span><span class="lbl">Stitch</span></button>
-              <button data-cmd="unstitch" class="big" title="Break a body into one surface per face">
-                <span class="ico">&#9869;</span><span class="lbl">Unstitch</span></button>
-              <button data-cmd="reverseNormal" class="big" title="Turn a surface inside out">
-                <span class="ico">&#8646;</span><span class="lbl">Reverse</span></button>
-              <button data-cmd="thicken" class="big" title="Give a surface thickness, and so a solid">
-                <span class="ico">&#9707;</span><span class="lbl">Thicken</span></button>
+              <button data-cmd="trimSurface" class="big" title="Cut a surface where another crosses it" data-pin="1"><span class="ico"></span><span class="lbl">Trim</span></button>
+              <button data-cmd="extendSurface" class="big" title="Carry a surface past its own edge" data-pin="2"><span class="ico"></span><span class="lbl">Extend</span></button>
+              <button data-cmd="untrimSurface" class="big" title="Put back what a trim took out of a surface"><span class="ico"></span><span class="lbl">Untrim</span></button>
+              <hr class="gsep" />
+              <button data-cmd="stitch" class="big" title="Weld surfaces, and make a solid if they close" data-pin="3"><span class="ico"></span><span class="lbl">Stitch</span></button>
+              <button data-cmd="unstitch" class="big" title="Break a body into one surface per face"><span class="ico"></span><span class="lbl">Unstitch</span></button>
+              <button data-cmd="mergeSurface" class="big" title="Make several surfaces into one, still a surface"><span class="ico"></span><span class="lbl">Merge</span></button>
+              <hr class="gsep" />
+              <button data-cmd="reverseNormal" class="big" title="Turn a surface inside out"><span class="ico"></span><span class="lbl">Reverse</span></button>
+              <button data-cmd="thicken" class="big" title="Give a surface thickness, and so a solid" data-pin="4"><span class="ico"></span><span class="lbl">Thicken</span></button>
+              <hr class="gsep" />
+              <button data-cmd="replaceFace" class="big" title="Swap a face for a surface"><span class="ico"></span><span class="lbl">Replace Face</span></button>
+              <button data-cmd="deleteFace" class="big" title="Remove faces and close what they leave"><span class="ico"></span><span class="lbl">Delete Face</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Construct</span>
+              <button data-cmd="construct" class="big" title="Planes, axes and points to build on" data-pin="1"><span class="ico"></span><span class="lbl">Planes, Axes, Points</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Inspect</span>
+              <button data-cmd="measure" class="big" title="Measure (I)" data-pin="1"><span class="ico"></span><span class="lbl">Measure</span></button>
+              <hr class="gsep" />
+              <button data-cmd="zebraAnalysis" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Zebra</span></button>
+              <button data-cmd="surfaceContinuity" class="big"><span class="ico"></span><span class="lbl">Surface Continuity</span></button>
+              <button data-cmd="curvatureMap" class="big"><span class="ico"></span><span class="lbl">Curvature Map</span></button>
+              <button data-cmd="isocurveAnalysis" class="big"><span class="ico"></span><span class="lbl">Isocurve Analysis</span></button>
+              <button data-cmd="curvatureComb" class="big"><span class="ico"></span><span class="lbl">Curvature Comb</span></button>
+              <hr class="gsep" />
+              <button data-cmd="sectionAnalysis" class="big"><span class="ico"></span><span class="lbl">Section Analysis</span></button>
+              <button data-cmd="clearAnalysis" class="big"><span class="ico"></span><span class="lbl">Clear Analysis</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Select</span>
-              <button data-cmd="selectAllEdges" class="big"><span class="ico">&#9707;</span><span class="lbl">All Edges</span></button>
-              <button data-cmd="showAll" class="big"><span class="ico">&#9673;</span><span class="lbl">Show All</span></button>
-            </div>
-          </div>
-
-          <!-- SHEET METAL -->
-          <div class="ribbon-panel" data-panel="sheet">
-            <div class="group">
-              <span class="glabel">Rule</span>
-              <button data-cmd="smRule" class="big" title="The rules this document keeps, and which one is in force">
-                <span class="ico">&#9707;</span><span class="lbl">Rules</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Create</span>
-              <button data-cmd="baseFlange" class="big" title="A flat sheet from a closed profile">
-                <span class="ico">&#9645;</span><span class="lbl">Base Flange</span></button>
-              <button data-cmd="flange" class="big" title="A flange off an edge">
-                <span class="ico">&#8735;</span><span class="lbl">Flange</span></button>
-              <button data-cmd="hem" class="big" title="Fold an edge back on itself"><span class="ico">&#8630;</span><span class="lbl">Hem</span></button>
-              <button data-cmd="loftedFlange" class="big" title="A transition between two sections"><span class="ico">&#9711;</span><span class="lbl">Lofted</span></button>
-              <button data-cmd="contourFlange" class="big" title="A whole part from its cross section">
-                <span class="ico">&#8767;</span><span class="lbl">Contour Flange</span></button>
-              <button data-cmd="sheetFold" class="big" title="Fold a face along a sketched line">
-                <span class="ico">&#8626;</span><span class="lbl">Fold</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Modify</span>
-              <button data-cmd="unfold" class="big" title="Flatten bends to work across them">
-                <span class="ico">&#8598;</span><span class="lbl">Unfold</span></button>
-              <button data-cmd="refold" class="big" title="Put them back">
-                <span class="ico">&#8600;</span><span class="lbl">Refold</span></button>
-              <button data-cmd="rip" class="big" title="Tear a closed shape so it can lie flat">
-                <span class="ico">&#9986;</span><span class="lbl">Rip</span></button>
-              <button data-cmd="cornerRelief" class="big" title="The notch where two or three bends meet">
-                <span class="ico">&#9700;</span><span class="lbl">Corner Relief</span></button>
-              <button data-cmd="miter" class="big" title="Close the corner between two flanges">
-                <span class="ico">&#9727;</span><span class="lbl">Miter</span></button>
-              <button data-cmd="convertToSheetMetal" class="big" title="Read a solid as folded sheet">
-                <span class="ico">&#8644;</span><span class="lbl">Convert</span></button>
-            </div>
-
-            <div class="group">
-              <span class="glabel">Flat</span>
-              <button data-cmd="flatPattern" class="big" title="The flat, as a body of its own">
-                <span class="ico">&#9636;</span><span class="lbl">Flat Pattern</span></button>
-              <button data-cmd="exportFlatDXF" class="big" title="The flat as a DXF, cut and bend lines on their own layers">
-                <span class="ico">&#8615;</span><span class="lbl">Export DXF</span></button>
+              <button data-cmd="selectAllEdges" class="big" data-pin="1"><span class="ico"></span><span class="lbl">All Edges</span></button>
+              <button data-cmd="showAll" class="big"><span class="ico"></span><span class="lbl">Show All</span></button>
             </div>
           </div>
 
           <!-- MESH -->
           <div class="ribbon-panel" data-panel="mesh">
             <div class="group">
-              <span class="glabel">Create</span>
-              <button data-menu="insertParts" class="big" title="A part from another file, an image to trace, or a decal"><span class="ico">&#8681;</span><span class="lbl">Insert &#9662;</span></button>
-              <button data-cmd="insertMesh" class="big" title="A STEP, STL, OBJ or 3MF off the disk">
-                <span class="ico">&#8615;</span><span class="lbl">Insert Model</span></button>
-              <button data-cmd="tessellate" class="big" title="Take the triangles off a solid or a surface">
-                <span class="ico">&#9651;</span><span class="lbl">Tessellate</span></button>
+              <span class="glabel">Insert</span>
+              <button data-cmd="insertMesh" class="big" title="A STEP, STL, OBJ or 3MF off the disk" data-pin="1"><span class="ico"></span><span class="lbl">Insert Mesh</span></button>
+              <hr class="gsep" />
+              <button data-cmd="tessellate" class="big" title="Take the triangles off a solid or a surface" data-pin="2"><span class="ico"></span><span class="lbl">Tessellate</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Prepare</span>
-              <button data-cmd="recognise" class="big" title="Read a body back as holes and fillets, whatever it arrived as">
-                <span class="ico">&#9906;</span><span class="lbl">Recognise</span></button>
-              <button data-menu="faceGroups" class="big" title="Group triangles into faces you can point at, by angle or by hand">
-                <span class="ico">&#9638;</span><span class="lbl">Face Groups &#9662;</span></button>
-              <button data-cmd="meshStitch" class="big" title="Join triangles that only nearly meet"><span class="ico">&#9868;</span><span class="lbl">Stitch</span></button>
-              <button data-cmd="meshPatch" class="big" title="Fill holes, or only the small ones"><span class="ico">&#9645;</span><span class="lbl">Patch</span></button>
-              <button data-cmd="meshDirectEdit" class="big" title="Move part of a mesh, with a falloff"><span class="ico">&#10021;</span><span class="lbl">Direct Edit</span></button>
-              <button data-cmd="meshRepair" class="big" title="Weld, tidy, orient and close">
-                <span class="ico">&#10010;</span><span class="lbl">Repair</span></button>
-              <button data-cmd="meshMerge" class="big" title="Several mesh bodies as one">
-                <span class="ico">&#9707;</span><span class="lbl">Merge</span></button>
-              <button data-cmd="meshScale" class="big" title="Resize a mesh body"><span class="ico">&#10530;</span><span class="lbl">Scale</span></button>
-              <button data-cmd="meshSeparate" class="big" title="The pieces that do not touch, each its own body">
-                <span class="ico">&#9707;</span><span class="lbl">Separate</span></button>
+              <button data-cmd="recognise" class="big" title="Read a body back as holes and fillets, whatever it arrived as" data-pin="1"><span class="ico"></span><span class="lbl">Recognise</span></button>
+              <hr class="gsep" />
+              <button data-cmd="faceGroups" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Generate Face Groups</span></button>
+              <button data-cmd="createFaceGroup" class="big"><span class="ico"></span><span class="lbl">Create Face Group</span></button>
+              <button data-cmd="combineFaceGroups" class="big"><span class="ico"></span><span class="lbl">Combine Face Groups</span></button>
+              <button data-cmd="releaseFaceGroups" class="big"><span class="ico"></span><span class="lbl">Delete Face Groups</span></button>
+              <hr class="gsep" />
+              <button data-cmd="meshRepair" class="big" title="Weld, tidy, orient and close" data-pin="3"><span class="ico"></span><span class="lbl">Repair</span></button>
+              <button data-cmd="meshStitch" class="big" title="Join triangles that only nearly meet"><span class="ico"></span><span class="lbl">Stitch</span></button>
+              <button data-cmd="meshPatch" class="big" title="Fill holes, or only the small ones" data-pin="4"><span class="ico"></span><span class="lbl">Patch</span></button>
+              <hr class="gsep" />
+              <button data-cmd="meshMerge" class="big" title="Several mesh bodies as one"><span class="ico"></span><span class="lbl">Merge</span></button>
+              <button data-cmd="meshSeparate" class="big" title="The pieces that do not touch, each its own body"><span class="ico"></span><span class="lbl">Separate</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Modify</span>
-              <button data-cmd="meshReduce" class="big" title="Fewer triangles, where they cost least">
-                <span class="ico">&#9663;</span><span class="lbl">Reduce</span></button>
-              <button data-cmd="meshRemesh" class="big" title="Triangles of one size, everywhere">
-                <span class="ico">&#9636;</span><span class="lbl">Remesh</span></button>
-              <button data-cmd="meshSmooth" class="big" title="Take the roughness out">
-                <span class="ico">&#8767;</span><span class="lbl">Smooth</span></button>
-              <button data-cmd="meshPlaneCut" class="big" title="Trim or split with a plane">
-                <span class="ico">&#9986;</span><span class="lbl">Plane Cut</span></button>
-              <button data-cmd="meshShell" class="big" title="Hollow it out, leaving an even wall">
-                <span class="ico">&#9723;</span><span class="lbl">Shell</span></button>
-              <button data-cmd="meshAlign" class="big" title="Lay a flat region of it down on a plane">
-                <span class="ico">&#9096;</span><span class="lbl">Align</span></button>
-              <button data-cmd="meshErase" class="big" title="Take faces out and close the hole">
-                <span class="ico">&#9673;</span><span class="lbl">Erase And Fill</span></button>
-              <button data-cmd="meshReverse" class="big" title="Turn it inside out">
-                <span class="ico">&#8646;</span><span class="lbl">Reverse</span></button>
-              <button data-cmd="textureExtrude" class="big" title="Push a scan's surface about by the brightness of an image, laid down one plane">
-                <span class="ico">&#9639;</span><span class="lbl">Height Map</span></button>
+              <button data-cmd="meshDirectEdit" class="big" title="Move part of a mesh, with a falloff" data-pin="1"><span class="ico"></span><span class="lbl">Direct Edit</span></button>
+              <button data-cmd="meshScale" class="big" title="Resize a mesh body"><span class="ico"></span><span class="lbl">Scale</span></button>
+              <hr class="gsep" />
+              <button data-cmd="meshReduce" class="big" title="Fewer triangles, where they cost least" data-pin="2"><span class="ico"></span><span class="lbl">Reduce</span></button>
+              <button data-cmd="meshRemesh" class="big" title="Triangles of one size, everywhere" data-pin="3"><span class="ico"></span><span class="lbl">Remesh</span></button>
+              <button data-cmd="meshSmooth" class="big" title="Take the roughness out" data-pin="4"><span class="ico"></span><span class="lbl">Smooth</span></button>
+              <hr class="gsep" />
+              <button data-cmd="meshPlaneCut" class="big" title="Trim or split with a plane"><span class="ico"></span><span class="lbl">Plane Cut</span></button>
+              <button data-cmd="meshShell" class="big" title="Hollow it out, leaving an even wall"><span class="ico"></span><span class="lbl">Shell</span></button>
+              <button data-cmd="meshErase" class="big" title="Take faces out and close the hole"><span class="ico"></span><span class="lbl">Erase And Fill</span></button>
+              <button data-cmd="meshAlign" class="big" title="Lay a flat region of it down on a plane"><span class="ico"></span><span class="lbl">Align</span></button>
+              <button data-cmd="meshReverse" class="big" title="Turn it inside out"><span class="ico"></span><span class="lbl">Reverse</span></button>
+              <hr class="gsep" />
+              <button data-cmd="textureExtrude" class="big" title="Push a scan's surface about by the brightness of an image, laid down one plane"><span class="ico"></span><span class="lbl">Height Map</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Convert</span>
-              <button data-cmd="convertMesh" class="big" title="A mesh as a solid, if it is closed">
-                <span class="ico">&#9635;</span><span class="lbl">Convert Mesh</span></button>
+              <button data-cmd="convertMesh" class="big" title="A mesh as a solid, if it is closed" data-pin="1"><span class="ico"></span><span class="lbl">Convert Mesh</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Select</span>
+              <button data-cmd="meshPalette" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Mesh Selection</span></button>
+            </div>
+          </div>
+
+          <!-- SHEET -->
+          <div class="ribbon-panel" data-panel="sheet">
+            <div class="group">
+              <span class="glabel">Create</span>
+              <button data-cmd="newSketch" class="big" title="Create Sketch (S)" data-pin="1"><span class="ico"></span><span class="lbl">Create Sketch</span></button>
+              <hr class="gsep" />
+              <button data-cmd="baseFlange" class="big" title="A flat sheet from a closed profile" data-pin="2"><span class="ico"></span><span class="lbl">Base Flange</span></button>
+              <button data-cmd="flange" class="big" title="A flange off an edge" data-pin="3"><span class="ico"></span><span class="lbl">Flange</span></button>
+              <button data-cmd="contourFlange" class="big" title="A whole part from its cross section" data-pin="4"><span class="ico"></span><span class="lbl">Contour Flange</span></button>
+              <button data-cmd="loftedFlange" class="big" title="A transition between two sections"><span class="ico"></span><span class="lbl">Lofted</span></button>
+              <button data-cmd="hem" class="big" title="Fold an edge back on itself"><span class="ico"></span><span class="lbl">Hem</span></button>
+              <hr class="gsep" />
+              <button data-cmd="sheetFold" class="big" title="Fold a face along a sketched line"><span class="ico"></span><span class="lbl">Fold</span></button>
+              <hr class="gsep" />
+              <button data-cmd="convertToSheetMetal" class="big" title="Read a solid as folded sheet"><span class="ico"></span><span class="lbl">Convert</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Modify</span>
+              <button data-cmd="unfold" class="big" title="Flatten bends to work across them" data-pin="1"><span class="ico"></span><span class="lbl">Unfold</span></button>
+              <button data-cmd="refold" class="big" title="Put them back"><span class="ico"></span><span class="lbl">Refold</span></button>
+              <hr class="gsep" />
+              <button data-cmd="rip" class="big" title="Tear a closed shape so it can lie flat"><span class="ico"></span><span class="lbl">Rip</span></button>
+              <button data-cmd="cornerRelief" class="big" title="The notch where two or three bends meet" data-pin="2"><span class="ico"></span><span class="lbl">Corner Relief</span></button>
+              <button data-cmd="miter" class="big" title="Close the corner between two flanges"><span class="ico"></span><span class="lbl">Miter</span></button>
+              <hr class="gsep" />
+              <button data-cmd="smRule" class="big" title="The rules this document keeps, and which one is in force" data-pin="3"><span class="ico"></span><span class="lbl">Rules</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Flat Pattern</span>
+              <button data-cmd="flatPattern" class="big" title="The flat, as a body of its own" data-pin="1"><span class="ico"></span><span class="lbl">Flat Pattern</span></button>
+              <button data-cmd="exportFlatDXF" class="big" title="The flat as a DXF, cut and bend lines on their own layers" data-pin="2"><span class="ico"></span><span class="lbl">Export DXF</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Construct</span>
+              <button data-cmd="construct" class="big" title="Planes, axes and points to build on" data-pin="1"><span class="ico"></span><span class="lbl">Planes, Axes, Points</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Inspect</span>
+              <button data-cmd="measure" class="big" title="Measure (I)" data-pin="1"><span class="ico"></span><span class="lbl">Measure</span></button>
+            </div>
+          </div>
+
+          <!-- PLASTIC -->
+          <div class="ribbon-panel" data-panel="plastic">
+            <div class="group">
+              <span class="glabel">Create</span>
+              <button data-cmd="newSketch" class="big" title="Create Sketch (S)" data-pin="1"><span class="ico"></span><span class="lbl">Create Sketch</span></button>
+              <hr class="gsep" />
+              <button data-cmd="boss" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Boss</span></button>
+              <button data-cmd="snapFit" class="big" data-pin="3"><span class="ico"></span><span class="lbl">Snap Fit</span></button>
+              <button data-cmd="lip" class="big" data-pin="4"><span class="ico"></span><span class="lbl">Lip</span></button>
+              <button data-cmd="rest" class="big"><span class="ico"></span><span class="lbl">Rest</span></button>
+              <hr class="gsep" />
+              <button data-cmd="rib" class="big" title="Thicken an open curve"><span class="ico"></span><span class="lbl">Rib</span></button>
+              <button data-cmd="web" class="big" title="Open sketch curves thickened into walls"><span class="ico"></span><span class="lbl">Web</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Modify</span>
+              <button data-cmd="shell" class="big" title="Shell" data-pin="1"><span class="ico"></span><span class="lbl">Shell</span></button>
+              <button data-cmd="draft" class="big" title="Taper faces for moulding or printing" data-pin="2"><span class="ico"></span><span class="lbl">Draft</span></button>
+              <button data-cmd="fillet" class="big" title="Fillet (F)"><span class="ico"></span><span class="lbl">Fillet</span></button>
+              <button data-cmd="chamfer" class="big" title="Chamfer"><span class="ico"></span><span class="lbl">Chamfer</span></button>
+              <button data-cmd="fullRound" class="big" title="Round a flat face away entirely, from one side to the other"><span class="ico"></span><span class="lbl">Full Round</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Inspect</span>
+              <button data-cmd="draftAnalysis" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Draft Analysis</span></button>
+              <button data-cmd="minimumRadius" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Minimum Radius</span></button>
+              <button data-cmd="accessibility" class="big"><span class="ico"></span><span class="lbl">Accessibility</span></button>
+              <hr class="gsep" />
+              <button data-cmd="measure" class="big" title="Measure (I)"><span class="ico"></span><span class="lbl">Measure</span></button>
             </div>
           </div>
 
@@ -456,55 +414,125 @@
           <div class="ribbon-panel" data-panel="form">
             <div class="group">
               <span class="glabel">Create</span>
-              <button data-cmd="formBox" class="big" title="A box of quads to shape"><span class="ico">&#9635;</span><span class="lbl">Box</span></button>
-              <button data-cmd="formPlane" class="big" title="A flat grid"><span class="ico">&#9645;</span><span class="lbl">Plane</span></button>
-              <button data-cmd="formCylinder" class="big" title="A tube"><span class="ico">&#9711;</span><span class="lbl">Cylinder</span></button>
-              <button data-cmd="formSphere" class="big" title="A ball with poles"><span class="ico">&#9679;</span><span class="lbl">Sphere</span></button>
-              <button data-cmd="formTorus" class="big" title="A ring"><span class="ico">&#9678;</span><span class="lbl">Torus</span></button>
-              <button data-cmd="formQuadball" class="big" title="A ball with no poles, and so no pinch"><span class="ico">&#9673;</span><span class="lbl">Quadball</span></button>
-              <button data-menu="formCreate" class="big" title="Build a form from curves that are already drawn"><span class="ico">&#8767;</span><span class="lbl">From Curves &#9662;</span></button>
+              <button data-cmd="formBox" class="big" title="A box of quads to shape" data-pin="1"><span class="ico"></span><span class="lbl">Box</span></button>
+              <button data-cmd="formPlane" class="big" title="A flat grid"><span class="ico"></span><span class="lbl">Plane</span></button>
+              <button data-cmd="formCylinder" class="big" title="A tube" data-pin="2"><span class="ico"></span><span class="lbl">Cylinder</span></button>
+              <button data-cmd="formSphere" class="big" title="A ball with poles" data-pin="3"><span class="ico"></span><span class="lbl">Sphere</span></button>
+              <button data-cmd="formTorus" class="big" title="A ring"><span class="ico"></span><span class="lbl">Torus</span></button>
+              <button data-cmd="formQuadball" class="big" title="A ball with no poles, and so no pinch"><span class="ico"></span><span class="lbl">Quadball</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formExtrudeCurve" class="big"><span class="ico"></span><span class="lbl">Extrude a curve</span></button>
+              <button data-cmd="formRevolveCurve" class="big"><span class="ico"></span><span class="lbl">Revolve a curve</span></button>
+              <button data-cmd="formSweepCurve" class="big"><span class="ico"></span><span class="lbl">Sweep a curve along a path</span></button>
+              <button data-cmd="formLoftCurves" class="big"><span class="ico"></span><span class="lbl">Loft between sketches</span></button>
+              <button data-cmd="formPipeCurve" class="big"><span class="ico"></span><span class="lbl">Pipe along a path</span></button>
+              <button data-cmd="formFace" class="big"><span class="ico"></span><span class="lbl">Face from picked points</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Modify</span>
-              <button data-cmd="editForm" class="big" title="Move, turn and scale what is picked"><span class="ico">&#10021;</span><span class="lbl">Edit Form</span></button>
-              <button data-cmd="formPull" class="big" title="Pull a new face out of the ones picked"><span class="ico">&#8613;</span><span class="lbl">Pull</span></button>
-              <button data-menu="formSelect" class="big" title="Grow, shrink, loop, ring, invert"><span class="ico">&#9707;</span><span class="lbl">Select &#9662;</span></button>
-              <button data-menu="formInsert" class="big" title="Insert an edge loop, a point, or split faces"><span class="ico">&#8214;</span><span class="lbl">Insert &#9662;</span></button>
-              <button data-menu="formFaces" class="big" title="Bridge two openings, close one, or take faces out"><span class="ico">&#9744;</span><span class="lbl">Faces &#9662;</span></button>
-              <button data-menu="formWeld" class="big" title="Join points, or give each face its own back"><span class="ico">&#9868;</span><span class="lbl">Weld &#9662;</span></button>
-              <button data-menu="formCrease" class="big" title="Hold an edge sharp, or let it go soft"><span class="ico">&#9700;</span><span class="lbl">Crease &#9662;</span></button>
-              <button data-menu="formShape" class="big" title="Smooth, straighten, cylindrify, slide, bevel, erase, freeze"><span class="ico">&#9727;</span><span class="lbl">Shape &#9662;</span></button>
-              <button data-menu="formTidy" class="big" title="Flatten onto a plane, or even the cage out"><span class="ico">&#9636;</span><span class="lbl">Tidy &#9662;</span></button>
+              <button data-cmd="editForm" class="big" title="Move, turn and scale what is picked" data-pin="1"><span class="ico"></span><span class="lbl">Edit Form</span></button>
+              <button data-cmd="formPull" class="big" title="Pull a new face out of the ones picked" data-pin="2"><span class="ico"></span><span class="lbl">Pull</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formInsertEdge" class="big" data-pin="3"><span class="ico"></span><span class="lbl">Insert Edge</span></button>
+              <button data-cmd="formInsertPoint" class="big"><span class="ico"></span><span class="lbl">Insert Point</span></button>
+              <button data-cmd="formSubdivide" class="big" data-pin="4"><span class="ico"></span><span class="lbl">Subdivide Faces</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formBridge" class="big"><span class="ico"></span><span class="lbl">Bridge</span></button>
+              <button data-cmd="formFillHole" class="big"><span class="ico"></span><span class="lbl">Fill Hole</span></button>
+              <button data-cmd="formDelete" class="big"><span class="ico"></span><span class="lbl">Delete Faces</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formWeld" class="big"><span class="ico"></span><span class="lbl">Weld Vertices</span></button>
+              <button data-cmd="formUnweld" class="big"><span class="ico"></span><span class="lbl">Unweld Vertices</span></button>
+              <button data-cmd="formMergeEdge" class="big"><span class="ico"></span><span class="lbl">Merge Edge</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formCrease" class="big" data-pin="5"><span class="ico"></span><span class="lbl">Crease</span></button>
+              <button data-cmd="formUncrease" class="big"><span class="ico"></span><span class="lbl">Uncrease</span></button>
+              <button data-cmd="formBevel" class="big"><span class="ico"></span><span class="lbl">Bevel Edge</span></button>
+              <button data-cmd="formSlide" class="big"><span class="ico"></span><span class="lbl">Slide Edge</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formSmooth" class="big"><span class="ico"></span><span class="lbl">Smooth</span></button>
+              <button data-cmd="formStraighten" class="big"><span class="ico"></span><span class="lbl">Straighten</span></button>
+              <button data-cmd="formCylindrify" class="big"><span class="ico"></span><span class="lbl">Cylindrify</span></button>
+              <button data-cmd="formErase" class="big"><span class="ico"></span><span class="lbl">Erase And Fill</span></button>
+              <button data-cmd="formMatch" class="big"><span class="ico"></span><span class="lbl">Match</span></button>
+              <button data-cmd="formByCurve" class="big"><span class="ico"></span><span class="lbl">Edit Form By Curve</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formFreeze" class="big"><span class="ico"></span><span class="lbl">Freeze</span></button>
+              <button data-cmd="formUnfreeze" class="big"><span class="ico"></span><span class="lbl">Unfreeze</span></button>
+              <button data-cmd="formInterpolate" class="big"><span class="ico"></span><span class="lbl">Interpolate</span></button>
+              <button data-cmd="formUninterpolate" class="big"><span class="ico"></span><span class="lbl">Un-interpolate</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formFlatten" class="big"><span class="ico"></span><span class="lbl">Flatten</span></button>
+              <button data-cmd="formUniform" class="big"><span class="ico"></span><span class="lbl">Make Uniform</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Symmetry</span>
-              <button data-cmd="formMirror" class="big" title="Make it symmetric, and keep it so"><span class="ico">&#9707;</span><span class="lbl">Mirror</span></button>
-              <button data-cmd="formCircular" class="big" title="Repeat it about an axis"><span class="ico">&#8635;</span><span class="lbl">Circular</span></button>
-              <button data-cmd="formClearSymmetry" class="big" title="Let the halves move on their own"><span class="ico">&#10005;</span><span class="lbl">Clear</span></button>
+              <button data-cmd="formMirror" class="big" title="Make it symmetric, and keep it so" data-pin="1"><span class="ico"></span><span class="lbl">Mirror</span></button>
+              <button data-cmd="formCircular" class="big" title="Repeat it about an axis" data-pin="2"><span class="ico"></span><span class="lbl">Circular</span></button>
+              <button data-cmd="formClearSymmetry" class="big" title="Let the halves move on their own"><span class="ico"></span><span class="lbl">Clear</span></button>
             </div>
 
             <div class="group">
               <span class="glabel">Utilities</span>
-              <button data-menu="formDisplay" class="big" title="The cage, the surface, or both"><span class="ico">&#9638;</span><span class="lbl">Display &#9662;</span></button>
-              <button data-cmd="formRepair" class="big" title="Find and fix what has gone wrong in the cage">
-                <span class="ico">&#9874;</span><span class="lbl">Repair</span></button>
-              <button data-cmd="formThicken" class="big" title="Give an open form thickness"><span class="ico">&#9707;</span><span class="lbl">Thicken</span></button>
-              <button data-cmd="finishForm" class="big" title="Turn the form into a solid"><span class="ico">&#10003;</span><span class="lbl">Finish Form</span></button>
+              <button data-cmd="formDisplayBox" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Box Display</span></button>
+              <button data-cmd="formDisplayControl" class="big"><span class="ico"></span><span class="lbl">Control Frame Display</span></button>
+              <button data-cmd="formDisplaySmooth" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Smooth Display</span></button>
+              <hr class="gsep" />
+              <button data-cmd="formRepair" class="big" title="Find and fix what has gone wrong in the cage" data-pin="3"><span class="ico"></span><span class="lbl">Repair</span></button>
+              <button data-cmd="formThicken" class="big" title="Give an open form thickness"><span class="ico"></span><span class="lbl">Thicken</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Select</span>
+              <button data-cmd="formGrow" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Grow</span></button>
+              <button data-cmd="formShrink" class="big"><span class="ico"></span><span class="lbl">Shrink</span></button>
+              <button data-cmd="formLoop" class="big"><span class="ico"></span><span class="lbl">Loop</span></button>
+              <button data-cmd="formRing" class="big"><span class="ico"></span><span class="lbl">Ring</span></button>
+              <button data-cmd="formInvert" class="big"><span class="ico"></span><span class="lbl">Invert</span></button>
+              <button data-cmd="formSelectAll" class="big"><span class="ico"></span><span class="lbl">Select all</span></button>
+            </div>
+
+            <div class="group" data-solo="1">
+              <span class="glabel">Finish Form</span>
+              <button data-cmd="finishForm" class="big" title="Turn the form into a solid" data-pin="1"><span class="ico"></span><span class="lbl">Finish Form</span></button>
             </div>
           </div>
 
-          <!-- VIEW -->
-          <div class="ribbon-panel" data-panel="view">
+          <!-- UTILITIES -->
+          <div class="ribbon-panel" data-panel="utilities">
             <div class="group">
-              <span class="glabel">Camera</span>
-              <button data-cmd="fit" class="big"><span class="ico">&#9974;</span><span class="lbl">Fit</span></button>
-              <button data-cmd="home" class="big"><span class="ico">&#8962;</span><span class="lbl">Home</span></button>
-              <button data-cmd="toggleProjection" class="big"><span class="ico">&#9099;</span><span class="lbl">Ortho</span></button>
+              <span class="glabel">Make</span>
+              <button data-cmd="print3D" class="big" title="Write it for a printer and open it in the slicer" data-pin="1"><span class="ico"></span><span class="lbl">3D Print</span></button>
+              <button data-cmd="render" class="big" title="A still of the model, better than the screen draws it" data-pin="2"><span class="ico"></span><span class="lbl">Render</span></button>
+              <button data-cmd="animate" class="big" title="Take the assembly apart, on a timeline" data-pin="3"><span class="ico"></span><span class="lbl">Animate</span></button>
             </div>
+
             <div class="group">
-              <span class="glabel">Standard views</span>
+              <span class="glabel">Simulation</span>
+              <button data-cmd="simulate" class="big" title="What happens to the part when it is pushed" data-pin="1"><span class="ico"></span><span class="lbl">Stress</span></button>
+              <button data-cmd="generative" class="big" title="Let the load decide the shape" data-pin="2"><span class="ico"></span><span class="lbl">Generative Design</span></button>
+              <button data-cmd="clearStress" class="big" title="Put the ordinary colour back"><span class="ico"></span><span class="lbl">Clear Results</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Manage</span>
+              <button data-cmd="parameters" class="big" title="Change Parameters (P)" data-pin="1"><span class="ico"></span><span class="lbl">Parameters</span></button>
+              <button data-cmd="namedVersions" class="big" title="Keep a named state of this document, and go back to it" data-pin="2"><span class="ico"></span><span class="lbl">Named Versions</span></button>
+              <button data-cmd="documentInfo" class="big" title="Part number, description, revision"><span class="ico"></span><span class="lbl">Properties</span></button>
+              <button data-cmd="addNote" class="big" title="Pin a note to a face or an edge"><span class="ico"></span><span class="lbl">Note</span></button>
+              <hr class="gsep" />
+              <button data-cmd="toggleHistory" class="big" title="Direct modelling, with no timeline"><span class="ico"></span><span class="lbl">Capture History</span></button>
+              <button data-cmd="computeAll" class="big" title="Throw the cache away and build the whole timeline again"><span class="ico"></span><span class="lbl">Compute All</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">View</span>
+              <button data-cmd="fit" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Fit</span></button>
+              <button data-cmd="home" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Home</span></button>
+              <button data-cmd="toggleProjection" class="big" data-pin="3"><span class="ico"></span><span class="lbl">Orthographic</span></button>
+              <hr class="gsep" />
               <div class="cgrid wide">
                 <button data-view="top">Top</button>
                 <button data-view="bottom">Bottom</button>
@@ -514,17 +542,16 @@
                 <button data-view="right">Right</button>
                 <button data-view="iso">Iso</button>
               </div>
-            </div>
-            <div class="group">
-              <span class="glabel">Display</span>
+              <hr class="gsep" />
               <label class="chk"><input type="checkbox" id="chkGrid" checked /> Grid</label>
               <label class="chk"><input type="checkbox" id="chkOrigin" checked /> Origin</label>
               <label class="chk"><input type="checkbox" id="chkPlanes" /> Planes</label>
               <label class="chk"><input type="checkbox" id="chkEdges" checked /> Edges</label>
               <label class="chk"><input type="checkbox" id="chkTransparent" /> Transparent</label>
             </div>
-            <div class="group">
-              <span class="glabel">Sketch</span>
+
+            <div class="group" data-icon="preferences">
+              <span class="glabel">Preferences</span>
               <label class="chk"><input type="checkbox" id="chkSnapGrid" /> Snap to grid</label>
               <label class="fieldrow">
                 <span>Step</span>
@@ -540,18 +567,108 @@
                   <option value="ft">ft</option>
                 </select>
               </label>
+              <hr class="gsep" />
+              <label class="chk"> <input type="checkbox" id="chkInvertZoom" checked /> Fusion zoom direction </label>
+              <label class="chk"> <input type="checkbox" id="chkZoomCursor" checked /> Zoom to cursor </label>
+              <label class="chk"> <input type="checkbox" id="chkSwapMouse" /> Middle drag orbits </label>
             </div>
+          </div>
+
+          <!-- SKETCH -->
+          <div class="ribbon-panel" data-panel="sketch">
             <div class="group">
-              <span class="glabel">Navigation</span>
-              <label class="chk">
-                <input type="checkbox" id="chkInvertZoom" checked /> Fusion zoom direction
-              </label>
-              <label class="chk">
-                <input type="checkbox" id="chkZoomCursor" checked /> Zoom to cursor
-              </label>
-              <label class="chk">
-                <input type="checkbox" id="chkSwapMouse" /> Middle drag orbits
-              </label>
+              <span class="glabel">Create</span>
+              <button data-tool="line" class="big tool" title="Line (L)" data-pin="1"><span class="ico"></span><span class="lbl">Line</span></button>
+              <button data-menu="rectangle" class="big tool-menu" title="Two point, centre, or three point" data-tools="rectangle,centerRectangle,rectangle3" data-pin="2"><span class="ico"></span><span class="lbl">Rectangle <span class="caret" title="All the ways to draw one">&#9662;</span></span></button>
+              <button data-menu="circle" class="big tool-menu" title="Centre, two point, or tangent to lines" data-tools="circle,circleDia,circleTan2,circleTan3" data-pin="3"><span class="ico"></span><span class="lbl">Circle <span class="caret" title="All the ways to draw one">&#9662;</span></span></button>
+              <button data-menu="arc" class="big tool-menu" title="Centre point or three point" data-tools="arc,arc3,tangentArc" data-pin="4"><span class="ico"></span><span class="lbl">Arc <span class="caret" title="All the ways to draw one">&#9662;</span></span></button>
+              <button data-menu="polygon" class="big tool-menu" title="Inscribed, circumscribed, or from an edge" data-tools="polygon,polygonCirc,polygonEdge" data-pin="5"><span class="ico"></span><span class="lbl">Polygon <span class="caret" title="All the ways to draw one">&#9662;</span></span></button>
+              <button data-menu="slot" class="big tool-menu" title="Five ways to place a slot" data-tools="slot,slotOverall,slotCentre,slotArc3,slotArcCentre"><span class="ico"></span><span class="lbl">Slot <span class="caret" title="All the ways to draw one">&#9662;</span></span></button>
+              <button data-menu="spline" class="big tool-menu" title="Fit point, control point, or conic" data-tools="spline,splineCP,conic,blendCurve,blendCurveG1" data-pin="6"><span class="ico"></span><span class="lbl">Spline <span class="caret" title="All the ways to draw one">&#9662;</span></span></button>
+              <button data-tool="ellipse" class="big tool" title="Centre, long axis, then width"><span class="ico"></span><span class="lbl">Ellipse</span></button>
+              <button data-tool="point" class="big tool"><span class="ico"></span><span class="lbl">Point</span></button>
+              <button data-tool="text" class="big tool" title="Text as sketch outlines"><span class="ico"></span><span class="lbl">Text</span></button>
+              <hr class="gsep" />
+              <button data-cmd="mirrorSketch" class="big" title="Mirror the selection about a line"><span class="ico"></span><span class="lbl">Mirror</span></button>
+              <button data-cmd="sketchPatternCirc" class="big" title="Copies of the selection turned about a centre"><span class="ico"></span><span class="lbl">Circular Pattern</span></button>
+              <button data-cmd="sketchPatternRect" class="big" title="A grid of copies of the selection"><span class="ico"></span><span class="lbl">Rectangular Pattern</span></button>
+              <hr class="gsep" />
+              <button data-menu="project" class="big" title="Project, copy, or section against the model"><span class="ico"></span><span class="lbl">Project / Include</span></button>
+              <hr class="gsep" />
+              <button data-tool="dimension" class="big tool" title="Dimension (D)"><span class="ico"></span><span class="lbl">Sketch Dimension</span></button>
+              <hr class="gsep" />
+              <div class="toolopts">
+                <label class="fieldrow"><span>Sides</span>
+                  <input type="text" id="polySides" value="6" title="How many sides a polygon gets" /></label>
+                <label class="fieldrow"><span>Rho</span>
+                  <input type="text" id="conicRho" value="0.5" title="Under a half is an ellipse, a half is a parabola, over it a hyperbola" /></label>
+              </div>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Modify</span>
+              <button data-tool="fillet" class="big tool" data-pin="1"><span class="ico"></span><span class="lbl">Fillet</span></button>
+              <button data-tool="chamfer" class="big tool"><span class="ico"></span><span class="lbl">Chamfer</span></button>
+              <button data-tool="trim" class="big tool" title="Trim (T)" data-pin="2"><span class="ico"></span><span class="lbl">Trim</span></button>
+              <button data-tool="extend" class="big tool" title="Run a line on to what it meets" data-pin="3"><span class="ico"></span><span class="lbl">Extend</span></button>
+              <button data-tool="breakCurve" class="big tool" title="Cut a line where something crosses it"><span class="ico"></span><span class="lbl">Break</span></button>
+              <button data-tool="offset" class="big tool" title="Offset (O)" data-pin="4"><span class="ico"></span><span class="lbl">Offset</span></button>
+              <hr class="gsep" />
+              <button data-cmd="sketchMove" class="big" title="Move or copy the selection by a distance" data-pin="5"><span class="ico"></span><span class="lbl">Move</span></button>
+              <button data-cmd="sketchCopy" class="big" title="Copy the selection (Ctrl+C)"><span class="ico"></span><span class="lbl">Copy</span></button>
+              <button data-cmd="sketchPaste" class="big" title="Paste (Ctrl+V)"><span class="ico"></span><span class="lbl">Paste</span></button>
+              <button data-cmd="sketchScale" class="big" title="Resize the selection about a point"><span class="ico"></span><span class="lbl">Scale</span></button>
+              <hr class="gsep" />
+              <button data-cmd="editText" class="big" title="Change the selected text"><span class="ico"></span><span class="lbl">Edit Text</span></button>
+              <hr class="gsep" />
+              <button data-cmd="construction" class="big" title="Construction (X)"><span class="ico"></span><span class="lbl">Construction</span></button>
+              <button data-cmd="centerline" class="big" title="Centreline: a construction line a revolve and a mirror can find on their own"><span class="ico"></span><span class="lbl">Centreline</span></button>
+            </div>
+
+            <div class="group marks">
+              <span class="glabel">Constraints</span>
+              <button data-con="horizontal" class="big" title="Horizontal" data-pin="1"><span class="ico"></span><span class="lbl">Horizontal</span></button>
+              <button data-con="vertical" class="big" title="Vertical" data-pin="2"><span class="ico"></span><span class="lbl">Vertical</span></button>
+              <button data-con="coincident" class="big" title="Coincident" data-pin="3"><span class="ico"></span><span class="lbl">Coincident</span></button>
+              <button data-con="tangent" class="big" title="Tangent" data-pin="4"><span class="ico"></span><span class="lbl">Tangent</span></button>
+              <button data-con="equal" class="big" title="Equal" data-pin="5"><span class="ico"></span><span class="lbl">Equal</span></button>
+              <button data-con="parallel" class="big" title="Parallel" data-pin="6"><span class="ico"></span><span class="lbl">Parallel</span></button>
+              <button data-con="perpendicular" class="big" title="Perpendicular" data-pin="7"><span class="ico"></span><span class="lbl">Perpendicular</span></button>
+              <button data-con="fix" class="big" title="Fix" data-pin="8"><span class="ico"></span><span class="lbl">Fix / Unfix</span></button>
+              <button data-con="midpoint" class="big" title="Midpoint" data-pin="9"><span class="ico"></span><span class="lbl">Midpoint</span></button>
+              <button data-con="concentric" class="big" title="Concentric" data-pin="10"><span class="ico"></span><span class="lbl">Concentric</span></button>
+              <button data-con="collinear" class="big" title="Collinear, on one line" data-pin="11"><span class="ico"></span><span class="lbl">Collinear</span></button>
+              <button data-con="symmetric" class="big" title="Symmetric" data-pin="12"><span class="ico"></span><span class="lbl">Symmetry</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Insert</span>
+              <button data-cmd="insertSvg" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Insert SVG</span></button>
+              <button data-cmd="insertDxf" class="big" data-pin="2"><span class="ico"></span><span class="lbl">Insert DXF</span></button>
+              <hr class="gsep" />
+              <button data-cmd="insertCanvas" class="big"><span class="ico"></span><span class="lbl">Canvas</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Select</span>
+              <button data-tool="select" class="big tool" data-pin="1"><span class="ico"></span><span class="lbl">Select</span></button>
+            </div>
+
+            <div class="group">
+              <span class="glabel">Palette</span>
+              <button data-cmd="lookAt" class="big" title="Turn the camera square to the sketch plane" data-pin="1"><span class="ico"></span><span class="lbl">Look At</span></button>
+              <hr class="gsep" />
+              <label class="chk"><input type="checkbox" id="chkSlice" /> Slice</label>
+              <label class="chk"><input type="checkbox" id="chkShowConstruction" checked /> Construction</label>
+              <label class="chk"><input type="checkbox" id="chkShowProjected" checked /> Projected</label>
+              <label class="chk"><input type="checkbox" id="chkShowPoints" checked /> Points</label>
+              <label class="chk"><input type="checkbox" id="chkShowDims" checked /> Dimensions</label>
+              <label class="chk"><input type="checkbox" id="chkShowConstraints" checked /> Constraints</label>
+            </div>
+
+            <div class="group" data-solo="1">
+              <span class="glabel">Finish Sketch</span>
+              <button data-cmd="finishSketch" class="big" data-pin="1"><span class="ico"></span><span class="lbl">Finish Sketch</span></button>
             </div>
           </div>
         </div>

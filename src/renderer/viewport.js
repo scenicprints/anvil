@@ -54,6 +54,31 @@ function baseColourOf(rec, fresh = false) {
   return fresh ? SOLID_COLOUR : 0xe0dcd2;
 }
 
+/**
+ * A round dot with a dark rim, as a texture.
+ *
+ * Points draw as squares unless given a picture to be, and a dot has to be seen
+ * on a pale part and on the dark room behind it alike, so the middle takes the
+ * marker's colour and the rim stays dark whatever that colour is.
+ */
+function markerDot() {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(20, 22, 26, 0.95)';
+  g.beginPath();
+  g.arc(32, 32, 30, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#ffffff';
+  g.beginPath();
+  g.arc(32, 32, 21, 0, Math.PI * 2);
+  g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 /*
  * A studio, built rather than loaded.
  *
@@ -1946,15 +1971,18 @@ export class Viewport {
     this.gizmo.matrix.copy(m);
     this.gizmo.visible = true;
 
+    const back = (h) => h.sign === -1;
     const want = (h) =>
-      mode === 'multi' ||
-      (mode === 'translation' && (h.kind === 'move' || h.kind === 'movePlane')) ||
+      (mode === 'multi' && !back(h)) ||
+      (mode === 'translation' && !back(h) && (h.kind === 'move' || h.kind === 'movePlane')) ||
+      // Six arrows, both ways along each axis, for moving a body by dragging.
+      (mode === 'arrows' && h.kind === 'move') ||
       (mode === 'rotation' && h.kind === 'rotate') ||
       (mode === 'scale' && (h.kind === 'scale' || h.kind === 'scaleAll')) ||
       // One arrow, along the frame's own z. This is the handle that stands on a
       // face waiting to be pulled, and a face has exactly one direction to go
       // in, so offering three would be offering two wrong ones.
-      (mode === 'pull' && h.kind === 'move' && h.axis === 2);
+      (mode === 'pull' && h.kind === 'move' && h.axis === 2 && !back(h));
     for (const child of this.gizmo.children) {
       child.visible = want(child.userData.handle);
     }
@@ -1990,6 +2018,20 @@ export class Viewport {
       head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       head.userData.handle = { kind: 'move', axis: i };
       g.add(head);
+
+      // The same arrow pointing the other way, for the six arrow move, where
+      // dragging left and dragging right should both have something to grab.
+      const back = dir.clone().negate();
+      const backShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.8, 10), mat(a.colour));
+      backShaft.position.copy(back.clone().multiplyScalar(0.4));
+      backShaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), back);
+      backShaft.userData.handle = { kind: 'move', axis: i, sign: -1 };
+      g.add(backShaft);
+      const backHead = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.14, 10), mat(a.colour));
+      backHead.position.copy(back.clone().multiplyScalar(0.87));
+      backHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), back);
+      backHead.userData.handle = { kind: 'move', axis: i, sign: -1 };
+      g.add(backHead);
 
       // The square between the other two axes: drag in that plane.
       const u = AXES[(i + 1) % 3].dir;
@@ -2129,6 +2171,54 @@ export class Viewport {
   setSelection(ids) {
     this.selection = new Set(ids);
     this._applyHighlights();
+    this.invalidate();
+  }
+
+  /**
+   * Dots on the model that stay the same size on screen and draw over
+   * everything, with straight lines between pairs of them.
+   *
+   * Used for the places a move is picking: a corner has to be visible from
+   * whatever side of the part it is on, so these ignore depth, and they keep
+   * their size so a far corner is as easy to see as a near one.
+   */
+  setMarkers(spec) {
+    if (!this.markerGroup) {
+      this.markerGroup = new THREE.Group();
+      this.markerGroup.renderOrder = 12;
+      this.overlayGroup.add(this.markerGroup);
+    }
+    const g = this.markerGroup;
+    while (g.children.length) {
+      const c = g.children.pop();
+      c.geometry.dispose();
+      c.material.dispose();
+    }
+    if (!this._markerDot) this._markerDot = markerDot();
+    for (const line of spec?.lines || []) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute([...line[0], ...line[1]], 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0xe2551f, depthTest: false, transparent: true });
+      const seg = new THREE.Line(geom, mat);
+      seg.renderOrder = 12;
+      g.add(seg);
+    }
+    for (const m of spec?.points || []) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(m.at, 3));
+      const mat = new THREE.PointsMaterial({
+        color: m.colour ?? 0xe2551f,
+        size: m.size ?? 14,
+        sizeAttenuation: false,
+        map: this._markerDot,
+        transparent: true,
+        alphaTest: 0.05,
+        depthTest: false
+      });
+      const dot = new THREE.Points(geom, mat);
+      dot.renderOrder = 13;
+      g.add(dot);
+    }
     this.invalidate();
   }
 

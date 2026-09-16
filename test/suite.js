@@ -1047,8 +1047,11 @@ async function run() {
       }
     ];
     const res = rebuild(doc);
-    const props = K.properties(res.bodies[0].solid);
-    near(props.volume, 1000 * 6, 1, 'six copies');
+    // Six copies twenty apart with ten of box: daylight between every one, so
+    // six bodies rather than one body in six pieces.
+    assert(res.bodies.length === 6, `expected six bodies, got ${res.bodies.length}`);
+    const total = res.bodies.reduce((a, b) => a + K.properties(b.solid).volume, 0);
+    near(total, 1000 * 6, 1, 'six copies');
     res.dispose();
   });
 
@@ -1066,10 +1069,61 @@ async function run() {
       { id: uid('f'), type: 'mirror', bodies: 'all', plane: 'YZ', op: 'join' }
     ];
     const res = rebuild(doc);
-    const bb = K.boundingBox(res.bodies[0].solid);
-    near(bb.min[0], -15, 1e-5, 'mirrored extent');
-    near(bb.max[0], 15, 1e-5, 'original extent');
-    near(K.properties(res.bodies[0].solid).volume, 2000, 1, 'both halves present');
+    // The box stands 5 to 15 and its reflection -15 to -5, with a gap between,
+    // so two bodies. The original keeps its place in the list and its name.
+    assert(res.bodies.length === 2, `expected two bodies, got ${res.bodies.length}`);
+    const kept = K.boundingBox(res.bodies[0].solid);
+    const made = K.boundingBox(res.bodies[1].solid);
+    near(kept.min[0], 5, 1e-5, 'original extent');
+    near(kept.max[0], 15, 1e-5, 'original extent');
+    near(made.min[0], -15, 1e-5, 'mirrored extent');
+    near(made.max[0], -5, 1e-5, 'mirrored extent');
+    const total = res.bodies.reduce((a, b) => a + K.properties(b.solid).volume, 0);
+    near(total, 2000, 1, 'both halves present');
+    res.dispose();
+  });
+
+  test('bodies: pieces with a gap between them are separate bodies, touching ones are not', () => {
+    // Two rectangles in one sketch, extruded as one new body: a plate and a
+    // pad well away from it. Before, that was one body, and clicking the plate
+    // lit the pad on the far side of the model.
+    const apart = newDocument();
+    apart.features = [
+      {
+        id: 'apartA',
+        type: 'primitive',
+        shape: 'box',
+        op: 'new',
+        targets: 'all',
+        params: { width: '40', depth: '30', height: '4', centered: false, x: '0', y: '0', z: '0' }
+      },
+      {
+        id: 'apartB',
+        type: 'primitive',
+        shape: 'box',
+        op: 'join',
+        targets: 'all',
+        params: { width: '10', depth: '10', height: '4', centered: false, x: '80', y: '0', z: '0' }
+      }
+    ];
+    let res = rebuild(apart);
+    assert(res.bodies.length === 2, `a plate and a pad apart are two bodies, got ${res.bodies.length}`);
+    // The plate stood there first, so it keeps its body's name.
+    near(K.boundingBox(res.bodies[0].solid).max[0], 40, 1e-5, 'the plate kept the name');
+    res.dispose();
+
+    // The same pad set against the plate's edge is one piece of material.
+    const touching = newDocument();
+    touching.features = [
+      { ...apart.features[0], id: 'touchA' },
+      {
+        ...apart.features[1],
+        id: 'touchB',
+        params: { ...apart.features[1].params, x: '40' }
+      }
+    ];
+    res = rebuild(touching);
+    assert(res.bodies.length === 1, `touching pieces stay one body, got ${res.bodies.length}`);
     res.dispose();
   });
 

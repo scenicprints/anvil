@@ -37,14 +37,14 @@ async function press(el) {
 /* ---- 1. a dropdown on the Solid tab, pressed properly ---- */
 dev.setTab('solid');
 await wait(150);
-await press(document.querySelector('[data-menu="primitive"]'));
-report.primitiveMenuOpen = !!document.getElementById('markmenu');
+await press(document.querySelector('[data-menu="pattern"]'));
+report.patternMenuOpen = !!document.getElementById('markmenu');
 
 const items = [...(document.getElementById('markmenu')?.querySelectorAll('button') || [])];
-report.primitiveItems = items.map((b) => b.textContent);
-if (items[1]) await press(items[1]);          // Cylinder
+report.patternItems = items.map((b) => b.textContent);
+if (items[1]) await press(items[1]);          // Circular Pattern
 await wait(400);
-report.afterPressingCylinder = {
+report.afterPressingCircularPattern = {
   menuGone: !document.getElementById('markmenu'),
   dialogTitle: document.getElementById('inspectorTitle')?.textContent,
   dialogOpen: !document.getElementById('inspector')?.classList.contains('hidden')
@@ -68,7 +68,7 @@ report.afterPressingCentreRectangle = {
 };
 
 /* ---- 3. pressing outside still closes a menu ---- */
-await press(document.querySelector('[data-menu="primitive"]') || document.body);
+await press(document.querySelector('[data-menu="pattern"]') || document.body);
 report.reopened = !!document.getElementById('markmenu');
 {
   // On the canvas, which is where a press outside the menu actually lands.

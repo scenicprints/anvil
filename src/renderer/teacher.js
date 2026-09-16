@@ -88,6 +88,7 @@ export function init(hooks) {
   load();
   window.addEventListener('click', guardClick, true);
   window.addEventListener('pointerdown', guardClick, true);
+  window.addEventListener('contextmenu', guardClick, true);
   window.addEventListener('keydown', guardKey, true);
   // Opening a group or changing tab moves the control the ring is drawn round,
   // and in the group's case reveals the real button where a moment ago there
@@ -626,16 +627,27 @@ function targetReal() {
   if (!step || !step.point) return null;
   const p = step.point;
   if (typeof p === 'string') return document.querySelector(p);
-  if (p.cmd) {
-    return (
-      document.querySelector(`[data-cmd="${p.cmd}"]`) ||
-      (p.menu ? document.querySelector(`[data-menu="${p.menu}"]`) : null)
-    );
-  }
-  if (p.menu) return document.querySelector(`[data-menu="${p.menu}"]`);
-  if (p.tool) return document.querySelector(`[data-tool="${p.tool}"]`);
-  if (p.con) return document.querySelector(`[data-con="${p.con}"]`);
+  if (p.cmd) return pick(`[data-cmd="${p.cmd}"]`) || (p.menu ? pick(`[data-menu="${p.menu}"]`) : null);
+  if (p.menu) return pick(`[data-menu="${p.menu}"]`);
+  if (p.tool) return pick(`[data-tool="${p.tool}"]`);
+  if (p.con) return pick(`[data-con="${p.con}"]`);
   return null;
+}
+
+/*
+ * One command can have a button on more than one tab: Create Sketch is on
+ * Solid, Surface, Sheet Metal and Plastic. The step means the one in front of
+ * you, so the copy on the open tab wins, then any copy outside the ribbon, and
+ * only then the first in the document.
+ */
+function pick(selector) {
+  const all = [...document.querySelectorAll(selector)];
+  if (all.length < 2) return all[0] || null;
+  return (
+    all.find((b) => b.closest('.ribbon-panel.active')) ||
+    all.find((b) => !b.closest('.ribbon-panel')) ||
+    all[0]
+  );
 }
 
 /** And the thing on screen that stands for it, which is what the ring goes round. */
@@ -659,8 +671,10 @@ function targetEl() {
 function visible(el) {
   if (!el || el.offsetParent) return el;
   const id = el.dataset.cmd || el.dataset.tool || el.dataset.menu || el.dataset.con;
-  const pin = id ? document.querySelector(`[data-pin-for="${id}"]`) : null;
-  if (pin?.offsetParent) return pin;
+  const pin = id
+    ? [...document.querySelectorAll(`[data-pin-for="${id}"]`)].find((x) => x.offsetParent)
+    : null;
+  if (pin) return pin;
   const trigger = el.closest('.group')?.querySelector('.grp-trigger');
   return trigger?.offsetParent ? trigger : el;
 }

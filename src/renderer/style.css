@@ -242,6 +242,25 @@ select:focus {
 
 /* ---------------- ribbon ---------------- */
 
+/* Laid out the way Fusion's is, because that is the ribbon the hands already
+   know: tabs for the kind of thing being made, and on each a row of named
+   groups, Create, Modify, Assemble, Construct, Inspect, Insert, Select, each
+   showing its most used commands as pictures with its name underneath opening
+   the whole list.
+
+   The chrome stays grey so the model is still the lit thing in the window. The
+   colour is in the pictures, where it says something: blue is a solid, cyan a
+   surface, orange sheet metal, purple a form, green construction, gold
+   inspection. Selection and the tool in hand are the same blue everywhere. */
+
+:root {
+  --sel: #4aa3f0;
+  --sel-2: #2f86d6;
+  --sel-wash: rgba(74, 163, 240, 0.2);
+  --sel-wash-2: rgba(74, 163, 240, 0.32);
+  --tabbar: #2a2f36;
+}
+
 #ribbon {
   flex: none;
   background: var(--paper);
@@ -251,6 +270,7 @@ select:focus {
   display: flex;
   gap: 2px;
   padding: 0 10px;
+  background: var(--tabbar);
   border-bottom: 1px solid var(--rule);
 }
 .tab {
@@ -258,46 +278,59 @@ select:focus {
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
-  padding: 7px 14px 6px;
-  font-size: 12.5px;
-  font-weight: 500;
+  padding: 7px 14px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
   color: var(--ink-3);
 }
 .tab:hover {
   background: none;
-  color: var(--ink-2);
+  color: var(--ink);
 }
 .tab.active {
   color: var(--ink);
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--sel);
+}
+/* Sketch is a tab only while a sketch is open, set apart from the rest in
+   the green of the thing being drawn on. */
+.tab.contextual {
+  display: none;
+  margin-left: 10px;
+  color: #9fe08a;
+}
+body.sketching .tab.contextual,
+.tab.contextual.active {
+  display: block;
+}
+.tab.contextual.active {
+  color: #c6f2ae;
+  border-bottom-color: #72c950;
+  background: rgba(114, 201, 80, 0.12);
 }
 
 .panelbar {
   position: relative;
 }
-/* One slim row. A group is a name in the bar and its commands are a flyout
-   under it, which is what turns thirty shouting buttons into six quiet ones
-   and hands the hundred pixels they occupied back to the model. */
 .ribbon-panel {
   display: none;
   align-items: stretch;
   gap: 0;
-  padding: 4px 8px 3px;
+  padding: 4px 6px 2px;
   min-height: 0;
 }
 .ribbon-panel.active {
   display: flex;
 }
-/* A group is its most used commands as bare icons, with its name underneath
-   opening the rest. Bordered off from the group beside it, the way a toolbar
-   separates one set of tools from another. */
 .group {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: space-between;
   gap: 1px;
-  padding: 0 9px;
+  padding: 0 8px;
   border: none;
   border-right: 1px solid var(--rule);
   max-width: none;
@@ -308,34 +341,60 @@ select:focus {
 .grp-pinned {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
+  min-height: 42px;
 }
 button.pin {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 32px;
+  width: 42px;
+  height: 42px;
   padding: 0;
   border-radius: var(--r-sm);
 }
+button.pin:hover {
+  background: var(--sel-wash);
+}
+button.pin.on {
+  background: var(--sel-wash-2);
+  box-shadow: inset 0 0 0 1px var(--sel);
+}
 button.pin .ico {
-  font-size: 19px;
-  line-height: 20px;
+  display: flex;
+  line-height: 0;
+}
+button.pin .ico svg {
+  width: 32px;
+  height: 32px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+/* The constraints are a row of small marks, the way a sketch palette shows
+   them, rather than a row of large pictures. */
+.group.marks button.pin {
+  width: 28px;
+}
+.group.marks button.pin .ico svg {
+  width: 22px;
+  height: 22px;
 }
 .grp-trigger {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   width: 100%;
   padding: 1px 6px 2px;
   font-size: 9.5px;
   font-weight: 600;
-  letter-spacing: 0.9px;
+  letter-spacing: 0.8px;
   text-transform: uppercase;
   color: var(--ink-3);
   border-radius: var(--r-sm);
+}
+.grp-trigger:hover {
+  background: var(--sel-wash);
+  color: var(--ink);
 }
 .grp-caret {
   font-size: 8px;
@@ -343,45 +402,163 @@ button.pin .ico {
   transform: translateY(-1px);
 }
 .group.open > .grp-trigger {
-  background: var(--paper-3);
+  background: var(--sel-wash-2);
   color: var(--ink);
 }
 /* The group holding the tool in your hand, named for it. */
 .group.has-on > .grp-trigger {
-  background: var(--accent);
-  color: var(--on-accent);
+  color: var(--sel);
 }
 .group.has-on .grp-caret {
-  color: rgba(253, 252, 250, 0.7);
+  color: var(--sel);
 }
 .group.open .grp-caret {
   color: var(--ink-2);
 }
+/* Finish Sketch and Finish Form: the one way out, in green. */
+.group.solo > .grp-trigger {
+  color: #9fe08a;
+}
 
-/* The flyout. The same buttons that used to sit in the ribbon, laid out as a
-   grid, so nothing about a command changed except where it waits. */
+/* The list under a group's name: a picture, a name and a shortcut to a row,
+   with rules between the families, in the order Fusion lists them. */
 .grp-pop {
   display: none;
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 3px);
   left: 0;
   z-index: 50;
+  flex-direction: column;
   background: var(--float);
   border: 1px solid var(--rule);
   border-radius: var(--r);
   box-shadow: var(--lift);
-  padding: 7px;
-  gap: 2px;
-  flex-wrap: wrap;
-  align-content: flex-start;
+  padding: 4px;
+  gap: 0;
   width: max-content;
-  max-width: 560px;
+  min-width: 250px;
+  max-width: 340px;
+  overflow-y: auto;
 }
 .group.open > .grp-pop {
   display: flex;
 }
-.grp-pop .toolopts {
+.grp-pop button.big {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  flex: none;
+  gap: 10px;
   width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 0;
+  padding: 3px 10px 3px 6px;
+  font-size: 12.5px;
+  font-weight: 450;
+  text-align: left;
+  color: var(--ink);
+  border-radius: var(--r-sm);
+}
+.grp-pop button.big .ico {
+  display: flex;
+  flex: none;
+  line-height: 0;
+  opacity: 1;
+}
+.grp-pop button.big .ico svg {
+  width: 24px;
+  height: 24px;
+}
+.grp-pop button.big .lbl {
+  flex: 1;
+  white-space: nowrap;
+}
+.grp-pop button.big .key {
+  flex: none;
+  margin-left: 16px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.grp-pop button.big:hover {
+  background: var(--sel-wash-2);
+  color: var(--ink);
+}
+.grp-pop button.big.on {
+  background: var(--sel-wash-2);
+  box-shadow: inset 2px 0 0 var(--sel);
+  color: var(--ink);
+}
+/* A row with a list of its own says so, the way a submenu does. */
+.grp-pop button.big[data-menu]:not(.tool-menu)::after {
+  content: "\25B8";
+  margin-left: 16px;
+  font-size: 10px;
+  color: var(--ink-3);
+}
+.grp-pop .caret {
+  float: right;
+  margin-left: 10px;
+  padding: 2px 6px;
+  font-size: 0;
+  color: var(--ink-3);
+}
+.grp-pop .caret::before {
+  content: "\25B8";
+  font-size: 10px;
+}
+.gsep {
+  border: none;
+  height: 1px;
+  width: calc(100% - 12px);
+  margin: 4px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  flex: none;
+}
+.grp-pop .toolopts {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 8px;
+}
+.grp-pop .toolopts .fieldrow {
+  width: auto;
+  flex: 1;
+  padding: 2px 4px;
+}
+.grp-pop .toolopts input {
+  width: 64px;
+}
+.grp-pop {
+  overflow-x: hidden;
+}
+.grp-pop .chk {
+  width: 100%;
+  flex: none;
+  padding: 5px 10px 5px 12px;
+  font-size: 12.5px;
+  color: var(--ink);
+  border-radius: var(--r-sm);
+}
+.grp-pop .chk:hover {
+  background: var(--sel-wash);
+}
+.grp-pop .fieldrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 10px 4px 12px;
+  font-size: 12.5px;
+}
+.grp-pop .fieldrow > span {
+  width: 44px;
+  flex: none;
+  color: var(--ink-2);
+}
+.grp-pop .cgrid.wide {
+  padding: 4px 6px;
 }
 
 button.big {
@@ -390,57 +567,12 @@ button.big {
   align-items: center;
   justify-content: flex-start;
   gap: 3px;
-  width: 74px;
-  min-width: 74px;
-  max-width: 74px;
-  min-height: 58px;
-  padding: 8px 4px 6px;
-  font-size: 10.5px;
-  font-weight: 450;
-  line-height: 1.2;
-  text-align: center;
   background: none;
   border-color: transparent;
   border-radius: var(--r);
 }
-/* The label is its own element so a two word name wraps inside the button
-   instead of running out over the one beside it. */
-button.big .lbl {
-  display: block;
-  width: 100%;
-  white-space: normal;
-  overflow-wrap: break-word;
-  hyphens: auto;
-}
-button.big.accent {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--on-accent);
-}
-button.big:hover {
-  background: var(--paper-3);
-  border-color: transparent;
-}
-button.big.on {
-  background: var(--accent);
-  border-color: transparent;
-}
-/* One weight and one size for every glyph, and a step quieter than the label
-   under it, so a grid of them reads as a grid rather than as noise. */
 .ico {
-  font-size: 18px;
-  line-height: 22px;
-  color: var(--ink-2);
-  opacity: 0.9;
-}
-button.big:hover .ico {
-  color: var(--ink);
-  opacity: 1;
-}
-button.big.on .ico,
-button.big.accent .ico {
-  color: var(--on-accent);
-  opacity: 1;
+  line-height: 0;
 }
 
 .cgrid {
@@ -449,24 +581,48 @@ button.big.accent .ico {
   gap: 2px;
 }
 .cgrid.wide {
-  grid-template-columns: repeat(4, 54px);
+  grid-template-columns: repeat(4, 56px);
 }
 .cgrid button {
-  padding: 3px 0;
+  padding: 4px 0;
   font-size: 12px;
   text-align: center;
+  color: var(--ink);
+}
+.cgrid button:hover {
+  background: var(--sel-wash-2);
 }
 .chk {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   font-size: 11.5px;
   color: var(--text-dim);
   width: 110px;
   cursor: pointer;
 }
 .chk input {
-  accent-color: var(--accent);
+  accent-color: var(--sel);
+}
+
+/* The file commands, with their pictures. */
+#topbar button.hdr {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+}
+#topbar button[data-cmd="undo"],
+#topbar button[data-cmd="redo"] {
+  padding: 3px 5px;
+}
+.hdr-ico {
+  display: flex;
+  line-height: 0;
+}
+#cmdopen .cmd-mag {
+  display: inline-flex;
+  line-height: 0;
 }
 
 /* ---------------- workspace ---------------- */
@@ -538,20 +694,30 @@ button.big.accent .ico {
   min-width: 0;
 }
 /* Long names shorten rather than pushing a scrollbar across the panel. */
-.node > span:nth-child(2) {
+.node > span:nth-child(2):not(.node-ico),
+.node > .node-ico + span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.node-ico {
+  display: flex;
+  flex: none;
+  line-height: 0;
+}
+.node.group-head .node-ico {
+  opacity: 0.85;
 }
 .node:hover {
   background: var(--paper-3);
 }
 .node.sel {
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--sel-wash-2);
+  box-shadow: inset 2px 0 0 var(--sel);
+  color: var(--ink);
 }
 .node.sel .caret,
 .node.sel .eye {
-  color: var(--on-accent);
+  color: var(--ink);
 }
 .node .caret {
   width: 11px;
@@ -932,8 +1098,12 @@ table.params .starbtn:hover {
   border-color: transparent;
   background: var(--paper-4);
 }
+.tl-ico {
+  display: flex;
+  line-height: 0;
+}
 .tl-item.sel {
-  border-color: var(--accent);
+  border-color: var(--sel);
   background: var(--paper-2);
 }
 .tl-item.rolled {
@@ -1183,8 +1353,18 @@ canvas.texrow {
   color: var(--ink);
 }
 #markmenu button:hover:not(:disabled) {
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--sel-wash-2);
+  color: var(--ink);
+}
+#markmenu button.with-ico {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 12px 3px 6px;
+}
+.mm-ico {
+  display: flex;
+  line-height: 0;
 }
 .mm-sep {
   height: 1px;
@@ -1793,3 +1973,35 @@ body.teaching .teacher-target button {
 }
 
 .teacher-foot button.hidden { display: none; }
+
+/* A drawing family's pinned icon: pressing it takes the way you draw that
+   shape most, and the small caret in its corner opens the rest. */
+button.pin.pin-family {
+  position: relative;
+}
+button.pin .pin-caret {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  color: var(--ink-3);
+  border-radius: 0 0 var(--r-sm) 0;
+}
+button.pin .pin-caret:hover,
+.caret:hover {
+  color: var(--ink);
+  background: var(--paper-4);
+}
+.caret {
+  border-radius: var(--r-sm);
+  padding: 0 2px;
+}
+/* What pressing the family button takes, marked in its list. */
+#markmenu button.is-default {
+  box-shadow: inset 2px 0 0 var(--sel);
+}
