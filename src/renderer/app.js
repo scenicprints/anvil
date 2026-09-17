@@ -1690,6 +1690,7 @@ function wireUI() {
     setStatus,
     setTab,
     menuCommands,
+    menuOf: (id) => Object.entries(RIBBON_MENUS).find(([, rows]) => rows.some(([r]) => r === id))?.[0] || null,
     lessons: () => CHAPTERS,
     exportText: (name, ext, label, data) => window.anvil.exportText(name, ext, label, data),
     /*

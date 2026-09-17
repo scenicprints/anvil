@@ -1,6 +1,6 @@
 {
   "name": "anvil",
-  "version": "2.81.5",
+  "version": "2.81.6",
   "description": "Local parametric CAD for 3D printing",
   "main": "src/main/main.js",
   "author": "Kevin Wagner",

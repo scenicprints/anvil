@@ -758,11 +758,71 @@ function targetReal() {
   if (!step || !step.point) return null;
   const p = step.point;
   if (typeof p === 'string') return document.querySelector(p);
-  if (p.cmd) return pick(`[data-cmd="${p.cmd}"]`) || (p.menu ? pick(`[data-menu="${p.menu}"]`) : null);
+  if (p.cmd) {
+    return (
+      pick(`[data-cmd="${p.cmd}"]`) ||
+      (p.cmd.startsWith('tool:') ? toolButton(p.cmd.slice(5)) : null) ||
+      (p.menu ? pick(`[data-menu="${p.menu}"]`) : null) ||
+      menuOpener(p.cmd) ||
+      (ELSEWHERE[p.cmd] ? document.querySelector(ELSEWHERE[p.cmd]) : null)
+    );
+  }
   if (p.menu) return pick(`[data-menu="${p.menu}"]`);
-  if (p.tool) return pick(`[data-tool="${p.tool}"]`);
+  if (p.tool) return toolButton(p.tool);
   if (p.con) return pick(`[data-con="${p.con}"]`);
   return null;
+}
+
+/*
+ * A sketch tool's button.
+ *
+ * Most tools have one of their own, but the ones drawn several ways, the
+ * rectangle, circle, arc, polygon, slot and spline, live behind one family
+ * button that lists them all. A step asking for the rectangle means that
+ * button, and looking only for a button of the rectangle's own found nothing
+ * and drew no ring at all.
+ */
+function toolButton(tool) {
+  return (
+    pick(`[data-tool="${tool}"]`) ||
+    [...document.querySelectorAll('[data-tools]')]
+      .filter((b) => b.dataset.tools.split(',').includes(tool))
+      .sort((a, c) => !!c.closest('.ribbon-panel.active') - !!a.closest('.ribbon-panel.active'))[0] ||
+    null
+  );
+}
+
+/*
+ * A command that is an item in a list, like Project / Include or the library
+ * menu, is pointed at by the button that opens the list, found by asking which
+ * list holds it rather than trusting the step to have said.
+ */
+function menuOpener(id) {
+  const name = api?.menuOf?.(id);
+  return name ? pick(`[data-menu="${name}"]`) : null;
+}
+
+/*
+ * The few commands with no button or list at all, pointed at where they are
+ * actually reached. The rest of them are a right click on the model, which is
+ * the whole viewport and not something a ring round it would help with.
+ */
+const ELSEWHERE = {
+  suppress: '#timeline',
+  deleteFeature: '#timeline'
+};
+
+/** What a step points at, for a probe checking the whole campaign. */
+export function targetOf(step) {
+  const held = { lesson: T.lesson, index: T.index };
+  T.lesson = { steps: [step] };
+  T.index = 0;
+  try {
+    return targetReal();
+  } finally {
+    T.lesson = held.lesson;
+    T.index = held.index;
+  }
 }
 
 /*
