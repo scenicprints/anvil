@@ -403,6 +403,7 @@ function rebuildAll() {
     // What the model contributes to this sketch is worked out by the rebuild,
     // so it can only be handed over afterwards.
     state.sketcher.derived = res.sketchProjections?.[state.sketcher.sketch.id] || null;
+    state.sketcher.modelSnaps = sketchModelSnaps();
     state.sketcher.refreshRegions();
     state.sketcher.rebuild();
   }
@@ -1242,6 +1243,7 @@ function handleViewportMove(e) {
   if (state.sketcher.active) {
     state.sketcher.onPointerMove(e);
     updateSnapHint(e);
+    refreshSketchSnapMarkers();
     return;
   }
 
@@ -1648,6 +1650,120 @@ function pickProfile(clientX, clientY) {
   const hits = rc.intersectObjects(state.profileTargets, false);
   if (!hits.length) return null;
   return hits[0].object.userData.profile;
+}
+
+/**
+ * What in the model and in the other sketches a new sketch can snap to.
+ *
+ * Only what lies in the sketch's own plane: the edges round the face being
+ * sketched on, their corners and middles, the centre of a round edge, the
+ * middle of the face, and the points, line middles and circle centres of any
+ * other sketch drawn on the same plane. Something off the plane would snap to
+ * where it happens to be seen from, which is not a place on the sketch at all.
+ */
+function sketchModelSnaps() {
+  const sk = state.sketcher.sketch;
+  const plane = state.sketcher.plane;
+  if (!sk || !plane) return null;
+  const TOL = 1e-3;
+  const points = [];
+  const segments = [];
+  const local = (p) => worldToSketchLocal(plane, Array.isArray(p) ? { x: p[0], y: p[1], z: p[2] } : p);
+  const onPlane = (q) => Math.abs(q.w) < TOL;
+  const add = (q, label, rank) => points.push({ x: q.u, y: q.v, label, rank });
+
+  for (const rec of state.records || []) {
+    const topo = rec.topology;
+    if (!topo) continue;
+    for (const e of topo.edges) {
+      if (e.tangent) continue;
+      const pts = (e.points || []).map(local);
+      if (pts.length < 2 || !pts.every(onPlane)) continue;
+      for (let i = 0; i < pts.length - 1; i++) {
+        segments.push({ a: { x: pts[i].u, y: pts[i].v }, b: { x: pts[i + 1].u, y: pts[i + 1].v }, label: 'On edge' });
+      }
+      if (e.kind === 'line') {
+        const a = pts[0];
+        const b = pts[pts.length - 1];
+        add(a, 'Corner', 3);
+        add(b, 'Corner', 3);
+        add({ u: (a.u + b.u) / 2, v: (a.v + b.v) / 2 }, 'Midpoint of edge', 2);
+      } else if (e.centre) {
+        add(local(e.centre), 'Centre', 2);
+      } else if (!e.closed) {
+        add(pts[0], 'Corner', 3);
+        add(pts[pts.length - 1], 'Corner', 3);
+      }
+    }
+    for (const f of topo.faces) {
+      if (!f.planar || !f.centre) continue;
+      const c = local(f.centre);
+      const n = f.normal || [0, 0, 0];
+      const along = Math.abs(n[0] * plane.n[0] + n[1] * plane.n[1] + n[2] * plane.n[2]);
+      if (onPlane(c) && along > 0.999) add(c, 'Middle of face', 1.5);
+    }
+  }
+
+  for (const other of Object.values(state.doc.sketches || {})) {
+    if (other.id === sk.id) continue;
+    const op = state.result?.sketchPlanes?.[other.id];
+    if (!op) continue;
+    const at = (i) => {
+      const p = other.points?.[i];
+      return p ? local(sketchToWorld(op, p.x, p.y, 0)) : null;
+    };
+    const used = new Set();
+    for (const ent of other.entities || []) {
+      for (const i of ent.p || []) used.add(i);
+      if (ent.type === 'line') {
+        const a = at(ent.p[0]);
+        const b = at(ent.p[1]);
+        if (!a || !b || !onPlane(a) || !onPlane(b)) continue;
+        segments.push({ a: { x: a.u, y: a.v }, b: { x: b.u, y: b.v }, label: 'On sketch line' });
+        add({ u: (a.u + b.u) / 2, v: (a.v + b.v) / 2 }, 'Midpoint of sketch line', 2);
+      } else if (ent.c !== undefined) {
+        const c = at(ent.c);
+        if (c && onPlane(c)) add(c, 'Sketch centre', 2);
+      }
+    }
+    for (const i of used) {
+      const q = at(i);
+      if (q && onPlane(q)) add(q, 'Sketch point', 3);
+    }
+  }
+  return { points, segments };
+}
+
+/**
+ * Show the places a sketch can snap to near the cursor, and the one it has.
+ *
+ * A snap nobody can see is a snap nobody trusts: the label beside the cursor
+ * said a corner had been found, but not which, and there was nothing to say
+ * the corner two centimetres away could be caught at all. So the ones within
+ * reach show as small dots while a drawing tool is in hand, and the one a click
+ * would take is a larger blue one.
+ */
+function refreshSketchSnapMarkers() {
+  if (!state.vp?.setMarkers) return;
+  const sk = state.sketcher;
+  if (!sk.active || !sk.plane) return;
+  const drawing = sk.tool && sk.tool !== 'select';
+  const M = sk.modelSnaps;
+  const points = [];
+  if (drawing && M && sk.cursor) {
+    const reach = 160 * sk.pixelScale();
+    for (const p of M.points) {
+      if (Math.hypot(p.x - sk.cursor.x, p.y - sk.cursor.y) > reach) continue;
+      const w = sketchToWorld(sk.plane, p.x, p.y, 0);
+      points.push({ at: [w.x, w.y, w.z], colour: 0xe6ecf2, size: 12 });
+    }
+  }
+  const info = sk.snapInfo;
+  if (drawing && info && info.label && info.label !== 'grid') {
+    const w = sketchToWorld(sk.plane, info.x, info.y, 0);
+    points.push({ at: [w.x, w.y, w.z], colour: 0x4aa3f0, size: 20 });
+  }
+  state.vp.setMarkers(points.length ? { points } : null);
 }
 
 function updateSnapHint(e) {
@@ -4025,6 +4141,7 @@ function enterSketch(feature, opts = {}) {
   state.activeSketchFeature = feature;
   state.hiddenSketches.delete(sk.id);
   state.sketcher.begin(sk, plane);
+  state.sketcher.modelSnaps = sketchModelSnaps();
   state.sketcher.refreshRegions();
   state.sketcher.rebuild();
   setTab('sketch');
@@ -4076,6 +4193,7 @@ function exitSketch() {
   // model open for the rest of the session, which is the same shape of bug as
   // the value box that used to outlive its feature.
   state.vp.setSlice(null);
+  state.vp.setMarkers?.(null);
   state.vp.setBodyOpacity($('#chkTransparent').checked ? 0.45 : 1);
   syncToolButtons();
   syncSketchTab();

@@ -243,6 +243,11 @@ export class SketchEditor {
     // section where a body crosses the plane. It is rebuilt from the model
     // every time, so it is drawn but never selected, dragged or dimensioned.
     this.derived = null;
+    // Places on the model and on other sketches that lie in this sketch's
+    // plane, handed over by the application after every rebuild: corners,
+    // the middles of edges, centres, the middle of a face, and the edges
+    // themselves. In this sketch's own coordinates.
+    this.modelSnaps = null;
     // What of the sketch is drawn. Construction lines and geometry projected
     // in from the model are both scaffolding: useful while you are placing
     // things against them, and in the way once you are not.
@@ -523,6 +528,18 @@ export class SketchEditor {
           const near = closestOnSegment(pos, pts[i], pts[i + 1]);
           consider(near.x, near.y, { label: 'on projected', onCurve: true }, 0);
         }
+      }
+    }
+
+    // The model and the other sketches. Sketching on a face and not being able
+    // to land on its corner, or the middle of its edge, is aiming by eye at
+    // something the program knows exactly.
+    const M = this.modelSnaps;
+    if (M) {
+      for (const p of M.points) consider(p.x, p.y, { label: p.label, model: true }, p.rank);
+      for (const seg of M.segments) {
+        const near = closestOnSegment(pos, seg.a, seg.b);
+        consider(near.x, near.y, { label: seg.label, model: true, onCurve: true }, 0);
       }
     }
 

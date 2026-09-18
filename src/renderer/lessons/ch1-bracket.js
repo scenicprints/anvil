@@ -16,6 +16,34 @@ import {
   sketch, useTool, done
 } from './kit.js';
 
+/*
+ * A circle of this radius whose centre is the middle of a flat face lying in
+ * the sketch's plane. Measured, so a circle placed by eye near the middle does
+ * not count and one snapped there does, however it was snapped.
+ */
+function circleInFaceMiddle(s, k, radius) {
+  const plane = s.result?.sketchPlanes?.[k.id];
+  if (!plane) return false;
+  const local = (p) => {
+    const d = [p[0] - plane.origin[0], p[1] - plane.origin[1], p[2] - plane.origin[2]];
+    const dot = (a) => d[0] * a[0] + d[1] * a[1] + d[2] * a[2];
+    return { u: dot(plane.x), v: dot(plane.y), w: dot(plane.n) };
+  };
+  const middles = [];
+  for (const r of s.records || []) {
+    for (const f of r.topology?.faces || []) {
+      if (!f.planar || !f.centre) continue;
+      const c = local(f.centre);
+      if (Math.abs(c.w) < 1e-3) middles.push(c);
+    }
+  }
+  return (k.entities || []).some((e) => {
+    if (e.type !== 'circle' || Math.abs(e.r - radius) > 0.01) return false;
+    const c = k.points?.[e.c];
+    return !!c && middles.some((m) => Math.hypot(m.u - c.x, m.v - c.y) < 0.05);
+  });
+}
+
 export default {
   id: 'bracket',
   title: 'Bracket',
@@ -71,10 +99,10 @@ export default {
       madeN('sketch', 2)
     ),
     step(
-      'Draw a circle on it, anywhere sensible.',
+      'Draw a circle 10 mm across in the middle of the face. Take the circle tool, move to the middle of the face until the dot says Middle of face, click, type 10 in Diameter, and Enter.',
       inMenu('circle', 'tool:circle'),
       'tool:circle',
-      (s) => s.sketches().some((k) => (k.entities || []).some((e) => e.type === 'circle'))
+      (s) => s.sketches().some((k) => circleInFaceMiddle(s, k, 5))
     ),
     step(
       'Leave the sketch and make it a hole instead: pick the circle and use Hole.',
