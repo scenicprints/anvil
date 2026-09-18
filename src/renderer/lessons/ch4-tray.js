@@ -68,7 +68,7 @@ export default {
       cmd('unfold'),
       ['unfold', 'refold'],
       (s) => s.has('unfold') || s.has('refold'),
-      { check: noErrors() }
+      { check: noErrors(), needs: ['unfold', 'refold'] }
     ),
     step(
       'Rip a corner so the two walls stop being one piece of metal.',

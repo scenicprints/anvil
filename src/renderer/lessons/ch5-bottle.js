@@ -31,7 +31,8 @@ export default {
       'Blend two curves together, position first and then tangent.',
       inMenu('spline', 'tool:blendCurve'),
       ['tool:blendCurve', 'tool:blendCurveG1'],
-      (s) => s.ranAny(['tool:blendCurve', 'tool:blendCurveG1'])
+      (s) => s.ranAny(['tool:blendCurve', 'tool:blendCurveG1']),
+      { needs: ['tool:blendCurve', 'tool:blendCurveG1'] }
     ),
     step(
       'Sweep a profile along a path to make the body of it.',
@@ -129,7 +130,7 @@ export default {
       cmd('trimSurface'),
       ['trimSurface', 'untrimSurface'],
       (s) => s.has('trimSurface') || s.has('untrimSurface'),
-      { check: noErrors() }
+      { check: noErrors(), needs: ['trimSurface', 'untrimSurface'] }
     ),
     step(
       'Extend a surface to reach something.',
@@ -150,7 +151,7 @@ export default {
       cmd('stitch'),
       ['stitch', 'unstitch'],
       (s) => s.has('stitch') || s.has('unstitch'),
-      { check: noErrors() }
+      { check: noErrors(), needs: ['stitch', 'unstitch'] }
     ),
     step(
       'Reverse a normal so the surface faces the way you meant.',
@@ -171,7 +172,7 @@ export default {
       cmd('project'),
       ['project', 'projectCopy'],
       (s) => s.ranAny(['project', 'projectCopy']),
-      { tab: 'sketch' }
+      { tab: 'sketch', needs: ['project', 'projectCopy'] }
     ),
     step(
       'Take an intersection of the body with the sketch plane.',
@@ -183,7 +184,8 @@ export default {
       'Include a 3D edge, and take the curve where two surfaces cross.',
       cmd('include3D'),
       ['include3D', 'intersectionCurve'],
-      (s) => s.ranAny(['include3D', 'intersectionCurve'])
+      (s) => s.ranAny(['include3D', 'intersectionCurve']),
+      { needs: ['include3D', 'intersectionCurve'] }
     ),
     step(
       'Project a sketch onto a curved surface rather than through it.',
@@ -201,7 +203,8 @@ export default {
       'Bring in artwork: an SVG, then a DXF.',
       inMenu('insert', 'insertSvg'),
       ['insertSvg', 'insertDxf'],
-      (s) => s.ranAny(['insertSvg', 'insertDxf'])
+      (s) => s.ranAny(['insertSvg', 'insertDxf']),
+      { needs: ['insertSvg', 'insertDxf'] }
     )
   ]
 };

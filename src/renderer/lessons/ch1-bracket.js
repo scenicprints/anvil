@@ -28,24 +28,27 @@ export default {
       made('sketch'),
       { tab: 'solid', play: sketch('XY', 'rectangle', []) }
     ),
+    /*
+     * Placing it and sizing it are one step, because the program makes them
+     * one gesture: after the first corner the Width and Height boxes are right
+     * there by the cursor, and typing into them is the dimensioning. Split in
+     * two, the lesson could not see the first half until the rectangle was
+     * closed, by which time the sizes it was about to ask for had been typed.
+     *
+     * Either way counts: typed while drawing, or drawn rough and dimensioned
+     * after with Sketch Dimension.
+     */
     step(
-      'Draw a rough rectangle. Two corners, and do not aim: the size comes later.',
+      'Draw a rectangle 80 by 60. Click one corner, then type 80 in Width, Tab, 60 in Height, and Enter. Or draw it rough and dimension the two sides after.',
       tool('rectangle'),
-      ['tool:rectangle', 'tool:select'],
-      (s) => s.sketches().some((k) => (k.entities || []).length >= 4),
+      ['tool:rectangle', 'tool:select', 'tool:dimension'],
+      (s) =>
+        s.sketches().some(
+          (k) =>
+            (k.entities || []).length >= 4 &&
+            (k.constraints || []).filter((c) => c.type === 'distance' || c.type === 'length').length >= 2
+        ),
       { play: useTool('rectangle', [[-40, -30], [40, 30]]) }
-    ),
-    step(
-      'Now say how big it is. Dimension the long side to 80.',
-      tool('dimension'),
-      'tool:dimension',
-      (s) => s.sketches().some((k) => (k.constraints || []).some((c) => c.type === 'distance' || c.type === 'length'))
-    ),
-    step(
-      'And the short side to 60. Watch the blue go: blue means it can still move.',
-      tool('dimension'),
-      'tool:dimension',
-      (s) => s.sketches().some((k) => (k.constraints || []).filter((c) => c.type === 'distance' || c.type === 'length').length >= 2)
     ),
     step(
       'Finish the sketch.',
@@ -177,31 +180,36 @@ export default {
       'Draw a line, then a centre rectangle, then a three point rectangle. Three ways of saying the same shape.',
       tool('line'),
       ['tool:line', 'tool:centerRectangle', 'tool:rectangle3'],
-      ran('tool:line')
+      ran('tool:line'),
+      { needs: ['tool:line', 'tool:centerRectangle', 'tool:rectangle3'] }
     ),
     step(
       'Two point circle, three point circle, then the two tangent and three tangent ones.',
       inMenu('circle', 'tool:circleDia'),
       ['tool:circleDia', 'tool:circle3', 'tool:circleTan2', 'tool:circleTan3'],
-      ran('tool:circleDia')
+      ran('tool:circleDia'),
+      { needs: ['tool:circleDia', 'tool:circle3', 'tool:circleTan2', 'tool:circleTan3'] }
     ),
     step(
       'Now the arcs: centre point, three point, and the tangent arc that carries on from a line.',
       inMenu('arc', 'tool:arc'),
       ['tool:arc', 'tool:arc3', 'tool:tangentArc'],
-      ran('tool:arc')
+      ran('tool:arc'),
+      { needs: ['tool:arc', 'tool:arc3', 'tool:tangentArc'] }
     ),
     step(
       'Horizontal and vertical. The two constraints you will use more than all the others together.',
       con('horizontal'),
       ['con:horizontal', 'con:vertical'],
-      ran('con:horizontal')
+      ran('con:horizontal'),
+      { needs: ['con:horizontal', 'con:vertical'] }
     ),
     step(
       'Parallel and perpendicular, on two lines that are neither.',
       con('parallel'),
       ['con:parallel', 'con:perpendicular'],
-      ran('con:parallel')
+      ran('con:parallel'),
+      { needs: ['con:parallel', 'con:perpendicular'] }
     ),
     step(
       'Tangent, between a line and an arc.',

@@ -193,7 +193,8 @@ export default {
       'Isolate one body, then show everything again.',
       cmd('isolate'),
       ['isolate', 'unisolate', 'hideSelected', 'showAll'],
-      (s) => s.ranAny(['isolate', 'unisolate', 'hideSelected', 'showAll'])
+      (s) => s.ranAny(['isolate', 'unisolate', 'hideSelected', 'showAll']),
+      { needs: ['isolate',  ['unisolate', 'showAll']] }
     ),
     step(
       'Bring in another design as a component.',
@@ -211,7 +212,8 @@ export default {
       'Point the library somewhere, and search it.',
       cmd('chooseLibrary'),
       ['chooseLibrary', 'searchLibrary'],
-      (s) => s.ranAny(['chooseLibrary', 'searchLibrary'])
+      (s) => s.ranAny(['chooseLibrary', 'searchLibrary']),
+      { needs: ['chooseLibrary', 'searchLibrary'] }
     ),
     step(
       'Add a profile, switch to it, give it a picture and take the picture off again.',

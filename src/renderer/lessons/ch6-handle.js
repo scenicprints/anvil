@@ -29,13 +29,15 @@ export default {
       'The other five starting shapes: plane, cylinder, sphere, torus and quadball.',
       inMenu('formCreate', 'formPlane'),
       ['formPlane', 'formCylinder', 'formSphere', 'formTorus', 'formQuadball'],
-      (s) => s.ranAny(['formPlane', 'formCylinder', 'formSphere', 'formTorus', 'formQuadball'])
+      (s) => s.ranAny(['formPlane', 'formCylinder', 'formSphere', 'formTorus', 'formQuadball']),
+      { needs: ['formPlane', 'formCylinder', 'formSphere', 'formTorus', 'formQuadball'] }
     ),
     step(
       'And the five built from curves: extrude, revolve, sweep, loft and pipe.',
       inMenu('formCreate', 'formExtrudeCurve'),
       ['formExtrudeCurve', 'formRevolveCurve', 'formSweepCurve', 'formLoftCurves', 'formPipeCurve'],
-      (s) => s.ranAny(['formExtrudeCurve', 'formRevolveCurve', 'formSweepCurve', 'formLoftCurves', 'formPipeCurve'])
+      (s) => s.ranAny(['formExtrudeCurve', 'formRevolveCurve', 'formSweepCurve', 'formLoftCurves', 'formPipeCurve']),
+      { needs: ['formExtrudeCurve', 'formRevolveCurve', 'formSweepCurve', 'formLoftCurves', 'formPipeCurve'] }
     ),
     step(
       'Add a face to the cage by hand.',
@@ -53,19 +55,22 @@ export default {
       'Grow the selection a ring, then shrink it back.',
       inMenu('formSelect', 'formGrow'),
       ['formGrow', 'formShrink'],
-      (s) => s.ranAny(['formGrow', 'formShrink'])
+      (s) => s.ranAny(['formGrow', 'formShrink']),
+      { needs: ['formGrow', 'formShrink'] }
     ),
     step(
       'Select a loop across the quads, and a ring along them. They are different questions.',
       inMenu('formSelect', 'formLoop'),
       ['formLoop', 'formRing'],
-      (s) => s.ranAny(['formLoop', 'formRing'])
+      (s) => s.ranAny(['formLoop', 'formRing']),
+      { needs: ['formLoop', 'formRing'] }
     ),
     step(
       'Invert the selection, and select the lot.',
       inMenu('formSelect', 'formInvert'),
       ['formInvert', 'formSelectAll'],
-      (s) => s.ranAny(['formInvert', 'formSelectAll'])
+      (s) => s.ranAny(['formInvert', 'formSelectAll']),
+      { needs: ['formInvert', 'formSelectAll'] }
     ),
     step(
       'Insert an edge where you need more control.',
@@ -95,13 +100,15 @@ export default {
       'Delete a face, and erase one, which are not the same thing.',
       inMenu('formShape', 'formDelete'),
       ['formDelete', 'formErase'],
-      (s) => s.ranAny(['formDelete', 'formErase'])
+      (s) => s.ranAny(['formDelete', 'formErase']),
+      { needs: ['formDelete', 'formErase'] }
     ),
     step(
       'Weld two points into one, then unweld them.',
       inMenu('formWeld', 'formWeld'),
       ['formWeld', 'formUnweld'],
-      (s) => s.ranAny(['formWeld', 'formUnweld'])
+      (s) => s.ranAny(['formWeld', 'formUnweld']),
+      { needs: ['formWeld', 'formUnweld'] }
     ),
     step(
       'Merge two edges.',
@@ -113,7 +120,8 @@ export default {
       'Crease an edge so the surface holds a corner there, then uncrease it.',
       inMenu('formCrease', 'formCrease'),
       ['formCrease', 'formUncrease'],
-      (s) => s.ranAny(['formCrease', 'formUncrease'])
+      (s) => s.ranAny(['formCrease', 'formUncrease']),
+      { needs: ['formCrease', 'formUncrease'] }
     ),
     step(
       'Bevel an edge of the cage.',
@@ -125,7 +133,8 @@ export default {
       'Smooth a run of points, and straighten another.',
       inMenu('formTidy', 'formSmooth'),
       ['formSmooth', 'formStraighten'],
-      (s) => s.ranAny(['formSmooth', 'formStraighten'])
+      (s) => s.ranAny(['formSmooth', 'formStraighten']),
+      { needs: ['formSmooth', 'formStraighten'] }
     ),
     step(
       'Cylindrify a ring so it is actually round.',
@@ -137,7 +146,8 @@ export default {
       'Flatten a set of points onto a plane, and even out the spacing with Uniform.',
       inMenu('formTidy', 'formFlatten'),
       ['formFlatten', 'formUniform'],
-      (s) => s.ranAny(['formFlatten', 'formUniform'])
+      (s) => s.ranAny(['formFlatten', 'formUniform']),
+      { needs: ['formFlatten', 'formUniform'] }
     ),
     step(
       'Slide a point along the surface rather than through it.',
@@ -155,7 +165,8 @@ export default {
       'Interpolate a run of points, then take it off again.',
       inMenu('formTidy', 'formInterpolate'),
       ['formInterpolate', 'formUninterpolate'],
-      (s) => s.ranAny(['formInterpolate', 'formUninterpolate'])
+      (s) => s.ranAny(['formInterpolate', 'formUninterpolate']),
+      { needs: ['formInterpolate', 'formUninterpolate'] }
     ),
     step(
       'Build it from a curve instead.',
@@ -167,7 +178,8 @@ export default {
       'Freeze part of the cage so it stops moving when its neighbours do, then unfreeze it.',
       inMenu('formTidy', 'formFreeze'),
       ['formFreeze', 'formUnfreeze'],
-      (s) => s.ranAny(['formFreeze', 'formUnfreeze'])
+      (s) => s.ranAny(['formFreeze', 'formUnfreeze']),
+      { needs: ['formFreeze', 'formUnfreeze'] }
     ),
     step(
       'Mirror the cage so the two halves are the same thing rather than two things that match.',
@@ -185,7 +197,8 @@ export default {
       'Switch the display: the cage, the surface, and the cage over the surface. The last is the one to work in.',
       inMenu('formDisplay', 'formDisplayBox'),
       ['formDisplayBox', 'formDisplayControl', 'formDisplaySmooth'],
-      (s) => s.ranAny(['formDisplayBox', 'formDisplayControl', 'formDisplaySmooth'])
+      (s) => s.ranAny(['formDisplayBox', 'formDisplayControl', 'formDisplaySmooth']),
+      { needs: ['formDisplayBox', 'formDisplayControl', 'formDisplaySmooth'] }
     ),
     step(
       'Repair the cage. Break it on purpose first if it will not complain.',

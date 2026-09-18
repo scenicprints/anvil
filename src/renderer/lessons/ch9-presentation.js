@@ -87,13 +87,14 @@ export default {
       cmd('rollbackPrev'),
       ['rollbackStart', 'rollbackPrev', 'rollbackNext', 'rollbackEnd'],
       (s) => s.ranAny(['rollbackStart', 'rollbackPrev', 'rollbackNext', 'rollbackEnd']),
-      { tab: 'view' }
+      { tab: 'view', needs: [['rollbackStart', 'rollbackPrev'], ['rollbackNext', 'rollbackEnd']] }
     ),
     step(
       'Go home, and switch between perspective and orthographic. Orthographic is the one to model in.',
       cmd('home'),
       ['home', 'toggleProjection'],
-      (s) => s.ranAny(['home', 'toggleProjection'])
+      (s) => s.ranAny(['home', 'toggleProjection']),
+      { needs: ['home', 'toggleProjection'] }
     )
   ]
 };

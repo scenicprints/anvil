@@ -435,7 +435,7 @@ export function skip() {
 /* ------------------------------------------------------------------ */
 
 export function noteCommand(id) {
-  T.recent.push({ id, at: Date.now(), n: T.seq++ });
+  T.recent.push({ id, at: Date.now(), n: T.seq++, sig: sketchSig(), sketching: !!api?.getState?.().sketcher?.active });
   if (T.recent.length > 60) T.recent.shift();
   if (!T.open) {
     // The ledger records what you have used whether or not a lesson is running,
@@ -463,6 +463,48 @@ export function noteConstraint(id) {
 
 export function noteRebuild() {
   if (T.open) poll();
+}
+
+/*
+ * What the sketches hold, as one string, so "has the sketch changed since"
+ * is one comparison. Only what is drawn and constrained: opening an empty
+ * sketch is not drawing anything.
+ */
+function sketchSig() {
+  try {
+    const all = Object.values(api?.getState?.().doc?.sketches || {});
+    return (
+      JSON.stringify(all.flatMap((k) => k.entities || [])) +
+      '|' +
+      JSON.stringify(all.flatMap((k) => k.constraints || []))
+    );
+  } catch {
+    return '';
+  }
+}
+
+/*
+ * Commands that are done the moment they run, even inside a sketch, because
+ * they change how it is seen or what is held rather than what is drawn.
+ */
+const DONE_ON_RUN = new Set(['sketchCopy', 'lookAt', 'finishSketch', 'newSketch', 'tool:select']);
+
+/**
+ * Was this command used, and did it do its work, since the step began?
+ *
+ * Picking up a sketch tool is not using it: the Trim step used to tick the
+ * moment Trim was pressed, and then move the lesson on before anything had been
+ * trimmed. So a sketch tool, a constraint, or any command given inside a
+ * sketch counts only once the sketch has actually changed after it.
+ */
+function ranSince(id) {
+  const sig = sketchSig();
+  return T.recent.some((r) => {
+    if (r.n < T.since || r.id !== id) return false;
+    const drawn = id.startsWith('tool:') || id.startsWith('con:') || r.sketching;
+    if (!drawn || DONE_ON_RUN.has(id)) return true;
+    return r.sig !== sig;
+  });
 }
 
 /**
@@ -493,6 +535,12 @@ function poll() {
   // Already true on arrival: only doing the step's own thing counts, whether
   // during this step or as the action that finished the one before.
   if (T.stale && !T.auto && !usedSince(step, T.prevSince)) return;
+  // A step made of several parts, "this, then that", is finished when all of
+  // them are, not at the first. An entry that is a list is any one of it.
+  if (step.needs && !T.auto) {
+    const snap = snapshot();
+    if (!step.needs.every((n) => (Array.isArray(n) ? snap.ranAny(n) : snap.ran(n)))) return;
+  }
 
   T.marks[T.index] = 'done';
   tick(step.covers);
@@ -578,8 +626,9 @@ function snapshot() {
      * in the document to assert on. Where there is something better to ask,
      * ask that instead.
      */
-    ran: (id) => T.recent.some((r) => r.n >= T.since && r.id === id),
-    ranAny: (ids) => T.recent.some((r) => r.n >= T.since && ids.includes(r.id)),
+    ran: (id) => ranSince(id),
+    ranAny: (ids) => ids.some((id) => ranSince(id)),
+    ranAll: (ids) => ids.every((id) => ranSince(id)),
     selected: () => ({
       faces: s.selection?.faces.size || 0,
       edges: s.selection?.edges.size || 0,

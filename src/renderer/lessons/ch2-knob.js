@@ -74,7 +74,8 @@ export default {
       'Move something in the sketch, then copy and paste it.',
       cmd('sketchMove'),
       ['sketchMove', 'sketchCopy', 'sketchPaste'],
-      (s) => s.ranAny(['sketchMove', 'sketchCopy', 'sketchPaste'])
+      (s) => s.ranAny(['sketchMove', 'sketchCopy', 'sketchPaste']),
+      { needs: ['sketchMove', 'sketchCopy', 'sketchPaste'] }
     ),
     step(
       'Mirror sketch geometry about the centreline.',
@@ -92,7 +93,8 @@ export default {
       'Pattern inside the sketch: a rectangular grid, then a circular ring.',
       cmd('sketchPatternRect'),
       ['sketchPatternRect', 'sketchPatternCirc'],
-      (s) => s.ranAny(['sketchPatternRect', 'sketchPatternCirc'])
+      (s) => s.ranAny(['sketchPatternRect', 'sketchPatternCirc']),
+      { needs: ['sketchPatternRect', 'sketchPatternCirc'] }
     ),
     step(
       'Cut the knurl: a circular pattern of the notch, all the way round.',

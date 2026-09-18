@@ -57,7 +57,7 @@ export default {
       cmd('selectGrow'),
       ['selectGrow', 'selectShrink'],
       (s) => s.ranAny(['selectGrow', 'selectShrink']),
-      { tab: 'solid' }
+      { tab: 'solid', needs: ['selectGrow'] }
     ),
     step(
       'Select everything like the one you picked. On a drilled plate that is every hole of that size.',
@@ -87,7 +87,8 @@ export default {
       'Invert it, and take every outside edge at once.',
       cmd('selectInvert'),
       ['selectInvert', 'selectAllEdges'],
-      (s) => s.ranAny(['selectInvert', 'selectAllEdges'])
+      (s) => s.ranAny(['selectInvert', 'selectAllEdges']),
+      { needs: ['selectInvert', 'selectAllEdges'] }
     ),
     step(
       'Save that selection so you can come back to it.',
@@ -99,7 +100,8 @@ export default {
       'Now narrow what a click can land on. Faces only, then edges, bodies, components and sketch geometry, then back to anything.',
       inMenu('selectPriority', 'priorityFace'),
       ['priorityFace', 'priorityEdge', 'priorityBody', 'priorityComponent', 'prioritySketch', 'priorityAuto'],
-      (s) => s.ranAny(['priorityFace', 'priorityEdge', 'priorityBody', 'priorityComponent', 'prioritySketch'])
+      (s) => s.ranAny(['priorityFace', 'priorityEdge', 'priorityBody', 'priorityComponent', 'prioritySketch']),
+      { needs: ['priorityFace', 'priorityEdge', 'priorityBody', 'priorityComponent', 'prioritySketch', 'priorityAuto'] }
     ),
     step(
       'Weigh it. Centre of mass, with the material it is actually made of.',
@@ -135,7 +137,8 @@ export default {
       'Isocurves, and an environment map to read reflections off it.',
       inMenu('inspect', 'isocurveAnalysis'),
       ['isocurveAnalysis', 'environmentMap'],
-      (s) => s.ranAny(['isocurveAnalysis', 'environmentMap'])
+      (s) => s.ranAny(['isocurveAnalysis', 'environmentMap']),
+      { needs: ['isocurveAnalysis', 'environmentMap'] }
     ),
     step(
       'Accessibility: can a tool reach it at all.',
@@ -161,7 +164,7 @@ export default {
       cmd('colourByComponent'),
       ['colourByComponent', 'colourByFeature', 'clearAnalysis'],
       (s) => s.ranAny(['colourByComponent', 'colourByFeature', 'clearAnalysis']),
-      { tab: 'solid' }
+      { tab: 'solid', needs: ['colourByComponent', 'colourByFeature', 'clearAnalysis'] }
     ),
     step(
       'Now the plastic features. A boss to take a screw.',
@@ -175,7 +178,7 @@ export default {
       inMenu('plastic', 'rest'),
       ['rest', 'snapFit', 'lip'],
       (s) => s.has('rest') || s.has('snapFit') || s.has('lip'),
-      { check: noErrors() }
+      { check: noErrors(), needs: ['rest', 'snapFit', 'lip'] }
     ),
     step(
       'Run a simulation. Load a face, fix another, and see where it is worst.',

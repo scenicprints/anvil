@@ -174,7 +174,7 @@ export default {
       cmd('meshSeparate'),
       ['meshSeparate', 'meshMerge'],
       (s) => s.has('meshSeparate') || s.has('meshMerge'),
-      { check: noErrors() }
+      { check: noErrors(), needs: ['meshSeparate', 'meshMerge'] }
     ),
     step(
       'Move vertices directly, which is the only editing a mesh really has.',
@@ -200,7 +200,8 @@ export default {
       'Pin a group by hand where the angle got it wrong, combine two, and release them back to the angle.',
       inMenu('faceGroups', 'createFaceGroup'),
       ['createFaceGroup', 'combineFaceGroups', 'releaseFaceGroups', 'faceGroupEdit'],
-      (s) => s.has('faceGroupEdit') || s.ranAny(['createFaceGroup', 'combineFaceGroups', 'releaseFaceGroups'])
+      (s) => s.has('faceGroupEdit') || s.ranAny(['createFaceGroup', 'combineFaceGroups', 'releaseFaceGroups']),
+      { needs: ['createFaceGroup', 'combineFaceGroups', 'releaseFaceGroups'] }
     ),
     step(
       'Read the shape back: Recognise finds the holes and the flats.',
