@@ -314,8 +314,10 @@ function toolForLineEdge(topo, edge, size, kind, scope, opts = {}) {
   const a2 = [1, 0];
   const b2 = [dot(uB, e1), dot(uB, e2)];
 
-  const contour = cornerProfile(a2, b2, size, kind, undefined, opts);
-  if (!contour) return null;
+  // Past both faces by a hair, for the same reason as a round edge below.
+  const raw = cornerProfile(a2, b2, size, kind, undefined, opts);
+  if (!raw) return null;
+  const contour = outsetLegs(raw, a2, b2);
 
   const height = edge.length + EXTEND * 2;
   const solid = K.extrudeContours([contour], { height }, scope);
@@ -353,8 +355,14 @@ function toolForCircleEdge(topo, edge, size, kind, scope, opts = {}) {
   const b2 = project(edge.dirB);
   if (!a2 || !b2) return null;
 
-  const contour = cornerProfile(a2, b2, size, kind, undefined, opts);
-  if (!contour) return null;
+  // Pushed a hair past both faces, as the variable blend already is. Revolved
+  // and turned into place, a profile whose legs lie exactly on the faces lands
+  // a rounding error inside one of them, and the cut leaves a skin of the face
+  // no thicker than that across the whole chamfer: the top of a hole kept its
+  // old edge and grew a second, inside out, face under it.
+  const raw = cornerProfile(a2, b2, size, kind, undefined, opts);
+  if (!raw) return null;
+  const contour = outsetLegs(raw, a2, b2);
 
   // Move the profile out to the edge's radius and revolve it about the axis.
   const R = edge.radius;

@@ -1699,6 +1699,11 @@ export class Viewport {
    * because a face is a subset of triangles, not an object of its own.
    */
   setHighlight({ faces = [], edges = [], hoverFace = null, hoverEdge = null } = {}) {
+    // Kept, so the edges can be drawn again at the right width when the view
+    // zooms: their width is set in pixels, and a pixel is a different size in
+    // the model every time the camera moves in or out.
+    this._highlight = { faces, edges, hoverFace, hoverEdge };
+    this._highlightPx = this.pixelSize();
     if (!this.highlightGroup) {
       this.highlightGroup = new THREE.Group();
       this.overlayGroup.add(this.highlightGroup);
@@ -1746,30 +1751,41 @@ export class Viewport {
       g.add(m);
     };
 
-    const edgeLine = (ref, color) => {
+    /*
+     * An edge drawn as a tube a few pixels across rather than as a line.
+     *
+     * WebGL draws every line one pixel wide whatever it is asked for, and the
+     * hovered edge was a one pixel line in nearly the colour of the edge under
+     * it: the edge a fillet was waiting for gave no sign at all that the mouse
+     * was on it. A tube has a width, and its width is set in pixels at the
+     * current zoom so it reads the same near and far.
+     */
+    const px = this.pixelSize();
+    const edgeLine = (ref, color, widthPx) => {
       const entry = this.bodies.get(ref.bodyId);
       if (!entry || !entry.record?.topology) return;
       const edge = entry.record.topology.edges[ref.edgeId];
-      if (!edge) return;
-      const verts = [];
+      if (!edge || !edge.points || edge.points.length < 2) return;
+      const path = new THREE.CurvePath();
       for (let i = 0; i < edge.points.length - 1; i++) {
-        const a = edge.points[i];
-        const b = edge.points[i + 1];
-        verts.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+        const a = new THREE.Vector3(...edge.points[i]);
+        const b = new THREE.Vector3(...edge.points[i + 1]);
+        if (a.distanceToSquared(b) > 1e-14) path.add(new THREE.LineCurve3(a, b));
       }
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-      const mat = new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true });
-      const line = new THREE.LineSegments(geom, mat);
-      line.renderOrder = 9;
-      g.add(line);
+      if (!path.curves.length) return;
+      const geom = new THREE.TubeGeometry(path, Math.max(2, path.curves.length * 2), (px * widthPx) / 2, 6, false);
+      const mat = new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 });
+      const tube = new THREE.Mesh(geom, mat);
+      tube.renderOrder = 9;
+      g.add(tube);
     };
 
-    // Hover is a whisper in grey; the accent is spent only on what is chosen.
+    // Hover is a whisper on a face, which is large; on an edge, which is thin,
+    // it has to be seen or it is not there at all.
     if (hoverFace) faceMesh(hoverFace, 0x6f6b62, 0.22);
     for (const f of faces) faceMesh(f, 0xd84b1e, 0.4);
-    if (hoverEdge) edgeLine(hoverEdge, 0x4a463e);
-    for (const e of edges) edgeLine(e, 0xd84b1e);
+    for (const e of edges) edgeLine(e, 0xd84b1e, 4);
+    if (hoverEdge) edgeLine(hoverEdge, 0x4aa3f0, 5);
 
     this.invalidate();
   }
@@ -2391,6 +2407,12 @@ export class Viewport {
     // The manipulator is held at one size on screen, so it has to be resized
     // whenever the view moves rather than only when the selection changes.
     this._sizeGizmo();
+    // Highlighted edges are tubes a few pixels wide, so a zoom of more than a
+    // few percent draws them again at the new scale.
+    if (this._highlight && (this._highlight.edges.length || this._highlight.hoverEdge)) {
+      const ratio = this.pixelSize() / (this._highlightPx || 1);
+      if (ratio > 1.08 || ratio < 0.92) this.setHighlight(this._highlight);
+    }
     // Which side of the slice to throw away depends on where the camera is, so
     // it is worked out per frame rather than once when the slice was asked for.
     this._applySlice();

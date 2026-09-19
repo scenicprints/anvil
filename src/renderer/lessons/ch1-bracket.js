@@ -111,7 +111,7 @@ export default {
       (s) => !s.sketching
     ),
     step(
-      'Now Hole. It finds the centre of the circle on its own. Set the diameter to 10 to match it, leave it going all the way through, and press OK.',
+      'Now Hole. It finds the circle on its own and takes its size, 10 mm, all the way through. Press OK.',
       cmd('hole'),
       ['hole', 'hole:simple'],
       (s) => s.features('hole').some((f) => parseFloat(f.diameter) === 10),

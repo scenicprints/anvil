@@ -7465,8 +7465,15 @@ function startFeatureDialog(type) {
     }
     const sk = state.doc.sketches[sketchId];
     const pointIdx = sk.entities.filter((e) => e.type === 'point').map((e) => e.p);
-    const centres = sk.entities.filter((e) => e.type === 'circle').map((e) => e.c);
+    const circles = sk.entities.filter((e) => e.type === 'circle');
+    const centres = circles.map((e) => e.c);
     const all = [...new Set([...pointIdx, ...centres])];
+    // A circle drawn where a hole goes already says how big the hole is, so
+    // the hole takes that size rather than asking for it a second time. The
+    // largest if they differ, since a hole smaller than its circle is the
+    // surprise; points alone keep the usual 5.
+    const drawn = circles.length ? Math.max(...circles.map((e) => e.r * 2)) : null;
+    const holeDiameter = drawn ? String(Math.round(drawn * 1e4) / 1e4) : '5';
     if (!all.length) {
       setStatus('That sketch has no points or circles to place holes at.');
       return;
@@ -7485,7 +7492,7 @@ function startFeatureDialog(type) {
       leftHanded: false,
       op: 'cut',
       targets: 'all',
-      diameter: '5',
+      diameter: holeDiameter,
       depth: '10',
       through: true,
       flip: false,
