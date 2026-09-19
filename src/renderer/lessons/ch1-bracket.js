@@ -105,10 +105,16 @@ export default {
       (s) => s.sketches().some((k) => circleInFaceMiddle(s, k, 5))
     ),
     step(
-      'Leave the sketch and make it a hole instead: pick the circle and use Hole.',
+      'Finish the sketch. The circle stays behind as the place the hole goes.',
+      cmd('finishSketch'),
+      'finishSketch',
+      (s) => !s.sketching
+    ),
+    step(
+      'Now Hole. It finds the centre of the circle on its own. Set the diameter to 10 to match it, leave it going all the way through, and press OK.',
       cmd('hole'),
       ['hole', 'hole:simple'],
-      made('hole'),
+      (s) => s.features('hole').some((f) => parseFloat(f.diameter) === 10),
       { check: all(noErrors(), changed()) }
     ),
     step(

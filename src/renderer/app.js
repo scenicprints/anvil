@@ -660,7 +660,7 @@ function handleViewportDown(e) {
       const plane = state.vp.pickPlane(e.clientX, e.clientY);
       if (plane) return pickIntoEdit({ kind: 'plane', planeName: plane.planeName });
     }
-    const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: wantsEdges });
+    const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: wantsEdges, edgeReach: edgeReach() });
     if (hit) return pickIntoEdit(hit);
     // The other way round for a direction: the origin planes are sixty across
     // and hang through the middle of everything, so offering them first meant
@@ -1295,7 +1295,7 @@ function handleViewportMove(e) {
       return;
     }
   }
-  const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: filter.edges !== false });
+  const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: filter.edges !== false, edgeReach: edgeReach() });
   const nextFace =
     hit && hit.kind === 'face' && hit.faceId !== null && filter.faces
       ? { bodyId: hit.bodyId, faceId: hit.faceId }
@@ -16534,6 +16534,27 @@ function setEditPick(which) {
  * Fold a viewport click into whichever dialog field is armed. Returns true when
  * it was taken, so ordinary selection does not also happen.
  */
+/** A wider reach for edges while a fillet or a chamfer is waiting for them. */
+function edgeReach() {
+  return blendPickRow(state.editing?.pickInto) ? 11 : undefined;
+}
+
+/*
+ * Whether an edge of the previewed model belongs to the blend being made.
+ *
+ * While the dialog is open the viewport shows the fillet already applied, so
+ * the part being clicked is the rounded one. Its round has edges of its own,
+ * and it runs smoothly into the edges beside it, so a click on the next edge
+ * along chained round the new round and took two or three edges nobody meant,
+ * some of which do not exist on the part the fillet is actually applied to.
+ * Those are left out: an edge counts only if it lies between two faces that
+ * were there before this feature.
+ */
+function madeByThisBlend(edge, topo, featureId) {
+  const between = edgeReference(edge, topo).between || [];
+  return between.length < 2 || between.some((b) => !b || b.tag === featureId);
+}
+
 function pickIntoEdit(hit) {
   const ed = state.editing;
   if (!ed || !ed.pickInto) return false;
@@ -16592,6 +16613,10 @@ function pickIntoEdit(hit) {
     const edge = record?.topology?.edges.find((e) => e.id === hit.edgeId);
     if (!edge) return true;
     set[list] = set[list] || [];
+    if (madeByThisBlend(edge, record.topology, f.id)) {
+      setStatus(`That edge is part of the ${f.type} being previewed. Click an edge of the part itself.`);
+      return true;
+    }
     const ref = edgeReference(edge, record.topology);
 
     // Tangent Chain, on by default the same as Fusion. One click takes the
@@ -16600,11 +16625,11 @@ function pickIntoEdit(hit) {
     // thirty. A hold line is exempt: it is a single edge by definition.
     const chained =
       list === 'edges' && set.tangentChain !== false
-        ? SEL.tangentEdgeRun(record.topology, [edge.id])
+        ? SEL.tangentEdgeRun(record.topology, [edge.id], 15, (e) => madeByThisBlend(e, record.topology, f.id))
         : [edge.id];
     const refs = chained
       .map((id) => record.topology.edges.find((e) => e.id === id))
-      .filter(Boolean)
+      .filter((e) => e && !madeByThisBlend(e, record.topology, f.id))
       .map((e) => edgeReference(e, record.topology));
 
     // Clicking an edge that is already in takes its whole run back out, so the

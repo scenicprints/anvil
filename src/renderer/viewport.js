@@ -2131,12 +2131,19 @@ export class Viewport {
     if (opts.edges !== false) {
       let best = null;
       const px = this.pixelSize();
-      rc.params.Line = { threshold: px * 5 };
+      // How near an edge a click has to land. Five pixels is right when faces
+      // and edges are both wanted; a tool that only takes edges says so, and
+      // gets the more forgiving reach, because a near miss there can only have
+      // meant the edge.
+      rc.params.Line = { threshold: px * (opts.edgeReach || 5) };
       // How much further than the surface an edge may be and still count as on
       // it rather than behind it. An edge on the rim of the face being clicked
       // is at the same depth to within rounding; one on the far side of a part
       // is a whole part away.
-      const slack = px * 4;
+      // A tool that only wants edges reaches further, and the same allowance
+      // in depth, or a near miss that lands on the face just inside an edge
+      // finds the edge a hair behind the face and throws it away.
+      const slack = px * (opts.edgeReach ? opts.edgeReach * 2 : 4);
       for (const [id, entry] of visible) {
         if (!entry.segEdge) continue;
         const hits = rc.intersectObject(entry.lines, false);

@@ -89,6 +89,10 @@ const ALWAYS_LIVE = [
   '[data-view]',
   '[data-cmd="undo"]',
   '[data-cmd="redo"]',
+  // Leaving a sketch is never the wrong thing to press. A step that means the
+  // model rather than the sketch rings its own command, and blocking the way
+  // out of the sketch left that command's step sitting behind a wall.
+  '[data-cmd="finishSketch"]',
   '[data-cmd="fit"]',
   '[data-cmd="home"]',
   '[data-cmd="toggleProjection"]'

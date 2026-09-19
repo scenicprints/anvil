@@ -197,7 +197,12 @@ export function similarFaces(topo, chosen, tol = 0.02) {
  * nearly opposite directions, so a corner where four edges meet does not drag
  * the whole cage in.
  */
-export function tangentEdgeRun(topo, seedIds, maxDegrees = 15) {
+/*
+ * `skip`, if given, names edges the run may not enter or pass through: while a
+ * fillet is being previewed, the edges of its own round, which would otherwise
+ * carry the run round a corner that does not exist on the part being filleted.
+ */
+export function tangentEdgeRun(topo, seedIds, maxDegrees = 15, skip = null) {
   const edges = topo?.edges || [];
   const endsOf = (e) => {
     const v = e.verts;
@@ -239,6 +244,7 @@ export function tangentEdgeRun(topo, seedIds, maxDegrees = 15) {
       if (!mine) continue;
       for (const j of touching.get(v) || []) {
         if (j === i || out.has(j)) continue;
+        if (skip && skip(edges[j])) continue;
         const other = leaving(edges[j], v);
         if (!other) continue;
         // Both point away from the shared end, so carrying straight on means
