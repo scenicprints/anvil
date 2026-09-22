@@ -1782,7 +1782,10 @@ export class Viewport {
 
     // Hover is a whisper on a face, which is large; on an edge, which is thin,
     // it has to be seen or it is not there at all.
-    if (hoverFace) faceMesh(hoverFace, 0x6f6b62, 0.22);
+    // Blue, and enough of it: a grey wash on a warm grey part was invisible,
+    // and picking a face is guessing if nothing says which one is under the
+    // pointer.
+    if (hoverFace) faceMesh(hoverFace, 0x4aa3f0, 0.34);
     for (const f of faces) faceMesh(f, 0xd84b1e, 0.4);
     for (const e of edges) edgeLine(e, 0xd84b1e, 4);
     if (hoverEdge) edgeLine(hoverEdge, 0x4aa3f0, 5);

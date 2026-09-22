@@ -17,6 +17,61 @@ import {
 } from './kit.js';
 
 /*
+ * What the steps below point at.
+ *
+ * A step that says "the outside vertical corners" is asking for four edges out
+ * of twelve, and a sentence is a poor way to say which: the ring round the
+ * button says what to press and nothing about what to press it on. These hand
+ * the teacher the actual edges and faces, which it paints on the model.
+ */
+function solidBody(s) {
+  return (s.records || []).find((r) => r.topology && r.topology.faces.length) || null;
+}
+
+function topZ(topo) {
+  let z = -Infinity;
+  for (const f of topo.faces) if (f.centre && f.centre[2] > z) z = f.centre[2];
+  return z;
+}
+
+/** The upright edges of the outside wall: what a corner fillet rounds. */
+function uprightEdges(s) {
+  const rec = solidBody(s);
+  if (!rec) return null;
+  const edges = rec.topology.edges
+    .filter((e) => e.kind === 'line' && Math.abs(e.dir?.[2] ?? 0) > 0.99)
+    .map((e) => ({ bodyId: rec.id, edgeId: e.id }));
+  return edges.length ? { edges } : null;
+}
+
+/** The edges round the top face: what a chamfer breaks. */
+function topEdges(s) {
+  const rec = solidBody(s);
+  if (!rec) return null;
+  const top = topZ(rec.topology);
+  const edges = rec.topology.edges
+    .filter(
+      (e) =>
+        e.kind === 'line' &&
+        Math.abs(e.dir?.[2] ?? 0) < 0.01 &&
+        (e.points || []).every((p) => Math.abs(p[2] - top) < 1e-6)
+    )
+    .map((e) => ({ bodyId: rec.id, edgeId: e.id }));
+  return edges.length ? { edges } : null;
+}
+
+/** The flat face on top. */
+function topFace(s) {
+  const rec = solidBody(s);
+  if (!rec) return null;
+  const top = topZ(rec.topology);
+  const face = rec.topology.faces
+    .filter((f) => f.planar && f.normal?.[2] > 0.99 && Math.abs(f.centre[2] - top) < 1e-6)
+    .sort((a, b) => b.area - a.area)[0];
+  return face ? { faces: [{ bodyId: rec.id, faceId: face.id }] } : null;
+}
+
+/*
  * A circle of this radius whose centre is the middle of a flat face lying in
  * the sketch's plane. Measured, so a circle placed by eye near the middle does
  * not count and one snapped there does, however it was snapped.
@@ -111,47 +166,47 @@ export default {
       (s) => !s.sketching
     ),
     step(
-      'Now Hole. It finds the circle on its own and takes its size, 10 mm, all the way through. Press OK.',
+      'Now Hole. It reads the circle: From sketch says which sketch, Places says how many holes it found, and the diameter comes from the circle itself. Press OK.',
       cmd('hole'),
       ['hole', 'hole:simple'],
       (s) => s.features('hole').some((f) => parseFloat(f.diameter) === 10),
       { check: all(noErrors(), changed()) }
     ),
     step(
-      'Round the outside vertical corners. Fillet, 5 mm.',
+      'Round the outside vertical corners: the four upright edges, lit up on the model. Press Fillet, click each one, type 5 in the box by the cursor, then OK.',
       cmd('fillet'),
       ['fillet', 'fillet:constant'],
       made('fillet'),
-      { check: all(noErrors(), shrankBy(1, 4000)) }
+      { check: all(noErrors(), shrankBy(1, 4000)), show: uprightEdges }
     ),
     step(
-      'Break the top edges with a chamfer, 1 mm.',
+      'Break the edges round the top, lit up on the model, so the part is not sharp to hold. Press Chamfer, click them, type 1 in the box by the cursor, then OK.',
       cmd('chamfer'),
       ['chamfer', 'chamfer:equal'],
       made('chamfer'),
-      { check: all(noErrors(), shrankBy(0.1, 2000)) }
+      { check: all(noErrors(), shrankBy(0.1, 2000)), show: topEdges }
     ),
     step(
-      'Pick the top face and push it up 4 mm with Press Pull.',
+      'Push the top face up 4 mm. Press Press Pull, click the top face, which is lit up, then drag the arrow or type 4 for the offset and press OK.',
       cmd('pressPull'),
       'pressPull',
       made('offsetFace'),
-      { check: all(noErrors(), changed()) }
+      { check: all(noErrors(), changed()), show: topFace }
     ),
     step(
-      'Measure something. Any two faces will do; the point is that it is there.',
+      'Measure something. Click a corner, the middle of an edge or the centre of the hole, then a second one: it gives the distance and the gap along each axis. A face or an edge on its own reports its area or its length.',
       cmd('measure'),
       'measure',
       ran('measure')
     ),
     step(
-      'Make it aluminium. Material is what it is made of, not what it looks like.',
+      'Make it aluminium. Open MODIFY, press Physical Material, leave Apply to on the body, choose Aluminium and press OK. Material is what it is made of, which is where its mass comes from; the part takes the metal\u2019s colour to show it.',
       cmd('physicalMaterial'),
       'physicalMaterial',
       (s) => !!s.doc.materials
     ),
     step(
-      'Add a construction plane offset from the top face. You will need one for the next chapter and this is where they come from.',
+      'Add a plane floating above the part: click the top face, then CONSTRUCT and Planes, Axes, Points. Kind stays Offset Plane, From plane is the face you picked, type 10 for the distance and press OK. The next chapter sketches on one of these.',
       cmd('construct'),
       ['construct', 'offsetPlane'],
       (s) => (s.doc.construction || []).length > 0 || s.ranAny(['construct', 'offsetPlane'])

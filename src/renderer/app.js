@@ -91,6 +91,7 @@ import { parseSVG, parseDXF } from './vectorimport.js';
 import {
   MATERIALS,
   materialLabel,
+  materialTint,
   combinedMass,
   interferences,
   draftColours,
@@ -369,8 +370,12 @@ function rebuildAll() {
         // Colour by component or by feature is a reading, not a change, so it
         // paints over whatever the body's real colour is and leaves the
         // document alone. Clear Analysis puts it back.
+        // A colour set by hand wins; otherwise what it is made of tints it,
+        // because a part told it is aluminium and still the colour of a
+        // printed prototype has not visibly been told anything.
         appearance:
-          state.colourBy?.of.get(b.id) ?? (state.doc.appearance?.byBody?.[b.id] || null),
+          state.colourBy?.of.get(b.id) ??
+          (state.doc.appearance?.byBody?.[b.id] || materialTint(materialOf(b.id)) || null),
         // And the faces of it that were given a colour of their own, which is
         // painted over that one rather than instead of it.
         faceColours: faceColoursFor(b.id, topology),
@@ -659,6 +664,14 @@ function handleViewportDown(e) {
     if (['alignFrom', 'alignTo', 'silhouetteDir'].includes(armed)) {
       const plane = state.vp.pickPlane(e.clientX, e.clientY);
       if (plane) return pickIntoEdit({ kind: 'plane', planeName: plane.planeName });
+    }
+    // A hole's places are drawn by its sketch rather than being part of the
+    // model, so they are offered before the model is.
+    if (armed === 'holePoints') {
+      const at = holePointAt(e.clientX, e.clientY);
+      if (at !== null) return pickIntoEdit({ kind: 'holePoint', index: at });
+      setStatus('Click one of the points or circles in the sketch the hole comes from.');
+      return true;
     }
     const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: wantsEdges, edgeReach: edgeReach() });
     if (hit) return pickIntoEdit(hit);
@@ -1178,6 +1191,65 @@ function showMoveValue(e, axis, current) {
   document.getElementById('viewwrap').appendChild(box);
   state.moveValueEl = box;
   placeMoveValue(e);
+}
+
+/**
+ * The radius, beside the edge that was just picked.
+ *
+ * A fillet is a number and a place, and the number lived only in the panel on
+ * the far side of the window: picking an edge and then hunting for the field
+ * is two different parts of the screen for one thought. This is the same box
+ * the sketch tools and a pull already use, with the set's own size in it.
+ */
+function showBlendValue(index) {
+  hideBlendValue();
+  const f = state.editing?.feature;
+  const set = f?.sets?.[index];
+  if (!set) return;
+  const box = document.createElement('div');
+  box.className = 'sk-entry pull-entry move-entry';
+  const wrap = document.createElement('label');
+  wrap.className = 'sk-entry-field';
+  const cap = document.createElement('span');
+  cap.textContent = f.type === 'chamfer' ? 'Distance' : 'Radius';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.spellcheck = false;
+  input.value = String(set.radius ?? '');
+  input.addEventListener('input', () => {
+    const text = input.value.trim();
+    const scope = resolveParameters(state.doc.parameters).scope;
+    if (!Number.isFinite(safeEval(text, scope, NaN))) return;
+    set.radius = text;
+    set.radius2 = text;
+    renderFields();
+    scheduleRebuild();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' || ev.key === 'Escape') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      hideBlendValue();
+    }
+  });
+  wrap.appendChild(cap);
+  wrap.appendChild(input);
+  box.appendChild(wrap);
+  document.getElementById('viewwrap').appendChild(box);
+  state.blendValueEl = box;
+  const p = state.lastPointer;
+  const r = document.getElementById('viewwrap').getBoundingClientRect();
+  if (p) {
+    box.style.left = `${p.x - r.left + 18}px`;
+    box.style.top = `${p.y - r.top + 18}px`;
+  }
+  input.focus();
+  input.select();
+}
+
+function hideBlendValue() {
+  state.blendValueEl?.remove();
+  state.blendValueEl = null;
 }
 
 function placeMoveValue(e) {
@@ -6125,8 +6197,67 @@ function combineFields() {
   ];
 }
 
+/** The sketches that hold somewhere a hole could go. */
+function holePlaceSketches() {
+  const out = [];
+  for (const f of state.doc.features) {
+    if (f.type !== 'sketch') continue;
+    const sk = state.doc.sketches[f.sketch];
+    if (!sk) continue;
+    const places = (sk.entities || []).filter((e) => e.type === 'point' || e.type === 'circle');
+    if (places.length) out.push([sk.id, `${sk.name} (${places.length})`]);
+  }
+  return out;
+}
+
+/** Every point and circle centre of a sketch, as point indices. */
+function holePlacesIn(sketchId) {
+  const sk = state.doc.sketches[sketchId];
+  if (!sk) return [];
+  const pts = (sk.entities || []).filter((e) => e.type === 'point').map((e) => e.p);
+  const centres = (sk.entities || []).filter((e) => e.type === 'circle').map((e) => e.c);
+  return [...new Set([...pts, ...centres])];
+}
+
+/** The diameter a sketch says a hole should be, from the circle drawn for it. */
+function holeDiameterFrom(sketchId, points) {
+  const sk = state.doc.sketches[sketchId];
+  if (!sk) return null;
+  const circles = (sk.entities || []).filter(
+    (e) => e.type === 'circle' && (!points || points.includes(e.c))
+  );
+  if (!circles.length) return null;
+  return String(Math.round(Math.max(...circles.map((e) => e.r * 2)) * 1e4) / 1e4);
+}
+
 function holeFields() {
   return [
+    {
+      key: '__sketch',
+      label: 'From sketch',
+      type: 'select',
+      options: holePlaceSketches(),
+      get: (f) => f.sketch,
+      set: (f, v) => {
+        f.sketch = v;
+        f.points = holePlacesIn(v);
+        const d = holeDiameterFrom(v, f.points);
+        if (d) f.diameter = d;
+      }
+    },
+    {
+      key: '__places',
+      label: 'Places',
+      type: 'pick',
+      pick: 'holePoints',
+      summary: (f) => {
+        const n = (f.points || []).length;
+        return n ? `${n} place${n === 1 ? '' : 's'}` : 'Nothing yet';
+      },
+      clear: (f) => {
+        f.points = [];
+      }
+    },
     {
       key: 'holeType',
       label: 'Type',
@@ -8472,6 +8603,10 @@ function buildToolbars() {
 function toggleGroup(group) {
   const open = group.classList.contains('open');
   closeGroups();
+  // The group button stops its click reaching the window, so Teacher Mode
+  // never heard that the list had opened and left its ring on the group's
+  // name with the command it was pointing at sitting open underneath.
+  setTimeout(() => TEACH.reposition(), 0);
   if (!open) {
     group.classList.add('open');
     // Kept inside the window rather than hanging off the right of it, and no
@@ -15151,25 +15286,26 @@ function startPressPull() {
     return;
   }
 
+  // Open ready to be pointed at, the way Extrude and Fillet do. It used to
+  // start a selection round of its own instead, so the dialog only appeared
+  // after a face had been clicked and Enter pressed, which is a gesture
+  // nothing else in the program asks for.
   const faceRefs = selectedFaceRefs();
-  if (!faceRefs.size) {
-    beginPicking({
-      prompt: 'Click a face to push or pull. Press Enter when done.',
-      filter: { faces: true, edges: false, bodies: false, profiles: false },
-      onDone: () => startPressPull()
-    });
-    return;
-  }
-
-  const [bodyId, faces] = [...faceRefs][0];
+  const [bodyId, faces] = faceRefs.size
+    ? [...faceRefs][0]
+    : [(state.result?.bodies || [])[0]?.id || null, []];
   const feature = {
     id: uid('f'),
     type: 'offsetFace',
-    bodies: [bodyId],
+    bodies: bodyId ? [bodyId] : [],
     faces,
     distance: '2'
   };
   openFeatureEditor(feature, 'Press Pull', pressPullFields());
+  if (!faces.length) {
+    setEditPick('draftFaces');
+    setStatus('Click the faces to push or pull, then drag the arrow or type an offset.');
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -16541,6 +16677,33 @@ function setEditPick(which) {
  * Fold a viewport click into whichever dialog field is armed. Returns true when
  * it was taken, so ordinary selection does not also happen.
  */
+/*
+ * The hole place nearest a click: a point or a circle centre of the sketch the
+ * hole is working from, measured on screen.
+ *
+ * Holes are placed by a sketch, and the sketch is finished by the time the
+ * dialog is open, so there is nothing in the model under the pointer to pick.
+ * These are found by where they are drawn instead.
+ */
+function holePointAt(clientX, clientY) {
+  const f = state.editing?.feature;
+  const sk = f && state.doc.sketches[f.sketch];
+  const plane = f && state.result?.sketchPlanes?.[f.sketch];
+  if (!sk || !plane) return null;
+  let best = null;
+  for (const i of holePlacesIn(f.sketch)) {
+    const p = sk.points[i];
+    if (!p) continue;
+    const w = sketchToWorld(plane, p.x, p.y, 0);
+    const s = state.vp.worldToScreen(w.x, w.y, w.z);
+    if (!s || s.behind) continue;
+    const d = Math.hypot(s.clientX - clientX, s.clientY - clientY);
+    if (d > 18) continue;
+    if (!best || d < best.d) best = { index: i, d };
+  }
+  return best ? best.index : null;
+}
+
 /** A wider reach for edges while a fillet or a chamfer is waiting for them. */
 function edgeReach() {
   return blendPickRow(state.editing?.pickInto) ? 11 : undefined;
@@ -16610,6 +16773,14 @@ function pickIntoEdit(hit) {
     if (at >= 0) set.ruleFaces.splice(at, 1);
     else set.ruleFaces.push(ref);
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
+  } else if (ed.pickInto === 'holePoints') {
+    if (hit.kind !== 'holePoint') return true;
+    f.points = f.points || [];
+    const at = f.points.indexOf(hit.index);
+    if (at >= 0) f.points.splice(at, 1);
+    else f.points.push(hit.index);
+    const d = holeDiameterFrom(f.sketch, f.points);
+    if (d) f.diameter = d;
   } else if (blendPickRow(ed.pickInto)) {
     // An edge into one of a blend's sets, or into that set's hold line.
     if (hit.kind !== 'edge') return true;
@@ -16649,6 +16820,7 @@ function pickIntoEdit(hit) {
       }
     }
     if (!f.bodies || f.bodies === 'all') f.bodies = [hit.bodyId];
+    if (list === 'edges' && set[list].length) showBlendValue(index);
   } else if (ed.pickInto === 'embossFaces') {
     // A face reference here carries its body, because an emboss can put the
     // same profile onto faces of more than one body in a single feature.
@@ -17362,6 +17534,7 @@ function scheduleRebuild() {
 function commitEdit() {
   if (!state.editing) return;
   hidePullValue();
+  hideBlendValue();
   state.hoverProfile = null;
   restorePlanes();
   restoreDialogAnalysis();
@@ -17407,6 +17580,7 @@ function cancelEdit() {
   if (!state.editing) return;
   // The pull box belongs to the edit that opened it, however that edit ends.
   hidePullValue();
+  hideBlendValue();
   state.hoverProfile = null;
   restorePlanes();
   restoreDialogAnalysis();
@@ -19668,6 +19842,20 @@ function meshDirectEditFields() {
  * building the shape: rolling back past it should not turn a steel bracket into
  * a plastic one.
  */
+/** What a body is made of: its own material, or the document's. */
+function materialOf(bodyId) {
+  const mats = state.doc.materials || {};
+  return mats.byBody?.[bodyId] || mats.default || null;
+}
+
+/**
+ * What a body is made of, and which bodies.
+ *
+ * A material is a property of a body, not of a face: the mass of half a face
+ * is not a thing. So clicking a face means the body it belongs to, and the row
+ * says which bodies are about to be told, because a click on a face used to
+ * silently mean its whole body with nothing on screen saying so.
+ */
 function cmdPhysicalMaterial() {
   if (state.sketcher.active) finishSketch();
   const bodies = (state.result?.bodies || []).filter((b) => b.solid || b.sheet);
@@ -19675,13 +19863,31 @@ function cmdPhysicalMaterial() {
     setStatus('Nothing to give a material to yet.');
     return;
   }
-  const chosen = narrowToChosen(bodies);
-  const mats = state.doc.materials || {};
-  const current = mats.byBody?.[chosen[0].id] || mats.default || 'pla';
+  // The bodies of whatever is picked, faces included.
+  const byFace = new Set([...state.selection.faces].map((k) => splitKey(k).bodyId));
+  const byEdge = new Set([...state.selection.edges].map((k) => splitKey(k).bodyId));
+  const ids = new Set([...chosenBodyIds(), ...byFace, ...byEdge]);
+  const picked = ids.size ? bodies.filter((b) => ids.has(b.id)) : [];
+  let scope = picked.length ? 'picked' : 'all';
+  const named = (list) => list.map((b) => b.name || b.id).join(', ');
+  const current = materialOf((picked[0] || bodies[0]).id) || 'pla';
 
   showInspector(
     'Physical Material',
     [
+      {
+        key: 'scope',
+        label: 'Apply to',
+        type: 'select',
+        options: [
+          ['picked', picked.length ? `The bodies picked: ${named(picked)}` : 'Nothing is picked'],
+          ['all', bodies.length === 1 ? 'The body' : `Every body (${bodies.length})`]
+        ],
+        get: () => scope,
+        set: (f, v) => {
+          scope = v;
+        }
+      },
       {
         key: 'material',
         label: 'Material',
@@ -19690,34 +19896,30 @@ function cmdPhysicalMaterial() {
         options: MATERIAL_OPTIONS
       },
       {
-        key: 'everything',
-        label: 'Give it to every body',
-        type: 'bool',
-        value: false
-      },
-      {
         key: '__note',
         label: '',
         type: 'note',
-        text: `${chosen.length} bod${chosen.length === 1 ? 'y' : 'ies'}. A printed part is infill and air, so the mass this gives is the mass of the same shape solid.`
+        text: 'A printed part is infill and air, so the mass this gives is the mass of the same shape solid. The body takes the material\u2019s own colour unless a colour was set by hand.'
       }
     ],
     (v) => {
+      const target = scope === 'picked' && picked.length ? picked : bodies;
       pushUndo('material');
       state.doc.materials = state.doc.materials || {};
       state.doc.materials.byBody = state.doc.materials.byBody || {};
-      if (v.everything) {
+      if (target === bodies) {
         state.doc.materials.default = v.material;
         state.doc.materials.byBody = {};
       } else {
-        for (const b of chosen) state.doc.materials.byBody[b.id] = v.material;
+        for (const b of target) state.doc.materials.byBody[b.id] = v.material;
       }
       state.dirty = true;
+      rebuildAll();
       renderTree();
       setStatus(
-        v.everything
+        target === bodies
           ? `Everything is ${materialLabel(v.material)}.`
-          : `${chosen.length} bod${chosen.length === 1 ? 'y is' : 'ies are'} ${materialLabel(v.material)}.`
+          : `${named(target)} ${target.length === 1 ? 'is' : 'are'} ${materialLabel(v.material)}.`
       );
     }
   );
@@ -24561,22 +24763,47 @@ function startMeasure() {
     return;
   }
   const picks = [];
+  const paint = () => {
+    state.vp.setMarkers?.(
+      picks.length
+        ? {
+            points: picks.map((p) => ({ at: p.at, colour: 0x4aa3f0 })),
+            lines: picks.length === 2 ? [[picks[0].at, picks[1].at]] : []
+          }
+        : null
+    );
+  };
   beginPicking({
-    prompt: 'Click an edge or a face to measure. Click a second for a distance.',
+    prompt: 'Click a corner, a middle, a centre, an edge or a face. Click a second for a distance.',
     filter: { faces: true, edges: true, bodies: false, profiles: false },
+    onEnd: () => state.vp.setMarkers?.(null),
     onPick: (hit) => {
-      const got = measureTarget(hit);
+      // A corner, the middle of an edge or the centre of a hole under the
+      // pointer wins over the edge or face it belongs to: they are the places
+      // anybody actually measures between, and Move already picks them this
+      // way. Only what the pointer is really near, so an edge picked in the
+      // middle is still an edge.
+      const p = state.lastPointer;
+      const snap = p ? snapModelPoint(p.x, p.y) : null;
+      const got = snap ? { what: snap.label, at: [...snap.at] } : measureTarget(hit);
       if (!got) return;
+      if (picks.length === 2) picks.length = 0;
       picks.push(got);
+      paint();
       if (picks.length === 1) {
         setStatus(`${got.what}. Click another to measure between them.`);
         return;
       }
       const a = picks[0];
       const b = picks[1];
-      const d = Math.hypot(a.at[0] - b.at[0], a.at[1] - b.at[1], a.at[2] - b.at[2]);
-      setStatus(`Between centres: ${fmtLength(d)}. ${a.what} to ${b.what}.`);
-      picks.length = 0;
+      const dx = Math.abs(a.at[0] - b.at[0]);
+      const dy = Math.abs(a.at[1] - b.at[1]);
+      const dz = Math.abs(a.at[2] - b.at[2]);
+      const d = Math.hypot(dx, dy, dz);
+      setStatus(
+        `${fmtLength(d)} between them. X ${fmtLength(dx)}, Y ${fmtLength(dy)}, Z ${fmtLength(dz)}. ` +
+          `${a.what} to ${b.what}.`
+      );
     }
   });
 }

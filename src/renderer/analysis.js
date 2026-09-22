@@ -75,6 +75,35 @@ export const RENDER_FINISH = {
   resin: { metalness: 0, roughness: 0.18, clearcoat: 0.8, clearcoatRoughness: 0.1 }
 };
 
+/*
+ * The colour a material is, for the modelling view.
+ *
+ * Not a finish: the viewport is deliberately matt, because a reflection is
+ * something to see past while modelling. A tint is enough to tell aluminium
+ * from oak at a glance, which is what naming the material was for.
+ */
+export const MATERIAL_TINT = {
+  aluminium: 0xc6ccd3,
+  steel: 0x9aa2ab,
+  stainless: 0xb7bfc7,
+  brass: 0xc7a352,
+  titanium: 0x8f949b,
+  oak: 0xc9a375,
+  pla: 0xe0dcd2,
+  petg: 0xd8dee0,
+  abs: 0xd9d4cb,
+  asa: 0xd3cfc6,
+  tpu: 0x5f6673,
+  nylon: 0xe4e0d4,
+  pc: 0xdfe6e8,
+  resin: 0xdcd6e2
+};
+
+/** The tint for a named material, or nothing for one with no opinion. */
+export function materialTint(name) {
+  return MATERIAL_TINT[name] ?? null;
+}
+
 const DENSITY = new Map(MATERIALS.map(([id, , d]) => [id, d]));
 
 /** Grams per cubic centimetre for a named material, PLA when unknown. */
