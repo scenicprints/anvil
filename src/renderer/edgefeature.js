@@ -221,14 +221,19 @@ function curvatureProfile(a, b, tA, tB, segments, weight) {
  */
 const LEG_CLEARANCE = 0.01;
 
-function outsetLegs(contour, a, b) {
-  if (contour.length < 3) return contour;
+function outsetLegs(contour, a, b, legs = 'both') {
+  if (contour.length < 3 || legs === 'none') return contour;
   const perpAway = (dir, other) => {
     const p = [-dir[1], dir[0]];
     return p[0] * other[0] + p[1] * other[1] > 0 ? [-p[0], -p[1]] : p;
   };
-  const pA = perpAway(a, b);
-  const pB = perpAway(b, a);
+  // A leg is only pushed past a face that is flat. Past a curved one it cuts
+  // a shallow groove whose facets do not line up with the face's own, and the
+  // face comes back split into slivers: the hairlines down a rounded corner
+  // under a chamfer.
+  const zero = [0, 0];
+  const pA = legs === 'b' ? zero : perpAway(a, b);
+  const pB = legs === 'a' ? zero : perpAway(b, a);
   const e = LEG_CLEARANCE;
 
   const first = contour[1];
@@ -333,6 +338,105 @@ function toolForLineEdge(topo, edge, size, kind, scope, opts = {}) {
   return K.transform(solid, m.elements, scope);
 }
 
+/**
+ * A blend along an edge that is neither straight nor a whole circle.
+ *
+ * The arc round a rounded corner is one of these, and so is any edge left by a
+ * previous blend or drawn as a spline. There was no tool for them at all: they
+ * were skipped in silence, so chamfering the top of a filleted box stopped
+ * dead at each corner and left a notch, which is exactly what a missing tool
+ * looks like from the outside.
+ *
+ * The profile is swept along the edge's own polyline. At each station the two
+ * directions into the faces are worked out again rather than carried from the
+ * sample point: across a quarter turn the direction into a flat face swings by
+ * ninety degrees, so carrying one frame the length of the edge twists the
+ * sweep into nonsense. A flat face gives its direction exactly, from its
+ * normal and the local tangent; a curved one keeps the sampled direction with
+ * the tangent taken back out of it.
+ */
+function toolForCurvedEdge(topo, edge, size, kind, scope, opts = {}) {
+  const pts = edge.points || [];
+  if (pts.length < 2 || !edge.dirA || !edge.dirB) return null;
+  const faceA = topo.faces[edge.faceA];
+  const faceB = topo.faces[edge.faceB];
+
+  // The edge's own points, and no more: they are where the faces either side
+  // of it are faceted, so a sweep that stations on them cuts along the facets
+  // rather than across them. Stations in between left a hairline down the
+  // rounded wall at every facet the tool's leg grazed.
+  const path = pts;
+
+  const tangentAt = (i) => {
+    const a = path[Math.max(0, i - 1)];
+    const b = path[Math.min(path.length - 1, i + 1)];
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const l = Math.hypot(d[0], d[1], d[2]);
+    return l < 1e-12 ? null : [d[0] / l, d[1] / l, d[2] / l];
+  };
+
+  /** The direction into a face at a point on the edge, square to the edge. */
+  const into = (face, sampled, t, last) => {
+    let v;
+    if (face && face.planar && face.normal) {
+      v = cross(face.normal, t);
+      const l = Math.hypot(v[0], v[1], v[2]);
+      if (l < 1e-9) return null;
+      v = [v[0] / l, v[1] / l, v[2] / l];
+      // Two ways round: the one that carries on from the station before, or at
+      // the first station the one that agrees with the sampled direction.
+      const ref = last || sampled;
+      if (dot(v, ref) < 0) v = [-v[0], -v[1], -v[2]];
+      return v;
+    }
+    const k = dot(sampled, t);
+    v = [sampled[0] - t[0] * k, sampled[1] - t[1] * k, sampled[2] - t[2] * k];
+    const l = Math.hypot(v[0], v[1], v[2]);
+    return l < 1e-9 ? null : [v[0] / l, v[1] / l, v[2] / l];
+  };
+
+  const stations = [];
+  let lastA = null;
+  let lastB = null;
+  let segments = null;
+  for (let i = 0; i < path.length; i++) {
+    const t = tangentAt(i);
+    if (!t) return null;
+    const uA = into(faceA, edge.dirA, t, lastA);
+    const uB = into(faceB, edge.dirB, t, lastB);
+    if (!uA || !uB) return null;
+    lastA = uA;
+    lastB = uB;
+
+    const e1 = uA;
+    const e2n = cross(t, e1);
+    const e2l = Math.hypot(e2n[0], e2n[1], e2n[2]);
+    if (e2l < 1e-9) return null;
+    const e2 = [e2n[0] / e2l, e2n[1] / e2l, e2n[2] / e2l];
+    const a2 = [1, 0];
+    const b2 = [dot(uB, e1), dot(uB, e2)];
+
+    // One segment count for every station, so the rings match and the sweep
+    // can be stitched without resampling.
+    if (segments === null) {
+      const cosT = Math.max(-1, Math.min(1, a2[0] * b2[0] + a2[1] * b2[1]));
+      const sinT = Math.abs(a2[0] * b2[1] - a2[1] * b2[0]);
+      segments = arcSegments(size, Math.atan2(sinT, cosT));
+    }
+    const raw = cornerProfile(a2, b2, size, kind, segments, opts);
+    if (!raw) return null;
+    const contour = outsetLegs(raw, a2, b2);
+
+    // No overrun at the ends. A straight edge is extended past its corners so
+    // the boolean has something to bite on, but running straight on past the
+    // end of an arc leaves the tangent of the curve and cuts a sliver out of
+    // whatever is round the corner, which shows as hairlines down the wall.
+    // The tools of the edges either side already overlap this one.
+    stations.push({ contour, frame: { origin: path[i], x: e1, y: e2 } });
+  }
+  return variableSweep(stations, scope);
+}
+
 function toolForCircleEdge(topo, edge, size, kind, scope, opts = {}) {
   const axis = edge.axis;
   const c = edge.centre;
@@ -417,6 +521,9 @@ export function buildEdgeTools(topo, edges, size, kind, scope, opts = {}) {
         : toolForLineEdge(topo, edge, r, kind, scope, opts);
     } else if (edge.kind === 'circle') {
       tool = toolForCircleEdge(topo, edge, r, kind, scope, opts);
+    } else {
+      // An arc, a spline, or whatever a previous blend left behind.
+      tool = toolForCurvedEdge(topo, edge, r, kind, scope, opts);
     }
 
     if (!tool) {

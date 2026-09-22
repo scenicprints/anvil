@@ -141,7 +141,7 @@ export default {
       { play: done() }
     ),
     step(
-      'Extrude it 6 mm. That is the base of the bracket.',
+      'Extrude it 6 mm. Press Extrude, click inside the rectangle to take the profile, type 6 for the distance and press OK. That is the base of the bracket.',
       cmd('extrude'),
       ['extrude', 'extrude:distance'],
       made('extrude'),

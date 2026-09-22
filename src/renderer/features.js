@@ -5581,9 +5581,14 @@ export function rebuild(doc, options = {}) {
         });
         if (!tools.applied) continue;
 
-        if (tools.cut) solid = K.difference(solid, tools.cut, ks);
-        if (tools.addBack) solid = K.union(solid, tools.addBack, ks);
-        if (tools.blends) solid = K.union(solid, tools.blends, ks);
+        // Marked as this feature's own, so every face the blend leaves says
+        // which feature made it. Without that a round made earlier looks
+        // exactly like the one being previewed now, and the dialog cannot tell
+        // an edge of the part from an edge of its own preview.
+        const mine = (t) => K.tagOriginal(t, feature.id, ks);
+        if (tools.cut) solid = K.difference(solid, mine(tools.cut), ks);
+        if (tools.addBack) solid = K.union(solid, mine(tools.addBack), ks);
+        if (tools.blends) solid = K.union(solid, mine(tools.blends), ks);
         anything = true;
         skipped += tools.skipped.length;
       }

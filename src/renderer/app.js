@@ -7536,16 +7536,11 @@ function startFeatureDialog(type) {
       return;
     }
     feature = newExtrudeFeature();
-    // "When you invoke the Extrude tool, and there is only one profile visible
-    // in your design, it is automatically selected." Fusion's own Extrude
-    // reference says so, and it is the difference between drawing a rectangle
-    // and having a solid, and drawing a rectangle and being asked which of the
-    // one things on screen you meant.
-    const only = onlyVisibleProfile();
-    if (only && !feature.seeds?.length && !feature.faces.length) {
-      feature.sketch = only.sketch;
-      feature.seeds = [only.seed];
-    }
+    // Nothing is chosen for you. Fusion takes the one visible profile on its
+    // own, and it was taken from there, but a command that has already decided
+    // what it is working on before anything has been pointed at reads as the
+    // program going off on its own: leaving a sketch and pressing Extrude
+    // silently meant that sketch. What was picked by hand still counts.
     openFeatureEditor(feature, 'Extrude', extrudeFields());
     // Otherwise it opens ready to be pointed at, so nothing has to be picked
     // before reaching for the command.
@@ -7565,13 +7560,7 @@ function startFeatureDialog(type) {
       return;
     }
     feature = newRevolveFeature();
-    // One profile on screen is the one meant, the same rule Extrude follows and
-    // the same one Fusion states for both.
-    const onlyR = onlyVisibleProfile();
-    if (onlyR && !feature.seeds?.length && !feature.faces.length) {
-      feature.sketch = onlyR.sketch;
-      feature.seeds = [onlyR.seed];
-    }
+    // Nothing chosen for you here either; see Extrude above.
     // A centreline is the sketch saying what the part turns about, so a revolve
     // takes it rather than defaulting to the sketch Y axis and being corrected.
     // Only when there is exactly one: two centrelines is a question, and
@@ -7599,6 +7588,10 @@ function startFeatureDialog(type) {
     const circles = sk.entities.filter((e) => e.type === 'circle');
     const centres = circles.map((e) => e.c);
     const all = [...new Set([...pointIdx, ...centres])];
+    // One place in the sketch is not a choice, so it is taken; more than one
+    // is a question, and the dialog opens with the Places row armed rather
+    // than quietly drilling all of them.
+    const places = all.length === 1 ? all : [];
     // A circle drawn where a hole goes already says how big the hole is, so
     // the hole takes that size rather than asking for it a second time. The
     // largest if they differ, since a hole smaller than its circle is the
@@ -7613,7 +7606,7 @@ function startFeatureDialog(type) {
       id: uid('f'),
       type: 'hole',
       sketch: sketchId,
-      points: all,
+      points: places,
       holeType: 'simple',
       extent: 'all',
       toOffset: '0',
@@ -7636,6 +7629,10 @@ function startFeatureDialog(type) {
       tipAngle: '0'
     };
     openFeatureEditor(feature, 'Hole', holeFields());
+    if (!places.length) {
+      setEditPick('holePoints');
+      setStatus('Click the circles or points in the sketch where the holes go.');
+    }
     return;
   }
 
@@ -16722,7 +16719,10 @@ function edgeReach() {
  */
 function madeByThisBlend(edge, topo, featureId) {
   const between = edgeReference(edge, topo).between || [];
-  return between.length < 2 || between.some((b) => !b || b.tag === featureId);
+  // By name only. Judging it by a face with no name at all threw away the arc
+  // round a corner an earlier fillet had made, which is a perfectly good edge
+  // to chamfer and the one that leaves a notch when it is missed.
+  return between.some((b) => b && typeof b.tag === 'string' && b.tag.split(':')[0] === featureId);
 }
 
 function pickIntoEdit(hit) {
