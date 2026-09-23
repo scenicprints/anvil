@@ -580,6 +580,15 @@ function handleViewportDown(e) {
   // The view cube is the viewport's own business now, so that dragging it to
   // orbit works while a sketch has hold of every other click.
   if (state.sketcher.active) {
+    // A sketch has every click, which is right, but clicking a face of the
+    // model with the arrow in hand then does nothing at all and reads as a
+    // viewport that has stopped answering. Say which of the two you are in.
+    if (state.sketcher.tool === 'select' && e.button === 0) {
+      const over = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
+      if (over && over.kind === 'face') {
+        setStatus('You are in a sketch, so the model itself cannot be picked. Press Finish Sketch first.');
+      }
+    }
     return state.sketcher.onPointerDown(e);
   }
 
@@ -721,8 +730,17 @@ function handleViewportDown(e) {
     return false;
   }
 
-  if (hit.kind === 'edge' && !filter.edges) return false;
-  if (hit.kind === 'face' && !filter.faces && !filter.bodies) return false;
+  // A click that lands on something the filter does not allow says so. It used
+  // to do nothing at all, which reads as a dead viewport rather than as a
+  // setting that is still on from ten minutes ago.
+  if (hit.kind === 'edge' && !filter.edges) {
+    setStatus(`${priorityName()} can be selected. That was an edge.`);
+    return false;
+  }
+  if (hit.kind === 'face' && !filter.faces && !filter.bodies) {
+    setStatus(`${priorityName()} can be selected. That was a face.`);
+    return false;
+  }
 
   acceptPick(hit, e);
   return true;
@@ -2065,6 +2083,8 @@ function wireUI() {
     btn.addEventListener('click', () => reachForTool(btn.dataset.tool));
   });
 
+  document.getElementById('pickfilter')?.addEventListener('click', () => cmdSelectPriority('auto'));
+
   document.querySelectorAll('[data-con]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (!state.sketcher.active) return;
@@ -2412,6 +2432,10 @@ function wireKeys() {
       }
       if (state.editing) {
         cancelEdit();
+        return;
+      }
+      if ((state.selectPriority || 'auto') !== 'auto') {
+        cmdSelectPriority('auto');
         return;
       }
       clearGeometrySelection();
@@ -20919,19 +20943,39 @@ function cmdUnisolate() {
   setStatus(n ? `Showed ${n} hidden bod${n === 1 ? 'y' : 'ies'}.` : 'Nothing was hidden.');
 }
 
-/** What a click may land on, until it is set back. */
+const PRIORITY_NAMES = {
+  auto: 'Anything',
+  body: 'Bodies only',
+  face: 'Faces only',
+  edge: 'Edges only',
+  component: 'Components only',
+  sketch: 'Sketch geometry only'
+};
+
+function priorityName() {
+  return PRIORITY_NAMES[state.selectPriority || 'auto'];
+}
+
+/**
+ * What a click may land on, until it is set back.
+ *
+ * Shown in the status bar while it is on. Set to edges and forgotten, the
+ * viewport stops answering clicks on anything else and nothing on screen says
+ * why, which is indistinguishable from the program being broken.
+ */
 function cmdSelectPriority(kind) {
   state.selectPriority = kind;
-  const said = {
-    auto: 'Anything',
-    body: 'Bodies only',
-    face: 'Faces only',
-    edge: 'Edges only',
-    component: 'Components only',
-    sketch: 'Sketch geometry only'
-  }[kind];
-  setStatus(`${said} can be selected now.`);
+  setStatus(`${priorityName()} can be selected now.`);
+  syncPickFilter();
   updateHints();
+}
+
+function syncPickFilter() {
+  const el = document.getElementById('pickfilter');
+  if (!el) return;
+  const on = (state.selectPriority || 'auto') !== 'auto';
+  el.classList.toggle('hidden', !on);
+  if (on) el.textContent = `Clicking: ${priorityName()}`;
 }
 
 function cmdRecognise() {
