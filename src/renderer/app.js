@@ -9978,7 +9978,18 @@ async function startVectorImport(kind) {
       { key: 'scale', label: 'Scale', type: 'expr', value: '1' },
       { key: 'x', label: `Place at X (${unitLabel()})`, type: 'expr', value: '0' },
       { key: 'y', label: `Place at Y (${unitLabel()})`, type: 'expr', value: '0' },
-      { key: 'centre', label: 'Centre it on that point', type: 'check', value: true }
+      { key: 'centre', label: 'Centre it on that point', type: 'check', value: true },
+      // A traced drawing is usually one thing, however many closed shapes it
+      // is made of: a QR code is six hundred squares, and clicking every one
+      // of them to extrude it is not work anybody should be asked to do.
+      { key: 'extrudeAll', label: 'Extrude all of it when done', type: 'check', value: false },
+      {
+        key: 'thickness',
+        label: `Thickness (${unitLabel()})`,
+        type: 'expr',
+        value: '2',
+        showIf: (f) => !!f.extrudeAll
+      }
     ],
     (v) => {
       const scale = safeEval(v.scale, scope, 1) || 1;
@@ -9994,7 +10005,38 @@ async function startVectorImport(kind) {
           ? `${made} curve${made === 1 ? '' : 's'} from ${name}. Its longest side is ${round(wide * scale, 2)} ${unitLabel()}.`
           : 'Nothing usable in that file.'
       );
+      if (made && v.extrudeAll) extrudeWholeSketch(safeEval(v.thickness, scope, 2));
     }
+  );
+}
+
+/**
+ * Finish the sketch and extrude every closed shape in it at once.
+ *
+ * What an imported drawing almost always wants. The dialog opens with all of
+ * them already taken so the thickness can still be changed, or the whole thing
+ * cancelled, before anything is built.
+ */
+function extrudeWholeSketch(thickness) {
+  const sk = state.sketcher.sketch;
+  if (!sk) return;
+  const id = sk.id;
+  finishSketch();
+  const regions = state.result?.sketchRegions?.[id] || [];
+  if (!regions.length) {
+    setStatus('Nothing closed in that drawing to extrude.');
+    return;
+  }
+  const feature = {
+    ...newExtrudeFeature(),
+    sketch: id,
+    seeds: regions.map((r) => interiorPoint(r.outer)),
+    distance: String(thickness)
+  };
+  openFeatureEditor(feature, 'Extrude', extrudeFields());
+  setEditPick('profiles');
+  setStatus(
+    `${regions.length} shape${regions.length === 1 ? '' : 's'} taken. Set the thickness and press OK.`
   );
 }
 
