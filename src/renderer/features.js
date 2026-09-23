@@ -6557,6 +6557,118 @@ export function rebuild(doc, options = {}) {
    * cylinder. Anything else is refused rather than guessed at, because a body
    * that comes back with a gap in it is worse than a command that says no.
    */
+  /**
+   * Delete a face by carrying the faces either side of it on until they meet.
+   *
+   * This is what deleting a chamfer or a fillet means: the strip goes and the
+   * sharp edge it replaced comes back. Patching the hole flat, which is what
+   * this did before, lays a lid across the gap in exactly the shape of the
+   * strip that was deleted, so the part comes back the same and the command
+   * looks broken.
+   *
+   * Only for a strip between two flat faces, which is the ordinary chamfer and
+   * the fillet on a straight edge. The corner it closes to is worked out by the
+   * kernel, as the material both faces agree is inside, kept near the strip so
+   * a long edge is not filled from end to end.
+   */
+  function healByExtending(body, face, topo, ks) {
+    if (!body.solid) return null;
+
+    // The neighbours across this face's own boundary, by how much of it they
+    // share: the two long sides of a strip, not the slivers at its ends.
+    const shared = new Map();
+    for (const e of topo.edges) {
+      const other = e.faceA === face.id ? e.faceB : e.faceB === face.id ? e.faceA : null;
+      if (other === null || other < 0) continue;
+      shared.set(other, (shared.get(other) || 0) + (e.length || 0));
+    }
+    const pair = [...shared.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2)
+      .map(([id]) => topo.faces[id]);
+    if (pair.length < 2 || !pair.every((f) => f && f.planar && f.normal)) return null;
+    const [fa, fb] = pair;
+    const agree = fa.normal[0] * fb.normal[0] + fa.normal[1] * fb.normal[1] + fa.normal[2] * fb.normal[2];
+    // Parallel faces never meet, so there is no corner to come back to.
+    if (Math.abs(agree) > 0.999) return null;
+
+    // Where the strip is, so the fill can be kept to it.
+    let mesh;
+    try {
+      mesh = K.meshData(body.solid);
+    } catch {
+      return null;
+    }
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    const stride = mesh.numProp;
+    for (const t of face.tris) {
+      for (let k = 0; k < 3; k++) {
+        const v = mesh.triVerts[t * 3 + k] * stride;
+        for (let a = 0; a < 3; a++) {
+          const x = mesh.vertProperties[v + a];
+          if (x < lo[a]) lo[a] = x;
+          if (x > hi[a]) hi[a] = x;
+        }
+      }
+    }
+    if (!Number.isFinite(lo[0])) return null;
+    const size = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    const longest = Math.max(size[0], size[1], size[2]);
+    const width = Math.max(face.area / Math.max(longest, 1e-6), 1e-3);
+    const span = Math.max(longest, width) * 20 + 10;
+
+    /*
+     * What to fill: the material the strip stands in front of.
+     *
+     * Everything the faces round the strip agree is inside, and on the far
+     * side of the strip itself. The two long neighbours carrying on is what
+     * closes the corner; the flats at the ends, which are the neighbouring
+     * chamfers, are what stop the fill running off the end of the strip into
+     * them. Bounding it with a box instead filled a good deal more than the
+     * chamfer ever took away, and stood off the part as a block.
+     */
+    // Started a hair inside the strip rather than exactly on it: a fill that
+    // meets the face it replaces exactly leaves the two surfaces coincident,
+    // and the boolean keeps them both, so the strip stayed where it was with a
+    // paper thin void behind it.
+    const bite = 1e-3;
+    const from = [
+      face.centre[0] - face.normal[0] * bite,
+      face.centre[1] - face.normal[1] * bite,
+      face.centre[2] - face.normal[2] * bite
+    ];
+    let wedge = K.intersection(
+      halfSpace(from, face.normal.map((v) => -v), span, ks),
+      halfSpace(fa.centre, fa.normal, span, ks),
+      ks
+    );
+    wedge = K.intersection(wedge, halfSpace(fb.centre, fb.normal, span, ks), ks);
+    for (const [id, len] of shared) {
+      if (id === fa.id || id === fb.id || len < 1e-6) continue;
+      const other = topo.faces[id];
+      if (!other || !other.planar || !other.normal) continue;
+      wedge = K.intersection(wedge, halfSpace(other.centre, other.normal, span, ks), ks);
+    }
+
+    // And never further than the strip itself reaches. The corner the two
+    // faces close to lies on the strip's own bounding box, so a hair is all
+    // the room it needs; any more and the fill runs into the chamfers at
+    // either end and leaves slivers of the old strip behind.
+    const box = K.box([size[0] + 2e-3, size[1] + 2e-3, size[2] + 2e-3], true, ks);
+    const m = new THREE.Matrix4();
+    m.makeTranslation((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2);
+    wedge = K.intersection(wedge, K.transform(box, m.elements, ks), ks);
+    if (K.isEmpty(wedge)) return null;
+
+    const healed = K.union(body.solid, wedge, ks);
+    if (!healed || K.isEmpty(healed) || K.status(healed) !== 'NoError') return null;
+    // It has to have actually filled something, or the face is still there and
+    // the patch is the honest answer.
+    if (Math.abs(K.properties(healed).volume - K.properties(body.solid).volume) < 1e-9) return null;
+    return healed;
+  }
+
   function doDeleteFace(feature, bodies, scope, ks, errs) {
     const refs = feature.faces || [];
     if (!refs.length) return bodies;
@@ -6577,6 +6689,14 @@ export function rebuild(doc, options = {}) {
       // was bored into exactly as it was. Anything else is healed by taking the
       // body as a surface, dropping the face, and closing what it leaves.
       if (!face.cylinder) {
+        // A strip between two flat faces closes by carrying them on, which is
+        // what deleting a chamfer is for. Anything else is patched.
+        const extended = healByExtending(out[idx], face, found.topo, ks);
+        if (extended) {
+          out[idx] = { ...out[idx], solid: extended };
+          filled++;
+          continue;
+        }
         const healed = deleteFacesByPatching(
           feature, out[idx], [face.id], found.topo, ks, errs
         );

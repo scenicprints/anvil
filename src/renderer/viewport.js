@@ -2150,11 +2150,14 @@ export class Viewport {
     if (opts.edges !== false) {
       let best = null;
       const px = this.pixelSize();
-      // How near an edge a click has to land. Five pixels is right when faces
-      // and edges are both wanted; a tool that only takes edges says so, and
-      // gets the more forgiving reach, because a near miss there can only have
-      // meant the edge.
-      rc.params.Line = { threshold: px * (opts.edgeReach || 5) };
+      // How near an edge a click has to land, in pixels on screen. A tool that
+      // only takes edges says so and gets a forgiving reach, because a near
+      // miss there can only have meant the edge. Everything else gets a tight
+      // one: the width of a chamfer is a couple of millimetres, and a reach of
+      // five pixels covers the whole of it, so the band could never be clicked
+      // at all and a face nobody could select is a face nobody can delete.
+      const reachPx = opts.edgeReach || 3.5;
+      rc.params.Line = { threshold: px * reachPx };
       // How much further than the surface an edge may be and still count as on
       // it rather than behind it. An edge on the rim of the face being clicked
       // is at the same depth to within rounding; one on the far side of a part
@@ -2163,6 +2166,7 @@ export class Viewport {
       // in depth, or a near miss that lands on the face just inside an edge
       // finds the edge a hair behind the face and throws it away.
       const slack = px * (opts.edgeReach ? opts.edgeReach * 2 : 4);
+      void slack;
       for (const [id, entry] of visible) {
         if (!entry.segEdge) continue;
         const hits = rc.intersectObject(entry.lines, false);
@@ -2171,6 +2175,13 @@ export class Viewport {
           const edgeId = entry.segEdge[seg];
           if (edgeId === undefined) continue;
           if (surface && h.distance > surface.distance + slack) continue;
+          // The raycaster measures how far the edge is from the ray in the
+          // model, which is a different number at every depth. What matters is
+          // how far it looks from the pointer, so that is what is measured.
+          const at = this.worldToScreen(h.point.x, h.point.y, h.point.z);
+          if (at && !at.behind && Math.hypot(at.clientX - clientX, at.clientY - clientY) > reachPx) {
+            continue;
+          }
           if (!best || h.distance < best.distance) {
             best = { kind: 'edge', bodyId: id, edgeId, point: h.point, distance: h.distance };
           }
