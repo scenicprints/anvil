@@ -715,7 +715,7 @@ function handleViewportDown(e) {
     }
   }
 
-  const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: filter.edges !== false });
+  const hit = cycledPick(e, filter);
   if (!hit) {
     // Nothing under the pointer, so a drag from here is a selection box rather
     // than a miss. Dragged rightwards it takes what is wholly inside; dragged
@@ -744,6 +744,42 @@ function handleViewportDown(e) {
 
   acceptPick(hit, e);
   return true;
+}
+
+/*
+ * What a click takes, and what a second click in the same place takes instead.
+ *
+ * A chamfer less than a millimetre wide is a few pixels on screen with an edge
+ * down either side, and whichever of the three wins by a pixel is the one you
+ * get. Every other modeller answers this the same way: press again without
+ * moving and it offers the next thing under the pointer. The order is what the
+ * pointer is nearest first, then the face, then the body.
+ */
+function cycledPick(e, filter) {
+  const wantEdges = filter.edges !== false;
+  const edgeHit = wantEdges ? state.vp.pickEntity(e.clientX, e.clientY, { edges: true }) : null;
+  const faceHit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
+  const list = [];
+  if (edgeHit && edgeHit.kind === 'edge') list.push(edgeHit);
+  if (faceHit) list.push(faceHit);
+  if (!list.length) {
+    state.pickCycle = null;
+    return null;
+  }
+
+  const key = list
+    .map((h) => `${h.kind}:${h.bodyId}:${h.edgeId ?? ''}:${h.faceId ?? ''}`)
+    .join('|');
+  const last = state.pickCycle;
+  const sameSpot =
+    last && Math.hypot(last.x - e.clientX, last.y - e.clientY) < 4 && last.key === key;
+  const index = sameSpot ? (last.index + 1) % list.length : 0;
+  state.pickCycle = { x: e.clientX, y: e.clientY, key, index };
+  if (sameSpot && list.length > 1) {
+    const what = list[index].kind === 'edge' ? 'the edge' : 'the face';
+    setStatus(`Taking ${what} here. Click again for the other.`);
+  }
+  return list[index];
 }
 
 /** Fold a pick into the selection, or hand it to whatever dialog asked for it. */
