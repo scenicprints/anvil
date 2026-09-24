@@ -1798,8 +1798,16 @@ export function rebuild(doc, options = {}) {
           feature.seeds === null || feature.seeds === undefined
             ? regions
             : regionsForSeeds(regions, feature.seeds);
-        plane = sketchPlanes[sk.id] || resolvePlane(sk.plane, scope, builtConstruction);
         for (const r of picked) contours.push(...regionToPolygons(r));
+        // The plane comes from the sketch only where the sketch is actually
+        // being extruded. An extrude that names a sketch but takes nothing
+        // from it still named one, because the command was reached from a
+        // sketch: letting that empty sketch set the direction meant a face
+        // picked on the side of the part was thrown out for not lying in it,
+        // and the extrude built nothing while saying nothing.
+        if (contours.length) {
+          plane = sketchPlanes[sk.id] || resolvePlane(sk.plane, scope, builtConstruction);
+        }
       }
     }
 
@@ -1823,7 +1831,9 @@ export function rebuild(doc, options = {}) {
       }
     }
 
-    if (!plane) throw new Error('Extrude has nothing to work from');
+    // Nothing was taken from anywhere, so there is no plane either. The
+    // caller checks the contours and says so in the words the command uses,
+    // which is a better sentence than this one would be.
     return { contours, plane };
   }
 

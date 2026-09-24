@@ -3778,6 +3778,50 @@ async function run() {
     near(bb.max[2], 16, 1e-3, 'going the distance asked for');
   });
 
+  test('extrude: a side face is not judged against the sketch it came from', () => {
+    // Pressing Extrude while a sketch is open names that sketch on the feature
+    // even when nothing in it was chosen. The side of the part does not lie in
+    // that sketch's plane, and the empty sketch used to set the direction, so
+    // the face was thrown out for being at right angles to it and the extrude
+    // built nothing at all while saying nothing.
+    const doc = newDocument();
+    const base = rectSketch(30, 20);
+    doc.sketches[base.id] = base;
+    doc.features.push({ id: uid('f'), type: 'sketch', sketch: base.id });
+    doc.features.push({
+      id: uid('f'),
+      type: 'extrude',
+      sketch: base.id,
+      distance: '10',
+      op: 'new'
+    });
+    const first = rebuild(doc);
+    const body = first.bodies[0];
+    const topo = buildTopology(K.meshData(body.solid));
+    const side = topo.faces.find((f) => f.planar && f.normal[0] > 0.99);
+    assert(side, 'the box should have a side face');
+
+    const outward = {
+      id: uid('f'),
+      type: 'extrude',
+      // The sketch is named, with nothing taken from it.
+      sketch: base.id,
+      seeds: [],
+      faces: [{ bodyId: body.id, face: faceReference(side) }],
+      distance: '7',
+      op: 'new'
+    };
+    doc.features.push(outward);
+    const res = rebuild(doc);
+    assert(!res.errors.length, `expected no complaint, got ${JSON.stringify(res.errors)}`);
+    const built = res.bodies.find((b) => b.createdBy === outward.id);
+    assert(built, 'extruding the side should make a body');
+    near(built.solid.volume(), 20 * 10 * 7, 2, 'the side keeps its own outline');
+    const bb = built.solid.boundingBox();
+    near(bb.min[0], 30, 1e-3, 'and starts at the face it came from');
+    near(bb.max[0], 37, 1e-3, 'going the distance asked for');
+  });
+
   test('extrude: to object stops at what it was pointed at', () => {
     // A plate floating above the sketch plane, and a post extruded up to it.
     const doc = newDocument();
