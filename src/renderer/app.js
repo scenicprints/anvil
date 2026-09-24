@@ -756,12 +756,13 @@ function handleViewportDown(e) {
  * pointer is nearest first, then the face, then the body.
  */
 function cycledPick(e, filter) {
-  const wantEdges = filter.edges !== false;
-  const edgeHit = wantEdges ? state.vp.pickEntity(e.clientX, e.clientY, { edges: true }) : null;
-  const faceHit = state.vp.pickEntity(e.clientX, e.clientY, { edges: false });
-  const list = [];
-  if (edgeHit && edgeHit.kind === 'edge') list.push(edgeHit);
-  if (faceHit) list.push(faceHit);
+  const list = state.vp
+    .pickCandidates(e.clientX, e.clientY, { edges: filter.edges !== false, edgeReach: edgeReach() })
+    .filter((hit) => {
+      if (hit.kind === 'edge') return filter.edges !== false;
+      if (hit.kind === 'face') return filter.faces !== false || filter.bodies;
+      return true;
+    });
   if (!list.length) {
     state.pickCycle = null;
     return null;
@@ -776,8 +777,14 @@ function cycledPick(e, filter) {
   const index = sameSpot ? (last.index + 1) % list.length : 0;
   state.pickCycle = { x: e.clientX, y: e.clientY, key, index };
   if (sameSpot && list.length > 1) {
-    const what = list[index].kind === 'edge' ? 'the edge' : 'the face';
-    setStatus(`Taking ${what} here. Click again for the other.`);
+    const hit = list[index];
+    const what =
+      hit.kind === 'edge'
+        ? 'the edge'
+        : index > 0 && list[index - 1]?.kind === 'face'
+          ? 'the face behind'
+          : 'the face';
+    setStatus(`Taking ${what} here. Click again for the next one under the pointer.`);
   }
   return list[index];
 }
@@ -5059,7 +5066,18 @@ function extrudeFields() {
         ['distance', 'Distance'],
         ['object', 'To object'],
         ['all', 'All']
-      ]
+      ],
+      // Choosing "To object" is saying that the thing it runs to is the next
+      // question, so it is asked: the pointer arms itself for the face or
+      // plane rather than leaving a row called "Up to" to be found and
+      // pressed. Nothing else in the program makes you go looking.
+      set: (f, v) => {
+        f.extent = v;
+        if (v === 'object' && !f.toObject) {
+          setEditPick('toObject');
+          setStatus('Click the face or plane it runs up to.');
+        }
+      }
     },
     { key: 'distance', label: 'Distance', type: 'expr', showIf: (f) => f.extent === 'distance' },
     {
@@ -6374,7 +6392,18 @@ function holeFields() {
         ['distance', 'Distance'],
         ['object', 'To object'],
         ['all', 'All']
-      ]
+      ],
+      // Choosing "To object" is saying that the thing it runs to is the next
+      // question, so it is asked: the pointer arms itself for the face or
+      // plane rather than leaving a row called "Up to" to be found and
+      // pressed. Nothing else in the program makes you go looking.
+      set: (f, v) => {
+        f.extent = v;
+        if (v === 'object' && !f.toObject) {
+          setEditPick('toObject');
+          setStatus('Click the face or plane it runs up to.');
+        }
+      }
     },
     { key: 'depth', label: 'Depth', type: 'expr', showIf: (f) => f.extent === 'distance' },
     {

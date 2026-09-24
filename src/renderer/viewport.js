@@ -2205,6 +2205,45 @@ export class Viewport {
     };
   }
 
+  /**
+   * Everything under the pointer, nearest first.
+   *
+   * What a click takes is one of these; what a second click in the same place
+   * takes is the next. A face hidden behind another is in the list too, which
+   * is the only way to reach the far wall of a pocket without hiding the near
+   * one first.
+   */
+  pickCandidates(clientX, clientY, opts = {}) {
+    const rc = this.raycastRay(clientX, clientY);
+    const visible = [...this.bodies.entries()].filter(([, b]) => b.mesh.visible);
+    const out = [];
+
+    if (opts.edges !== false) {
+      const edge = this.pickEntity(clientX, clientY, { edges: true, edgeReach: opts.edgeReach });
+      if (edge && edge.kind === 'edge') out.push(edge);
+    }
+
+    const hits = rc.intersectObjects(visible.map(([, b]) => b.mesh), false);
+    const seen = new Set();
+    for (const hit of hits) {
+      const bodyId = hit.object.userData.bodyId;
+      const entry = this.bodies.get(bodyId);
+      const topo = entry?.record?.topology;
+      const faceId = topo && hit.faceIndex !== undefined ? topo.triFace[hit.faceIndex] : null;
+      const key = `${bodyId}:${faceId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        kind: faceId !== null && faceId >= 0 ? 'face' : 'body',
+        bodyId,
+        faceId: faceId >= 0 ? faceId : null,
+        point: hit.point,
+        distance: hit.distance
+      });
+    }
+    return out;
+  }
+
   setSelection(ids) {
     this.selection = new Set(ids);
     this._applyHighlights();
