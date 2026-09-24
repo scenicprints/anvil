@@ -434,6 +434,209 @@ export function pointInPolygon(pt, poly) {
 }
 
 /** A point guaranteed to lie inside a simple polygon. */
+/**
+ * Straight segments made into a map: nothing lying on anything else, and every
+ * meeting point an end shared by both.
+ *
+ * Traced artwork arrives as a heap of separate outlines that happen to touch.
+ * A QR code is the worst of it: squares of different heights laid against each
+ * other, so one square's edge runs along part of its neighbour's, and a third
+ * square meets them halfway along. The face finder walks a graph, and a graph
+ * whose edges lie on top of one another is not a map of anything: a quarter of
+ * the drawing came out with no face at all and so did not extrude.
+ *
+ * Two passes. Segments sharing a line become the union of what they cover, cut
+ * at every end that falls inside it, so an edge drawn twice becomes one and an
+ * edge drawn over two others becomes those two. Then every segment is cut
+ * where another's end lands on it, which is the T junction where three squares
+ * meet.
+ *
+ * Straight pieces only, and only ends landing on segments: two segments
+ * crossing in their middles is a different problem, and not one that tracing
+ * an outline produces.
+ */
+export function planariseSegments(segs, tol = 1e-4) {
+  if (segs.length < 2) return segs.map((s) => ({ a: { ...s.a }, b: { ...s.b } }));
+
+  /* ---- 1. Along each line, the union of what is covered ---- */
+
+  const byLine = new Map();
+  for (const seg of segs) {
+    const dx = seg.b.x - seg.a.x;
+    const dy = seg.b.y - seg.a.y;
+    const len = Math.hypot(dx, dy);
+    if (len <= tol) continue;
+    let ux = dx / len;
+    let uy = dy / len;
+    // One direction per line, so a segment and its reverse land together.
+    if (ux < -1e-9 || (Math.abs(ux) <= 1e-9 && uy < 0)) {
+      ux = -ux;
+      uy = -uy;
+    }
+    // Where the line is: along it, and across it.
+    const nx = -uy;
+    const ny = ux;
+    const d = seg.a.x * nx + seg.a.y * ny;
+    const key = `${Math.round(ux / tol)}|${Math.round(uy / tol)}|${Math.round(d / tol)}`;
+    let group = byLine.get(key);
+    if (!group) byLine.set(key, (group = { ux, uy, nx, ny, d, spans: [] }));
+    const ta = seg.a.x * ux + seg.a.y * uy;
+    const tb = seg.b.x * ux + seg.b.y * uy;
+    group.spans.push(ta < tb ? [ta, tb] : [tb, ta]);
+  }
+
+  const pieces = [];
+  for (const group of byLine.values()) {
+    const { ux, uy, nx, ny, d } = group;
+    const at = (t) => ({ x: ux * t + nx * d, y: uy * t + ny * d });
+    const spans = group.spans.sort((a, b) => a[0] - b[0]);
+    const cuts = [];
+    for (const [t0, t1] of spans) cuts.push(t0, t1);
+    cuts.sort((a, b) => a - b);
+
+    // Merge into runs of covered line, then cut each run at every end inside.
+    let start = spans[0][0];
+    let end = spans[0][1];
+    const runs = [];
+    for (const [t0, t1] of spans.slice(1)) {
+      if (t0 <= end + tol) {
+        if (t1 > end) end = t1;
+      } else {
+        runs.push([start, end]);
+        start = t0;
+        end = t1;
+      }
+    }
+    runs.push([start, end]);
+
+    for (const [runStart, runEnd] of runs) {
+      const stops = [runStart, runEnd];
+      for (const c of cuts) {
+        if (c > runStart + tol && c < runEnd - tol) stops.push(c);
+      }
+      stops.sort((a, b) => a - b);
+      for (let i = 0; i + 1 < stops.length; i++) {
+        if (stops[i + 1] - stops[i] <= tol) continue;
+        pieces.push({ a: at(stops[i]), b: at(stops[i + 1]) });
+      }
+    }
+  }
+
+  /* ---- 2. Cut where segments meet: an end on a segment, or a crossing ---- */
+
+  // A grid of the cells each segment passes through, so a segment is only
+  // compared with what is near it rather than with all two thousand others.
+  const bounds = pieces.map((p) => ({
+    minX: Math.min(p.a.x, p.b.x),
+    maxX: Math.max(p.a.x, p.b.x),
+    minY: Math.min(p.a.y, p.b.y),
+    maxY: Math.max(p.a.y, p.b.y)
+  }));
+  let span = 0;
+  for (const b of bounds) span = Math.max(span, b.maxX - b.minX, b.maxY - b.minY);
+  const cell = Math.max(span, tol * 10) || 1;
+  const grid = new Map();
+  const cellsOf = (b) => {
+    const out = [];
+    for (let cx = Math.floor(b.minX / cell); cx <= Math.floor(b.maxX / cell); cx++) {
+      for (let cy = Math.floor(b.minY / cell); cy <= Math.floor(b.maxY / cell); cy++) {
+        out.push(`${cx}|${cy}`);
+      }
+    }
+    return out;
+  };
+  pieces.forEach((piece, i) => {
+    for (const key of cellsOf(bounds[i])) {
+      let bucket = grid.get(key);
+      if (!bucket) grid.set(key, (bucket = []));
+      bucket.push(i);
+    }
+  });
+
+  const cuts = pieces.map(() => []);
+  const seen = new Set();
+  pieces.forEach((piece, i) => {
+    const near = new Set();
+    for (const key of cellsOf(bounds[i])) {
+      for (const j of grid.get(key) || []) if (j !== i) near.add(j);
+    }
+    const ax = piece.a.x;
+    const ay = piece.a.y;
+    const dx = piece.b.x - ax;
+    const dy = piece.b.y - ay;
+    const len2 = dx * dx + dy * dy;
+    if (len2 <= tol * tol) return;
+
+    for (const j of near) {
+      const pair = i < j ? `${i}|${j}` : `${j}|${i}`;
+      if (seen.has(pair)) continue;
+      seen.add(pair);
+      const other = pieces[j];
+      const b = bounds[j];
+      if (bounds[i].minX > b.maxX + tol || b.minX > bounds[i].maxX + tol) continue;
+      if (bounds[i].minY > b.maxY + tol || b.minY > bounds[i].maxY + tol) continue;
+
+      const ex = other.b.x - other.a.x;
+      const ey = other.b.y - other.a.y;
+      const denom = dx * ey - dy * ex;
+      if (Math.abs(denom) > 1e-12) {
+        // They cross somewhere. Where, and is it inside both?
+        const t = ((other.a.x - ax) * ey - (other.a.y - ay) * ex) / denom;
+        const u = ((other.a.x - ax) * dy - (other.a.y - ay) * dx) / denom;
+        const onI = t > 0 && t < 1;
+        const onJ = u > 0 && u < 1;
+        if (onI && onJ) {
+          const px = ax + dx * t;
+          const py = ay + dy * t;
+          const lenI = Math.sqrt(len2);
+          const lenJ = Math.hypot(ex, ey);
+          if (t * lenI > tol && (1 - t) * lenI > tol) cuts[i].push(t);
+          if (u * lenJ > tol && (1 - u) * lenJ > tol) cuts[j].push(u);
+          void px;
+          void py;
+        }
+      }
+
+      // And an end of one landing along the other, which is a T junction.
+      const along = (seg, k, q) => {
+        const sx = seg.b.x - seg.a.x;
+        const sy = seg.b.y - seg.a.y;
+        const l2 = sx * sx + sy * sy;
+        if (l2 <= tol * tol) return;
+        const t = ((q.x - seg.a.x) * sx + (q.y - seg.a.y) * sy) / l2;
+        if (t <= 0 || t >= 1) return;
+        const px = seg.a.x + sx * t;
+        const py = seg.a.y + sy * t;
+        if (Math.hypot(px - q.x, py - q.y) > tol) return;
+        const len = Math.sqrt(l2);
+        if (t * len <= tol || (1 - t) * len <= tol) return;
+        cuts[k].push(t);
+      };
+      along(piece, i, other.a);
+      along(piece, i, other.b);
+      along(other, j, piece.a);
+      along(other, j, piece.b);
+    }
+  });
+
+  const out = [];
+  pieces.forEach((piece, i) => {
+    const dx = piece.b.x - piece.a.x;
+    const dy = piece.b.y - piece.a.y;
+    const len = Math.hypot(dx, dy);
+    if (len <= tol) return;
+    const stops = [0, 1, ...cuts[i]].sort((a, b) => a - b);
+    for (let k = 0; k + 1 < stops.length; k++) {
+      if ((stops[k + 1] - stops[k]) * len <= tol) continue;
+      out.push({
+        a: { x: piece.a.x + dx * stops[k], y: piece.a.y + dy * stops[k] },
+        b: { x: piece.a.x + dx * stops[k + 1], y: piece.a.y + dy * stops[k + 1] }
+      });
+    }
+  });
+  return out;
+}
+
 export function interiorPoint(poly) {
   const n = poly.length;
   for (let i = 0; i < n; i++) {

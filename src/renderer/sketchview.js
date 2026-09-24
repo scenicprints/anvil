@@ -23,7 +23,8 @@ import {
   pointInPolygon,
   entityEndpoints,
   ellipseFrame,
-  TAU
+  TAU,
+  planariseSegments
 } from './profile.js';
 import { sketchToWorld, worldToSketch, resolveDimensionExprs } from './features.js';
 import { safeEval } from './expr.js';
@@ -1038,22 +1039,86 @@ export class SketchEditor {
    * up. Placing is a scale and an offset, so the same call serves both formats
    * and both are dropped where the caller asks rather than at the origin.
    */
+  /**
+   * Trace a drawing into this sketch.
+   *
+   * Points that land on each other are welded and lines drawn twice are drawn
+   * once. A traced drawing has both by the hundred: a QR code is squares laid
+   * edge to edge, so every shared edge arrives twice and every shared corner
+   * four times. Left as they came, two squares touching are two loops lying on
+   * top of one another rather than one shape, and the profile finder cancels
+   * them out: ninety of four hundred and fifty squares had no face at all and
+   * simply did not extrude.
+   */
   insertVector(entities, opts = {}) {
     const scale = Number(opts.scale) || 1;
     const ox = Number(opts.x) || 0;
     const oy = Number(opts.y) || 0;
-    const at = (p) => this.addPoint(ox + p.x * scale, oy + p.y * scale);
+
+    // A point is the same point as one already placed when it is within a
+    // thousandth of it, which is finer than any drawing means and coarser than
+    // the rounding a transform leaves behind.
+    const WELD = 1e-3;
+    const grid = new Map();
+    const cell = (x, y) => `${Math.round(x / WELD)},${Math.round(y / WELD)}`;
+    const at = (p) => {
+      const x = ox + p.x * scale;
+      const y = oy + p.y * scale;
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const found = grid.get(cell(x + dx * WELD, y + dy * WELD));
+          if (found === undefined) continue;
+          const q = this.sketch.points[found];
+          if (Math.hypot(q.x - x, q.y - y) <= WELD) return found;
+        }
+      }
+      const idx = this.addPoint(x, y);
+      grid.set(cell(x, y), idx);
+      return idx;
+    };
+
+    // And a line already drawn between two points is not drawn again.
+    const drawn = new Set();
+    const addLine = (a, b) => {
+      if (a === b) return false;
+      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+      if (drawn.has(key)) return false;
+      drawn.add(key);
+      this.addEntity({ type: 'line', p: [a, b] });
+      return true;
+    };
+    for (const ent of this.sketch.entities) {
+      if (ent.type !== 'line') continue;
+      const [a, b] = ent.p;
+      drawn.add(a < b ? `${a}|${b}` : `${b}|${a}`);
+    }
 
     if (this.onBeforeChange) this.onBeforeChange();
     let made = 0;
 
+    // The straight pieces are made into a map before any of them is drawn:
+    // outlines that touch share their ends and nothing lies on anything else,
+    // which is what the profile finder needs to see faces at all.
+    const straight = [];
+    const keep = [];
     for (const e of entities) {
       if (e.kind === 'line') {
-        const a = at(e.points[0]);
-        const b = at(e.points[1]);
-        if (a === b) continue;
-        this.addEntity({ type: 'line', p: [a, b] });
-        made++;
+        straight.push({ a: e.points[0], b: e.points[1] });
+      } else if (e.kind === 'poly') {
+        const pts = e.points || [];
+        for (let i = 0; i + 1 < pts.length; i++) straight.push({ a: pts[i], b: pts[i + 1] });
+        if (e.closed && pts.length > 2) straight.push({ a: pts[pts.length - 1], b: pts[0] });
+      } else {
+        keep.push(e);
+      }
+    }
+    for (const seg of planariseSegments(straight, 1e-4)) {
+      if (addLine(at(seg.a), at(seg.b))) made++;
+    }
+
+    for (const e of keep) {
+      if (e.kind === 'line') {
+        if (addLine(at(e.points[0]), at(e.points[1]))) made++;
       } else if (e.kind === 'circle') {
         const c = at(e.centre);
         const r = e.r * scale;
@@ -1079,14 +1144,9 @@ export class SketchEditor {
         const idx = e.points.map(at);
         const n = idx.length;
         for (let i = 0; i + 1 < n; i++) {
-          if (idx[i] === idx[i + 1]) continue;
-          this.addEntity({ type: 'line', p: [idx[i], idx[i + 1]] });
-          made++;
+          if (addLine(idx[i], idx[i + 1])) made++;
         }
-        if (e.closed && n > 2 && idx[n - 1] !== idx[0]) {
-          this.addEntity({ type: 'line', p: [idx[n - 1], idx[0]] });
-          made++;
-        }
+        if (e.closed && n > 2 && addLine(idx[n - 1], idx[0])) made++;
       }
     }
 

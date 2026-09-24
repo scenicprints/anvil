@@ -10001,9 +10001,53 @@ async function startVectorImport(kind, given = null) {
           ? `${made} curve${made === 1 ? '' : 's'} from ${name}. Its longest side is ${round(wide * scale, 2)} ${unitLabel()}.`
           : 'Nothing usable in that file.'
       );
-      if (made && v.extrudeAll) extrudeWholeSketch(safeEval(v.thickness, scope, 2));
+      if (made && v.extrudeAll) {
+        extrudeWholeSketch(safeEval(v.thickness, scope, 2), {
+          shapes: parsed.entities,
+          scale,
+          x,
+          y
+        });
+      }
     }
   );
+}
+
+/**
+ * A point in a region's material, which is what names it to an extrude.
+ *
+ * Inside its outer boundary is not enough: a ring's middle is inside the outer
+ * boundary and made of nothing, and a seed that lands there names the hole
+ * rather than the ring. Traced artwork is full of rings, so this searches
+ * across the shape until it finds somewhere that is really material.
+ */
+function regionSeed(region) {
+  const holes = region.holes || [];
+  const solidAt = (p) => pointInPolygon(p, region.outer) && !holes.some((h) => pointInPolygon(p, h));
+  const first = interiorPoint(region.outer);
+  if (solidAt(first)) return first;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of region.outer) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const N = 24;
+  for (let i = 1; i < N; i++) {
+    for (let j = 1; j < N; j++) {
+      const p = {
+        x: minX + ((maxX - minX) * i) / N,
+        y: minY + ((maxY - minY) * j) / N
+      };
+      if (solidAt(p)) return p;
+    }
+  }
+  return null;
 }
 
 /**
@@ -10013,7 +10057,38 @@ async function startVectorImport(kind, given = null) {
  * them already taken so the thickness can still be changed, or the whole thing
  * cancelled, before anything is built.
  */
-function extrudeWholeSketch(thickness) {
+/**
+ * Is this point inside the drawing, by the rule a drawing is filled with?
+ *
+ * The profile finder reports every area the outlines enclose, and a traced
+ * drawing encloses its own gaps: the white middle of a QR code's corner square
+ * is as much a region as the black around it. Extruding the lot fills them in.
+ * So each area is asked of the artwork itself, by winding number, which is how
+ * an SVG decides what is ink and what is paper.
+ */
+function insideArtwork(point, art) {
+  if (!art?.shapes?.length) return true;
+  const scale = art.scale || 1;
+  const px = (point.x - (art.x || 0)) / scale;
+  const py = (point.y - (art.y || 0)) / scale;
+  let winding = 0;
+  for (const shape of art.shapes) {
+    const pts = shape.points || [];
+    if (pts.length < 3) continue;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      if (a.y <= py) {
+        if (b.y > py && (b.x - a.x) * (py - a.y) - (px - a.x) * (b.y - a.y) > 0) winding++;
+      } else if (b.y <= py && (b.x - a.x) * (py - a.y) - (px - a.x) * (b.y - a.y) < 0) {
+        winding--;
+      }
+    }
+  }
+  return winding !== 0;
+}
+
+function extrudeWholeSketch(thickness, art = null) {
   const sk = state.sketcher.sketch;
   if (!sk) return;
   const id = sk.id;
@@ -10023,17 +10098,22 @@ function extrudeWholeSketch(thickness) {
     setStatus('Nothing closed in that drawing to extrude.');
     return;
   }
+  const seeds = regions
+    .map(regionSeed)
+    .filter((p) => p && insideArtwork(p, art));
+  if (!seeds.length) {
+    setStatus('Nothing closed in that drawing to extrude.');
+    return;
+  }
   const feature = {
     ...newExtrudeFeature(),
     sketch: id,
-    seeds: regions.map((r) => interiorPoint(r.outer)),
+    seeds,
     distance: String(thickness)
   };
   openFeatureEditor(feature, 'Extrude', extrudeFields());
   setEditPick('profiles');
-  setStatus(
-    `${regions.length} shape${regions.length === 1 ? '' : 's'} taken. Set the thickness and press OK.`
-  );
+  setStatus(`${seeds.length} shape${seeds.length === 1 ? '' : 's'} taken. Set the thickness and press OK.`);
 }
 
 /** The extent of parsed vector geometry, for placing and reporting it. */
