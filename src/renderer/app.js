@@ -877,6 +877,7 @@ function narrowToChosen(list) {
  */
 const BODY_PICKS = {
   moveBodies: 'bodies',
+  splitBodies: 'bodies',
   targets: 'targets',
   combineTools: 'tools',
   surfaceBodies: 'surfaces',
@@ -5829,6 +5830,22 @@ function splitFields(feature) {
 
   return [
     {
+      key: '__bodies',
+      label: 'Body to split',
+      type: 'pick',
+      pick: 'splitBodies',
+      summary: (f) =>
+        !f.bodies || f.bodies === 'all'
+          ? 'Every body'
+          : `${f.bodies.length} body${f.bodies.length === 1 ? '' : 's'}`,
+      clear: (f) => {
+        f.bodies = 'all';
+      },
+      // Fusion asks for the body and then the tool, and so does this: one
+      // click on the body moves on to the thing that cuts it.
+      next: () => 'splitTools'
+    },
+    {
       key: '__tools',
       label: 'Split with',
       type: 'pick',
@@ -9281,8 +9298,15 @@ function startSplit() {
     tools: []
   };
   openFeatureEditor(feature, 'Split Body', splitFields(feature));
-  setEditPick('splitTools');
-  setStatus('Click a face or a plane to split with. Several can be used at once.');
+  // A body chosen before the command counts as the answer to the first
+  // question, so the dialog opens on the second one.
+  const already = Array.isArray(feature.bodies) && feature.bodies.length;
+  setEditPick(already ? 'splitTools' : 'splitBodies');
+  setStatus(
+    already
+      ? 'Click a face or a plane to split with. Several can be used at once.'
+      : 'Click the body to split, then the face or plane to split it with.'
+  );
 }
 
 function startCoil() {
@@ -16040,6 +16064,7 @@ const PICK_PROMPTS = {
   draftFaces: 'Click the faces.',
   neutral: 'Click the neutral plane.',
   splitFace: 'Click the face or plane to cut with.',
+  splitBodies: 'Click the body to split.',
   splitTools: 'Click the faces or planes to cut with. Several can be used at once.',
   mirrorPlane: 'Click the plane to mirror in.',
   combineTarget: 'Click the body to keep.',
@@ -16090,6 +16115,7 @@ function pickCountText(armed, f) {
     openFaces: f.openFaces,
     draftFaces: f.faces,
     moveFaces: f.faces,
+    splitBodies: Array.isArray(f.bodies) ? f.bodies : null,
     splitTools: f.tools,
     combineTools: f.tools,
     moveBodies: f.bodies
@@ -17661,6 +17687,16 @@ function pickIntoEdit(hit) {
     if (!face) return true;
     f.faces = f.faces || [];
     f.faces.push({ bodyId: hit.bodyId, face: faceReference(face) });
+  } else if (ed.pickInto === 'splitBodies') {
+    if (!hit.bodyId) return true;
+    if (!Array.isArray(f.bodies)) f.bodies = [];
+    // Clicking a body again takes it back out, the same as everywhere else a
+    // list of bodies is picked. An empty list means every body, which is what
+    // Split Body did before it could be told otherwise.
+    const at = f.bodies.indexOf(hit.bodyId);
+    if (at >= 0) f.bodies.splice(at, 1);
+    else f.bodies.push(hit.bodyId);
+    if (!f.bodies.length) f.bodies = 'all';
   } else if (ed.pickInto === 'targets') {
     if (!hit.bodyId) return true;
     if (!Array.isArray(f.targets)) f.targets = [];
@@ -17767,6 +17803,19 @@ function scheduleRebuild() {
 
 function commitEdit() {
   if (!state.editing) return;
+  // A new feature that builds nothing is not something to accept. It used to
+  // be: OK closed the dialog, the feature stayed in the timeline carrying its
+  // complaint, and the file was saved with it. Nothing had appeared, so
+  // nothing said otherwise, until the day the reason it failed was fixed and
+  // every one of them built at once on opening the file.
+  if (state.editing.isNew) {
+    const bad = (state.result?.errors || []).find((e) => e.feature === state.editing.feature?.id);
+    if (bad) {
+      syncDialogError();
+      setStatus(bad.message);
+      return;
+    }
+  }
   hidePullValue();
   hideBlendValue();
   state.hoverProfile = null;
