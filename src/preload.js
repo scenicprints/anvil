@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('anvil', {
   readAnother: (file) => ipcRenderer.invoke('doc:readAnother', file),
   readLinked: (name, file) => ipcRenderer.invoke('doc:readLinked', { name, file }),
   rename: (to) => ipcRenderer.invoke('doc:rename', to),
+  copyText: (text) => ipcRenderer.invoke('clip:write', text),
   saveCopy: (data) => ipcRenderer.invoke('doc:saveCopy', { data }),
   library: () => ipcRenderer.invoke('library:get'),
   chooseLibrary: () => ipcRenderer.invoke('library:choose'),

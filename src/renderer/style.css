@@ -2019,3 +2019,20 @@ button.pin .pin-caret:hover,
 #markmenu button.is-default {
   box-shadow: inset 2px 0 0 var(--sel);
 }
+
+/* A measurement, which is a value rather than a control: it reads as text and
+   says what it is for by lighting up when the pointer is on it. */
+button.readout {
+  width: 100%;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--float);
+  border: 1px solid var(--rule-2);
+  padding: 4px 8px;
+}
+button.readout:hover {
+  background: var(--sel-wash-2);
+  border-color: var(--sel);
+}

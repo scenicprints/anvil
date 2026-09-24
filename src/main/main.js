@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, protocol, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, dialog, shell, clipboard } = require('electron');
 const LIB = require('./library.js');
 const PROFILES = require('./profiles.js');
 const path = require('path');
@@ -1410,6 +1410,14 @@ ipcMain.handle('doc:currentPath', async () => ({
  * it, or the old name keeps a lock nobody will ever clear and the new one has
  * none at all.
  */
+// The browser's own clipboard refuses when the page is not focused, which it
+// is not when a reading is copied from a panel that just took a click in the
+// viewport. Electron's clipboard has no such rule.
+ipcMain.handle('clip:write', (_e, text) => {
+  clipboard.writeText(String(text ?? ''));
+  return { ok: true };
+});
+
 ipcMain.handle('doc:rename', async (_e, to) => {
   if (!currentPath) return { ok: false, error: 'Save this document before renaming it' };
   const clean = String(to || '').trim();

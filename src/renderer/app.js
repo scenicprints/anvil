@@ -92,6 +92,7 @@ import {
   MATERIALS,
   materialLabel,
   materialTint,
+  densityOf,
   combinedMass,
   interferences,
   draftColours,
@@ -2201,7 +2202,14 @@ function wireUI() {
   });
 
   $('#inspectorClose').addEventListener('click', () => cancelEdit());
-  $('#inspectorCancel').addEventListener('click', () => cancelEdit());
+  $('#inspectorCancel').addEventListener('click', () => {
+    // Measure has no edit behind it to cancel, so Cancel is how it is put away.
+    if (state.measure) {
+      endMeasure();
+      return;
+    }
+    cancelEdit();
+  });
   $('#inspectorOk').addEventListener('click', () => commitEdit());
 
   $('#modalCancel').addEventListener('click', () => closeModal(null));
@@ -24984,75 +24992,342 @@ async function importParameters() {
  * radius and diameter, a face its area, and two picks the distance between
  * them. Nothing is added to the model.
  */
+/**
+ * Measure: a panel that stays open, and readings you can take away.
+ *
+ * It used to be a line of text in the status bar, which is the wrong place for
+ * a number somebody is about to use: it cannot be read to more places, it is
+ * always in the document's own unit, and the only way to get it into a field
+ * is to type it out again. This keeps what was picked, says everything worth
+ * saying about it, and hands any of it over when pressed.
+ */
 function startMeasure() {
   if (state.sketcher.active) {
     measureSketch();
     return;
   }
-  const picks = [];
-  const paint = () => {
-    state.vp.setMarkers?.(
-      picks.length
-        ? {
-            points: picks.map((p) => ({ at: p.at, colour: 0x4aa3f0 })),
-            lines: picks.length === 2 ? [[picks[0].at, picks[1].at]] : []
-          }
-        : null
-    );
+  const M = {
+    picks: [],
+    units: state.doc?.units || 'mm',
+    dp: 2,
+    panel: null
   };
+  state.measure = M;
+
+  const unit = () => DISPLAY_UNITS[M.units] || DISPLAY_UNITS.mm;
+  const len = (mm) => `${round(mm / unit().per, M.dp)} ${unit().label}`;
+  const areaOf = (mm2) => `${round(mm2 / (unit().per * unit().per), M.dp)} ${unit().areaLabel}`;
+  const volOf = (mm3) => `${round(mm3 / unit().volPer, M.dp)} ${unit().volLabel}`;
+  const bare = (mm) => String(round(mm / unit().per, M.dp));
+  const deg = (d) => `${round(d, M.dp)}\u00b0`;
+
+  const paint = () => {
+    const points = M.picks.map((p, i) => ({
+      at: p.at,
+      colour: i === 0 ? 0x4aa3f0 : 0x57b06a
+    }));
+    const lines = M.picks.length === 2 ? [[M.picks[0].at, M.picks[1].at]] : [];
+    state.vp.setMarkers?.(points.length ? { points, lines } : null);
+    refreshHighlight();
+  };
+
+  /** Everything worth saying about one thing on its own. */
+  const oneRows = (pick) => {
+    const rows = [];
+    // The text is worked out when the row is drawn rather than when it is
+    // built, so changing the unit or the decimals changes what is on screen.
+    const value = (label, show, copy) =>
+      rows.push({ key: `v${rows.length}`, label, type: 'value', get: show, copy: copy || show });
+    if (pick.kind === 'point') {
+      value('X', () => len(pick.at[0]), () => bare(pick.at[0]));
+      value('Y', () => len(pick.at[1]), () => bare(pick.at[1]));
+      value('Z', () => len(pick.at[2]), () => bare(pick.at[2]));
+    } else if (pick.kind === 'edge') {
+      const e = pick.edge;
+      value('Length', () => len(e.length), () => bare(e.length));
+      if (e.kind === 'circle' || e.radius) {
+        value('Radius', () => len(e.radius), () => bare(e.radius));
+        value('Diameter', () => len(e.radius * 2), () => bare(e.radius * 2));
+      }
+      if (e.centre) {
+        value('Centre', () => `${bare(e.centre[0])}, ${bare(e.centre[1])}, ${bare(e.centre[2])}`);
+      }
+    } else if (pick.kind === 'face') {
+      const f = pick.face;
+      value('Area', () => areaOf(f.area), () => String(round(f.area / (unit().per * unit().per), M.dp)));
+      const perimeter = (pick.record?.topology?.edges || [])
+        .filter((e) => e.faceA === f.id || e.faceB === f.id)
+        .reduce((a, e) => a + (e.length || 0), 0);
+      if (perimeter > 0) value('Perimeter', () => len(perimeter), () => bare(perimeter));
+      if (f.cylinder?.radius) {
+        value('Radius', () => len(f.cylinder.radius), () => bare(f.cylinder.radius));
+        value('Diameter', () => len(f.cylinder.radius * 2), () => bare(f.cylinder.radius * 2));
+      }
+      value('Middle', () => `${bare(f.centre[0])}, ${bare(f.centre[1])}, ${bare(f.centre[2])}`);
+    } else if (pick.kind === 'body') {
+      const body = (state.result?.bodies || []).find((b) => b.id === pick.bodyId);
+      if (body?.solid) {
+        const props = K.properties(body.solid);
+        value('Volume', () => volOf(props.volume), () => String(round(props.volume / unit().volPer, M.dp)));
+        const material = materialOf(pick.bodyId) || 'pla';
+        const grams = (props.volume / 1000) * densityOf(material);
+        value(
+          `Mass as ${materialLabel(material)}`,
+          () => `${round(grams, M.dp)} g`,
+          () => String(round(grams, M.dp))
+        );
+        value(
+          'Surface area',
+          () => areaOf(props.surfaceArea),
+          () => String(round(props.surfaceArea / (unit().per * unit().per), M.dp))
+        );
+      }
+      if (body?.solid) {
+        const box = K.boundingBox(body.solid);
+        value(
+          'Size',
+          () =>
+            `${bare(box.max[0] - box.min[0])} × ${bare(box.max[1] - box.min[1])} × ` +
+            `${bare(box.max[2] - box.min[2])} ${unit().label}`
+        );
+      }
+    }
+    return rows;
+  };
+
+  /** And between two of them. */
+  const pairRows = () => {
+    const rows = [];
+    const value = (label, show, copy) =>
+      rows.push({ key: `p${rows.length}`, label, type: 'value', get: show, copy: copy || show });
+    const [a, b] = M.picks;
+    const gap = measureGap(a, b);
+    const dx = Math.abs(a.at[0] - b.at[0]);
+    const dy = Math.abs(a.at[1] - b.at[1]);
+    const dz = Math.abs(a.at[2] - b.at[2]);
+    value(gap.label, () => len(gap.distance), () => bare(gap.distance));
+    value('Along X', () => len(dx), () => bare(dx));
+    value('Along Y', () => len(dy), () => bare(dy));
+    value('Along Z', () => len(dz), () => bare(dz));
+    const angle = measureAngle(a, b);
+    if (angle !== null) value('Angle', () => deg(angle), () => String(round(angle, M.dp)));
+    return rows;
+  };
+
+  const rows = () => {
+    const out = [
+      {
+        key: 'units',
+        label: 'Units',
+        type: 'select',
+        options: [
+          ['mm', 'Millimetres'],
+          ['cm', 'Centimetres'],
+          ['m', 'Metres'],
+          ['in', 'Inches'],
+          ['ft', 'Feet']
+        ],
+        get: () => M.units,
+        set: (f, v) => {
+          M.units = v;
+        }
+      },
+      {
+        key: 'dp',
+        label: 'Decimal places',
+        type: 'select',
+        options: [0, 1, 2, 3, 4, 5].map((n) => [String(n), String(n)]),
+        get: () => String(M.dp),
+        set: (f, v) => {
+          M.dp = Number(v);
+        }
+      }
+    ];
+
+    if (!M.picks.length) {
+      out.push({
+        key: '__hint',
+        label: '',
+        type: 'note',
+        text: 'Click a corner, the middle of an edge, a hole centre, an edge, a face or a body. Click a second one for the distance between them.'
+      });
+      return out;
+    }
+
+    out.push({ key: '__first', label: '', type: 'note', text: `First: ${M.picks[0].what}` });
+    if (M.picks.length === 1) out.push(...oneRows(M.picks[0]));
+    else {
+      out.push({ key: '__second', label: '', type: 'note', text: `Second: ${M.picks[1].what}` });
+      out.push(...pairRows());
+    }
+    const last = M.picks[M.picks.length - 1];
+    if (last && last.kind !== 'body' && last.record) {
+      out.push({
+        key: '__whole',
+        label: 'Measure the whole body',
+        type: 'action',
+        run: () => {
+          const body = (state.result?.bodies || []).find((b) => b.id === last.record.id);
+          if (!body) return;
+          M.picks = [
+            {
+              kind: 'body',
+              bodyId: body.id,
+              record: last.record,
+              what: body.name || 'Body',
+              at: bodyMiddle(body)
+            }
+          ];
+          paint();
+          open();
+        }
+      });
+    }
+    out.push({
+      key: '__clear',
+      label: 'Start again',
+      type: 'action',
+      run: () => {
+        M.picks = [];
+        paint();
+        open();
+      }
+    });
+    return out;
+  };
+
+  const open = () => {
+    M.panel = showInspector('Measure', rows(), () => endMeasure(), { keepFocus: true });
+  };
+
   beginPicking({
-    prompt: 'Click a corner, a middle, a centre, an edge or a face. Click a second for a distance.',
-    filter: { faces: true, edges: true, bodies: false, profiles: false },
-    onEnd: () => state.vp.setMarkers?.(null),
+    prompt: 'Click what to measure. A second click gives the distance.',
+    filter: { faces: true, edges: true, bodies: true, profiles: false },
+    onEnd: () => {
+      state.vp.setMarkers?.(null);
+      state.measure = null;
+      hideInspector();
+    },
     onPick: (hit) => {
-      // A corner, the middle of an edge or the centre of a hole under the
-      // pointer wins over the edge or face it belongs to: they are the places
-      // anybody actually measures between, and Move already picks them this
-      // way. Only what the pointer is really near, so an edge picked in the
-      // middle is still an edge.
       const p = state.lastPointer;
       const snap = p ? snapModelPoint(p.x, p.y) : null;
-      const got = snap ? { what: snap.label, at: [...snap.at] } : measureTarget(hit);
+      // A corner, an edge's middle or a hole's centre is a place worth taking;
+      // the middle of a face is the face itself, which has an area and a
+      // perimeter worth more than three coordinates.
+      const place = snap && snap.label !== 'Middle of the face';
+      const got = place ? { kind: 'point', at: [...snap.at], what: snap.label } : measureTarget(hit);
       if (!got) return;
-      if (picks.length === 2) picks.length = 0;
-      picks.push(got);
+      if (M.picks.length >= 2) M.picks.length = 0;
+      M.picks.push(got);
       paint();
-      if (picks.length === 1) {
-        setStatus(`${got.what}. Click another to measure between them.`);
-        return;
-      }
-      const a = picks[0];
-      const b = picks[1];
-      const dx = Math.abs(a.at[0] - b.at[0]);
-      const dy = Math.abs(a.at[1] - b.at[1]);
-      const dz = Math.abs(a.at[2] - b.at[2]);
-      const d = Math.hypot(dx, dy, dz);
+      open();
       setStatus(
-        `${fmtLength(d)} between them. X ${fmtLength(dx)}, Y ${fmtLength(dy)}, Z ${fmtLength(dz)}. ` +
-          `${a.what} to ${b.what}.`
+        M.picks.length === 1
+          ? `${got.what}. Click another to measure between them.`
+          : `${M.picks[0].what} to ${got.what}.`
       );
     }
   });
+  open();
 }
 
-/** Reduce a pick to a describable measurement and a point to measure from. */
+function endMeasure() {
+  state.measure = null;
+  state.vp.setMarkers?.(null);
+  if (state.picking) endPicking(false);
+  hideInspector();
+}
+
+/**
+ * The gap between two things, measured the way the pair allows.
+ *
+ * Two points, or a point and a flat face, or two parallel flat faces, each
+ * have an exact answer and it is the one anybody means. Anything else is
+ * measured between the middles, and says so rather than pretending.
+ */
+function measureGap(a, b) {
+  const sub = (p, q) => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+  const dot3 = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  const plane = (pick) =>
+    pick.kind === 'face' && pick.face.planar ? { n: pick.face.normal, o: pick.face.centre } : null;
+  const pa = plane(a);
+  const pb = plane(b);
+
+  if (a.kind === 'point' && b.kind === 'point') {
+    return { label: 'Distance', distance: Math.hypot(...sub(a.at, b.at)) };
+  }
+  if (pa && b.kind === 'point') {
+    return { label: 'Distance to the face', distance: Math.abs(dot3(sub(b.at, pa.o), pa.n)) };
+  }
+  if (pb && a.kind === 'point') {
+    return { label: 'Distance to the face', distance: Math.abs(dot3(sub(a.at, pb.o), pb.n)) };
+  }
+  if (pa && pb && Math.abs(Math.abs(dot3(pa.n, pb.n)) - 1) < 1e-6) {
+    return { label: 'Between the faces', distance: Math.abs(dot3(sub(pb.o, pa.o), pa.n)) };
+  }
+  return { label: 'Between the middles', distance: Math.hypot(...sub(a.at, b.at)) };
+}
+
+/** The angle between two flat faces, or two straight edges. */
+function measureAngle(a, b) {
+  const dirOf = (pick) => {
+    if (pick.kind === 'face' && pick.face.planar) return pick.face.normal;
+    if (pick.kind === 'edge' && pick.edge.kind === 'line') return pick.edge.dir;
+    return null;
+  };
+  const u = dirOf(a);
+  const v = dirOf(b);
+  if (!u || !v) return null;
+  const d = Math.abs(u[0] * v[0] + u[1] * v[1] + u[2] * v[2]);
+  return (Math.acos(Math.max(-1, Math.min(1, d))) * 180) / Math.PI;
+}
+
+/** The middle of a body's box, which is where a measurement to it is taken. */
+function bodyMiddle(body) {
+  try {
+    const box = K.boundingBox(body.solid);
+    return [0, 1, 2].map((k) => (box.min[k] + box.max[k]) / 2);
+  } catch {
+    return [0, 0, 0];
+  }
+}
+
+/** Reduce a pick to the thing itself, and a point to measure from. */
 function measureTarget(hit) {
   const record = (state.records || []).find((r) => r.id === hit.bodyId);
   if (!record) return null;
   if (hit.kind === 'edge') {
     const edge = record.topology.edges.find((e) => e.id === hit.edgeId);
     if (!edge) return null;
-    const what =
-      edge.kind === 'circle'
-        ? `Circle radius ${fmtLength(edge.radius)}, diameter ${fmtLength(edge.radius * 2)}`
-        : `Edge ${fmtLength(edge.length)} long`;
-    const at = edge.centre || edge.start || edge.points[0];
-    return { what, at };
+    const what = edge.kind === 'circle' ? 'Circle' : edge.kind === 'line' ? 'Straight edge' : 'Curved edge';
+    return {
+      kind: 'edge',
+      edge,
+      record,
+      what,
+      at: edge.centre || edge.start || edge.points[0]
+    };
   }
-  const face = record.topology.faces[hit.faceId];
-  if (!face) return null;
-  const kind = face.planar ? 'Flat face' : 'Curved face';
-  return { what: `${kind}, area ${fmtArea(face.area)}`, at: face.centre };
+  if (hit.kind === 'face' && hit.faceId !== null) {
+    const face = record.topology.faces[hit.faceId];
+    if (!face) return null;
+    return {
+      kind: 'face',
+      face,
+      record,
+      what: face.planar ? 'Flat face' : 'Curved face',
+      at: face.centre
+    };
+  }
+  const body = (state.result?.bodies || []).find((b) => b.id === hit.bodyId);
+  if (!body) return null;
+  return {
+    kind: 'body',
+    bodyId: hit.bodyId,
+    record,
+    what: body.name || 'Body',
+    at: bodyMiddle(body)
+  };
 }
 
 /** In a sketch, measure between the two selected points, or one entity. */
@@ -25106,7 +25381,7 @@ function showOffsetPlane() {
 /* Generic inspector form (used before a feature exists)               */
 /* ------------------------------------------------------------------ */
 
-function showInspector(title, fields, onOk) {
+function showInspector(title, fields, onOk, opts = {}) {
   if (state.editing) cancelEdit();
   el.inspectorTitle.textContent = title;
   el.inspector.classList.remove('hidden');
@@ -25157,9 +25432,31 @@ function showInspector(title, fields, onOk) {
         }
       };
 
+      if (f.type === 'value') {
+        // A reading. Pressing it copies it, because a measurement is almost
+        // always on its way somewhere else: into a field, a note, a message.
+        const btn = document.createElement('button');
+        btn.className = 'readout';
+        btn.textContent = f.get();
+        btn.title = 'Press to copy';
+        btn.addEventListener('click', async () => {
+          const text = f.copy ? f.copy() : f.get();
+          try {
+            if (window.anvil?.copyText) await window.anvil.copyText(text);
+            else await navigator.clipboard.writeText(text);
+            setStatus(`Copied ${text}`);
+          } catch {
+            setStatus('Could not reach the clipboard.');
+          }
+        });
+        wrap.appendChild(btn);
+        el.inspectorBody.appendChild(wrap);
+        continue;
+      }
+
       if (f.type === 'action') {
         // The same row the feature editor has, so a panel that offers to add
-        // or remove something reads the same wherever it is shown.
+        // or remove something reads the same wherever it is shown."
         const btn = document.createElement('button');
         btn.textContent = f.label;
         label.textContent = '';
@@ -25219,7 +25516,8 @@ function showInspector(title, fields, onOk) {
   const firstInput = el.inspectorBody.querySelector(
     '.field:not(.presetrow) input, .field:not(.presetrow) select'
   );
-  if (firstInput) firstInput.focus();
+  if (firstInput && !opts.keepFocus) firstInput.focus();
+  return { redraw: draw, close: hideInspector };
 }
 
 /** Close whatever panel is open, without running its accept. */
