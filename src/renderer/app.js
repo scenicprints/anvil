@@ -611,11 +611,11 @@ function handleViewportDown(e) {
     const armed = state.editing.pickInto;
     const wantsPlane = armed === 'startObject' || armed === 'toObject';
     if (wantsPlane) {
-      const pl = state.vp.pickPlane(e.clientX, e.clientY);
+      const pl = planeUnderPointer(e.clientX, e.clientY);
       if (pl) return pickIntoEdit({ kind: 'plane', planeName: pl.planeName });
     }
     if (['neutral', 'splitFace', 'splitTools', 'mirrorPlane'].includes(armed)) {
-      const pl = state.vp.pickPlane(e.clientX, e.clientY);
+      const pl = planeUnderPointer(e.clientX, e.clientY);
       if (pl) return pickIntoEdit({ kind: 'plane', planeName: pl.planeName });
     }
     if (armed === 'sections') {
@@ -672,7 +672,7 @@ function handleViewportDown(e) {
     // A plane click has to be offered before the body raycast, or a plane
     // drawn behind the model can never be reached.
     if (['alignFrom', 'alignTo', 'silhouetteDir'].includes(armed)) {
-      const plane = state.vp.pickPlane(e.clientX, e.clientY);
+      const plane = planeUnderPointer(e.clientX, e.clientY);
       if (plane) return pickIntoEdit({ kind: 'plane', planeName: plane.planeName });
     }
     // A hole's places are drawn by its sketch rather than being part of the
@@ -698,7 +698,7 @@ function handleViewportDown(e) {
   }
 
 
-  const plane = state.vp.pickPlane(e.clientX, e.clientY);
+  const plane = planeUnderPointer(e.clientX, e.clientY);
   if (plane && state.picking?.filter?.planes) {
     acceptPick({ kind: 'plane', planeName: plane.planeName }, e);
     return true;
@@ -898,6 +898,29 @@ function dialogPickedBodies() {
     if (Array.isArray(list)) out.push(...list);
   }
   return out;
+}
+
+/**
+ * The origin plane under the pointer, where the model is not in the way.
+ *
+ * The planes are sixty across and hang through the middle of everything, so on
+ * a part built round the origin they lie over the very faces that the rows
+ * taking a plane are asking for. Offering the plane first meant those faces
+ * could not be hovered, let alone clicked: on a plate centred on the origin,
+ * the split tool row could reach every wall except the ones along the axes.
+ *
+ * Depth is no help. An upright plane crosses the ray a fraction of a
+ * millimetre in front of the flat face behind it, so it is genuinely nearer
+ * and still not what anybody was pointing at. So the model wins wherever it is
+ * hit at all, which is the rule the direction rows already worked by. A plane
+ * is what is left when the click misses the part, and sixty millimetres of it
+ * sticks out past most parts to be clicked on.
+ */
+function planeUnderPointer(clientX, clientY) {
+  const plane = state.vp.pickPlane(clientX, clientY);
+  if (!plane) return null;
+  if (state.vp.pickEntity(clientX, clientY, { edges: false })) return null;
+  return plane;
 }
 
 /** Light the selected bodies, and the ones a dialog has picked, as one set. */
@@ -1420,7 +1443,7 @@ function handleViewportMove(e) {
 
   const filter = activeFilter();
   if (filter.planes) {
-    const over = state.vp.pickPlane(e.clientX, e.clientY);
+    const over = planeUnderPointer(e.clientX, e.clientY);
     state.vp.setPlaneHover(over ? over.planeName : null);
     if (over) {
       state.hoverFace = null;
