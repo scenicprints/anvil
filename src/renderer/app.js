@@ -9942,12 +9942,14 @@ function askForText(current, cb) {
  * polyline, because a sketch has no bezier entity and drawing one it cannot
  * dimension would be worse than saying so.
  */
-async function startVectorImport(kind) {
+async function startVectorImport(kind, given = null) {
   if (!state.sketcher.active) {
     setStatus('Open a sketch to import into first.');
     return;
   }
-  const res = await window.anvil.importVector(kind);
+  // `given` is for a probe: the file dialog cannot be answered by a script, so
+  // the text can be handed straight in instead.
+  const res = given || (await window.anvil.importVector(kind));
   if (!res?.ok) {
     if (res && !res.canceled) setStatus(`Could not read that file: ${res.error}`);
     return;
@@ -9983,13 +9985,7 @@ async function startVectorImport(kind) {
       // is made of: a QR code is six hundred squares, and clicking every one
       // of them to extrude it is not work anybody should be asked to do.
       { key: 'extrudeAll', label: 'Extrude all of it when done', type: 'check', value: false },
-      {
-        key: 'thickness',
-        label: `Thickness (${unitLabel()})`,
-        type: 'expr',
-        value: '2',
-        showIf: (f) => !!f.extrudeAll
-      }
+      { key: 'thickness', label: `Thickness if extruded (${unitLabel()})`, type: 'expr', value: '2' }
     ],
     (v) => {
       const scale = safeEval(v.scale, scope, 1) || 1;
@@ -25397,6 +25393,8 @@ window.anvilDev = {
   // Teacher Mode is mostly interaction, and interaction is what a probe has to
   // be able to look at from outside.
   teacher: TEACH,
+  /** Import vector text without the file dialog, for a probe. */
+  importVectorText: (kind, text) => startVectorImport(kind, { ok: true, path: `probe.${kind}`, text }),
   chapters: CHAPTERS,
   parseSTL,
   // Read when it is asked for, not when this object is built: the hooks are
