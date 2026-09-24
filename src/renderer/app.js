@@ -2201,15 +2201,8 @@ function wireUI() {
     else endPicking(false);
   });
 
-  $('#inspectorClose').addEventListener('click', () => cancelEdit());
-  $('#inspectorCancel').addEventListener('click', () => {
-    // Measure has no edit behind it to cancel, so Cancel is how it is put away.
-    if (state.measure) {
-      endMeasure();
-      return;
-    }
-    cancelEdit();
-  });
+  $('#inspectorClose').addEventListener('click', () => closePanel());
+  $('#inspectorCancel').addEventListener('click', () => closePanel());
   $('#inspectorOk').addEventListener('click', () => commitEdit());
 
   $('#modalCancel').addEventListener('click', () => closeModal(null));
@@ -2355,10 +2348,19 @@ function wireKeys() {
         // extrude open with its box still floating by the pointer. Escape there
         // means the same as Escape anywhere else: stop this.
         const inPullBox = state.pullValueEl?.contains(document.activeElement);
+        // A panel opens with its first field focused, so Escape pressed on a
+        // panel lands in a text box every time. Blurring it and stopping there
+        // leaves the panel sitting open, which is not what Escape means.
+        const inPanel =
+          !el.inspector.classList.contains('hidden') &&
+          el.inspector.contains(document.activeElement);
         document.activeElement.blur();
         if (inPullBox) {
           if (state.editing) cancelEdit();
           else hidePullValue();
+          e.preventDefault();
+        } else if (inPanel) {
+          closePanel();
           e.preventDefault();
         }
       }
@@ -2368,6 +2370,19 @@ function wireKeys() {
     // Shaping is a mode, and Escape is how every other mode here is left.
     if (state.editForm && e.key === 'Escape') {
       endEditForm();
+      e.preventDefault();
+      return;
+    }
+
+    // A panel in front of the sketch owns Escape. Backing out of the dialog
+    // is what Escape means while one is open, whatever tool is armed behind it.
+    if (
+      e.key === 'Escape' &&
+      !el.inspector.classList.contains('hidden') &&
+      !state.picking &&
+      !state.editing?.pickInto
+    ) {
+      closePanel();
       e.preventDefault();
       return;
     }
@@ -2483,6 +2498,10 @@ function wireKeys() {
       }
       if (state.editing) {
         cancelEdit();
+        return;
+      }
+      if (!el.inspector.classList.contains('hidden')) {
+        closePanel();
         return;
       }
       if ((state.selectPriority || 'auto') !== 'auto') {
@@ -25197,7 +25216,10 @@ function startMeasure() {
   };
 
   const open = () => {
-    M.panel = showInspector('Measure', rows(), () => endMeasure(), { keepFocus: true });
+    M.panel = showInspector('Measure', rows(), () => endMeasure(), {
+      keepFocus: true,
+      onCancel: () => endMeasure()
+    });
   };
 
   beginPicking({
@@ -25508,11 +25530,13 @@ function showInspector(title, fields, onOk, opts = {}) {
   draw();
 
   const ok = () => {
+    state.panel = null;
     el.inspector.classList.add('hidden');
     $('#inspectorOk').onclick = null;
     onOk(values);
   };
   $('#inspectorOk').onclick = ok;
+  state.panel = { onCancel: opts.onCancel || null };
   const firstInput = el.inspectorBody.querySelector(
     '.field:not(.presetrow) input, .field:not(.presetrow) select'
   );
@@ -25520,8 +25544,28 @@ function showInspector(title, fields, onOk, opts = {}) {
   return { redraw: draw, close: hideInspector };
 }
 
-/** Close whatever panel is open, without running its accept. */
+/**
+ * Back out of whatever the panel is showing.
+ *
+ * Close and Cancel used to mean cancelEdit, which is only about a feature
+ * being edited and returns at once when there is none. Every panel that is
+ * not a feature, Insert SVG, Insert Text, Physical Material, Measure, had two
+ * buttons that did nothing at all: the only way out was to fill the thing in
+ * and press OK. So the panel says how it is put away, and the buttons ask it.
+ */
+function closePanel() {
+  if (state.editing) {
+    cancelEdit();
+    return;
+  }
+  const panel = state.panel;
+  state.panel = null;
+  if (panel?.onCancel) panel.onCancel();
+  hideInspector();
+}
+
 function hideInspector() {
+  state.panel = null;
   el.inspector.classList.add('hidden');
   $('#inspectorOk').onclick = null;
 }
