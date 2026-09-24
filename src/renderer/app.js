@@ -647,28 +647,7 @@ function handleViewportDown(e) {
     const wantsProfile = armed === 'profiles' || armed === 'sections';
     const profile = wantsProfile ? pickProfile(e.clientX, e.clientY) : null;
     if (profile) return pickIntoEdit({ kind: 'profile', ...profile });
-    const wantsEdges =
-      [
-        'axis',
-        'path',
-        'rail',
-        'constructPath',
-        'constructEdgeA',
-        'constructEdgeB',
-        'plasticFace',
-        'jointAxis2',
-        'surfaceCurves',
-        'sheetEdges',
-        'partingEdges',
-        'fixedEdges',
-        // A loft section can be a run of model edges, so an edge has to be
-        // offered there as well as a profile. An align can be lined up by a
-        // circle, so the same goes for its two rows.
-        'sections',
-        'alignFrom',
-        'alignTo',
-        ...Object.keys(DIRECTION_PICKS)
-      ].includes(armed) || !!blendPickRow(armed);
+    const wantsEdges = rowTakesEdges(armed);
     // A plane click has to be offered before the body raycast, or a plane
     // drawn behind the model can never be reached.
     if (['alignFrom', 'alignTo', 'silhouetteDir'].includes(armed)) {
@@ -1453,7 +1432,10 @@ function handleViewportMove(e) {
       return;
     }
   }
-  const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: filter.edges !== false, edgeReach: edgeReach() });
+  // The hover offers what a click would take, which on a row that cannot hold
+  // an edge means no edges.
+  const wantsEdges = filter.edges !== false && rowTakesEdges(state.editing?.pickInto);
+  const hit = state.vp.pickEntity(e.clientX, e.clientY, { edges: wantsEdges, edgeReach: edgeReach() });
   const nextFace =
     hit && hit.kind === 'face' && hit.faceId !== null && filter.faces
       ? { bodyId: hit.bodyId, faceId: hit.faceId }
@@ -16985,6 +16967,44 @@ function holePointAt(clientX, clientY) {
 }
 
 /** A wider reach for edges while a fillet or a chamfer is waiting for them. */
+/**
+ * Whether the row a dialog is waiting on can take a model edge at all.
+ *
+ * The rows that cannot must not have edges offered to them, and that has to
+ * hold for the hover as much as for the click. A thin wall is the case that
+ * proves it: the rim of a plate six tenths of a millimetre thick is a band a
+ * few pixels high, and every point on it is within reach of its own top and
+ * bottom edges. So the hover always resolved to an edge and the face never lit
+ * up, on a row that would have taken the face happily had it been clicked.
+ * Nothing highlighting reads as nothing selectable.
+ */
+function rowTakesEdges(armed) {
+  if (!armed) return true;
+  return (
+    [
+      'axis',
+      'path',
+      'rail',
+      'constructPath',
+      'constructEdgeA',
+      'constructEdgeB',
+      'plasticFace',
+      'jointAxis2',
+      'surfaceCurves',
+      'sheetEdges',
+      'partingEdges',
+      'fixedEdges',
+      // A loft section can be a run of model edges, so an edge has to be
+      // offered there as well as a profile. An align can be lined up by a
+      // circle, so the same goes for its two rows.
+      'sections',
+      'alignFrom',
+      'alignTo',
+      ...Object.keys(DIRECTION_PICKS)
+    ].includes(armed) || !!blendPickRow(armed)
+  );
+}
+
 function edgeReach() {
   return blendPickRow(state.editing?.pickInto) ? 11 : undefined;
 }
@@ -25926,6 +25946,9 @@ window.anvilDev = {
     return TEACH_HOOKS.drive;
   },
   edgeReference,
+  // Opening one of his own files is the only way to look at a problem that
+  // only his geometry has.
+  openDocumentAt,
   // Shaping a form is all drags, and where a control point has to go to put the
   // surface somewhere is arithmetic a probe should check directly rather than
   // aim a gizmo arrow at.
