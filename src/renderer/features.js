@@ -612,6 +612,33 @@ function halfSpace(origin, normal, span, ks) {
   return K.transform(box, m.elements, ks);
 }
 
+/**
+ * A slab of the tool's plane, no wider than the face that gave it.
+ *
+ * The infinite half space is what a split usually wants, but a face is a
+ * particular size and sometimes that size is the point: cutting a lug off
+ * where it meets the wall should not also cut everything else the wall's
+ * plane happens to pass through. This is the same shape, held to the face's
+ * own rectangle.
+ */
+function boundedTool(plane, rect, span, ks) {
+  const w = Math.max(rect.maxU - rect.minU, 1e-6);
+  const h = Math.max(rect.maxV - rect.minV, 1e-6);
+  const cu = (rect.minU + rect.maxU) / 2;
+  const cv = (rect.minV + rect.maxV) / 2;
+  const box = K.box([w, h, span * 2], true, ks);
+  const at = (k) =>
+    plane.origin[k] + plane.x[k] * cu + plane.y[k] * cv - plane.n[k] * span;
+  const m = new THREE.Matrix4();
+  m.set(
+    plane.x[0], plane.y[0], plane.n[0], at(0),
+    plane.x[1], plane.y[1], plane.n[1], at(1),
+    plane.x[2], plane.y[2], plane.n[2], at(2),
+    0, 0, 0, 1
+  );
+  return K.transform(box, m.elements, ks);
+}
+
 /** A point on the line where a face's plane meets another plane. */
 function planeIntersectionPoint(face, other, axisDir) {
   const n = face.normal;
@@ -1217,6 +1244,10 @@ export function rebuild(doc, options = {}) {
 
         case 'split':
           bodies = doSplit(feature, bodies, scope, scopeObj, errors);
+          break;
+
+        case 'removeBody':
+          bodies = doRemoveBody(feature, bodies, errors);
           break;
 
         case 'thread':
@@ -1878,6 +1909,41 @@ export function rebuild(doc, options = {}) {
 
     const b = basisFor(face.normal);
     return { loops, plane: { origin: face.centre, x: b.x, y: b.y, n: b.n } };
+  }
+
+  /**
+   * Where a tool sits, and how big the face that gave it is.
+   *
+   * The rectangle is in the plane's own basis and is what holds a bounded tool
+   * to its face. An origin plane has no size of its own, so it has no
+   * rectangle and is always taken as the whole plane.
+   */
+  function toolFrame(ref, scope) {
+    if (!ref) return null;
+    if (ref.plane) {
+      const plane = resolvePlane(ref.plane, scope, builtConstruction);
+      return plane ? { plane, rect: null } : null;
+    }
+    const found = findFace(ref);
+    if (!found || !found.face.planar) return null;
+    const b = basisFor(found.face.normal);
+    const plane = { origin: found.face.centre, x: b.x, y: b.y, n: b.n };
+    const rect = { minU: Infinity, maxU: -Infinity, minV: Infinity, maxV: -Infinity };
+    for (const e of found.topo.edges) {
+      if (e.faceA !== found.face.id && e.faceB !== found.face.id) continue;
+      for (const pt of e.points) {
+        const dx = pt[0] - plane.origin[0];
+        const dy = pt[1] - plane.origin[1];
+        const dz = pt[2] - plane.origin[2];
+        const u = dx * b.x[0] + dy * b.x[1] + dz * b.x[2];
+        const v = dx * b.y[0] + dy * b.y[1] + dz * b.y[2];
+        rect.minU = Math.min(rect.minU, u);
+        rect.maxU = Math.max(rect.maxU, u);
+        rect.minV = Math.min(rect.minV, v);
+        rect.maxV = Math.max(rect.maxV, v);
+      }
+    }
+    return { plane, rect: Number.isFinite(rect.minU) ? rect : null };
   }
 
   /** Where a face or plane reference sits, as a plane. */
@@ -3888,6 +3954,13 @@ export function rebuild(doc, options = {}) {
   /** Split a body in two with a plane. */
   function doSplit(feature, bodies, scope, ks, errs) {
     normalizeSplit(feature);
+    // Nothing chosen means nothing chosen. It used to mean every body, which
+    // on a part made of two is how the body whose face was being used as the
+    // tool got cut in half as well.
+    if (Array.isArray(feature.bodies) && !feature.bodies.length) {
+      errs.push({ feature: feature.id, message: 'Pick the body to split' });
+      return bodies;
+    }
     const targets = pickBodies(feature, bodies);
     if (!targets.length) return bodies;
 
@@ -3896,7 +3969,7 @@ export function rebuild(doc, options = {}) {
     // are what the second cuts, so a box crossed by three planes comes out as
     // eight parts rather than four.
     const planes = (feature.tools || [])
-      .map((t) => objectPlane(t, scope))
+      .map((t) => toolFrame(t, scope))
       .filter(Boolean);
     if (!planes.length) {
       errs.push({
@@ -3925,8 +3998,11 @@ export function rebuild(doc, options = {}) {
       // tools it is the near side of every one of them.
       let pieces = [b.solid];
       let cutAnything = false;
-      for (const plane of planes) {
-        const below = halfSpace(plane.origin, plane.n, span, ks);
+      for (const { plane, rect } of planes) {
+        const below =
+          feature.extendTool === false && rect
+            ? boundedTool(plane, rect, span, ks)
+            : halfSpace(plane.origin, plane.n, span, ks);
         const next = [];
         for (const piece of pieces) {
           const keep = K.intersection(piece, below, ks);
@@ -3983,6 +4059,27 @@ export function rebuild(doc, options = {}) {
       }
     }
     return out;
+  }
+
+  /**
+   * Take chosen bodies off the model, from this point in the timeline on.
+   *
+   * Deleting a body used to delete the feature that made it, which is a
+   * different thing entirely: deleting one half of a split deleted the split,
+   * and the two halves came back as the one body they were cut from. A body
+   * is an output, and the way to be rid of an output without losing the step
+   * that made it is a step of its own saying so.
+   */
+  function doRemoveBody(feature, bodies, errs) {
+    const targets = pickBodies(feature, bodies, { sheets: 'either' });
+    if (!targets.length) {
+      errs.push({
+        feature: feature.id,
+        message: 'The body this removed is no longer on the model'
+      });
+      return bodies;
+    }
+    return bodies.filter((b) => !targets.includes(b));
   }
 
   /**

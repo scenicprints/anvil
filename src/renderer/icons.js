@@ -666,6 +666,7 @@ const FEATURE_ICON = {
   web: 'web',
   draft: 'draft',
   split: 'splitBody',
+  removeBody: 'deleteBody',
   splitFace: 'splitFace',
   silhouetteSplit: 'silhouetteSplit',
   thread: 'thread',

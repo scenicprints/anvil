@@ -902,6 +902,39 @@ function planeUnderPointer(clientX, clientY) {
   return plane;
 }
 
+/**
+ * Every face a dialog has picked into one of its rows, wherever it keeps them.
+ *
+ * Rows store their faces under different names, because a split's tools and a
+ * draft's faces are different things, but all of them are worth seeing: a row
+ * that says "a face of the model" and shows nothing on the part is asking to
+ * be trusted about something that can be looked at instead.
+ */
+function dialogPickedFaces() {
+  const feature = state.editing?.feature;
+  if (!feature) return [];
+  const refs = [];
+  const take = (v) => {
+    if (!v) return;
+    if (Array.isArray(v)) {
+      v.forEach(take);
+      return;
+    }
+    if (v.face && v.bodyId) refs.push(v);
+  };
+  for (const key of ['faces', 'tools', 'face', 'faceRef', 'startObject', 'toObject']) {
+    take(feature[key]);
+  }
+  const out = [];
+  for (const ref of refs) {
+    const record = (state.records || []).find((r) => r.id === ref.bodyId);
+    if (!record?.topology) continue;
+    const [face] = resolveFaceRefs(record.topology, [ref.face]);
+    if (face) out.push({ bodyId: record.id, faceId: record.topology.faces.indexOf(face) });
+  }
+  return out;
+}
+
 /** Light the selected bodies, and the ones a dialog has picked, as one set. */
 function paintBodySelection() {
   if (!state.vp) return;
@@ -963,6 +996,7 @@ function refreshHighlight() {
         const { bodyId, index } = splitKey(k);
         return { bodyId, faceId: index };
       }),
+      ...dialogPickedFaces(),
       ...(taught.faces || [])
     ],
     edges: [
@@ -4919,20 +4953,34 @@ function bodyProperties() {
   return bits.join(' · ');
 }
 
+/**
+ * Take the chosen bodies off the model.
+ *
+ * This used to delete the feature that made the body, which is a different
+ * thing entirely. Deleting one half of a split deleted the split, so the two
+ * halves came back as the one body they had been cut from: the body would not
+ * go away and appeared to reattach itself. A body is an output, and being rid
+ * of an output without losing the step that made it is a step of its own,
+ * which is what Fusion's Remove is and where it goes.
+ */
 function deleteSelectedBodies() {
   if (!state.selection.bodies.size) {
     setStatus('Select a body first.');
     return;
   }
-  // Bodies are outputs, so removing one means removing the feature that made it.
-  const featureIds = new Set(
-    (state.result?.bodies || [])
-      .filter((b) => state.selection.bodies.has(b.id))
-      .map((b) => b.createdBy)
-  );
-  state.selection.features = featureIds;
-  deleteSelectedFeatures();
+  const ids = [...state.selection.bodies];
+  const names = (state.result?.bodies || [])
+    .filter((b) => ids.includes(b.id))
+    .map((b) => b.name);
+  pushUndo('remove body');
+  insertFeature({ id: uid('f'), type: 'removeBody', bodies: ids });
   state.selection.bodies.clear();
+  clearGeometrySelection(false);
+  state.dirty = true;
+  rebuildAll();
+  setStatus(
+    names.length === 1 ? `Removed ${names[0]}.` : `Removed ${names.length} bodies.`
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -5839,12 +5887,13 @@ function splitFields(feature) {
       label: 'Body to split',
       type: 'pick',
       pick: 'splitBodies',
-      summary: (f) =>
-        !f.bodies || f.bodies === 'all'
-          ? 'Every body'
-          : `${f.bodies.length} body${f.bodies.length === 1 ? '' : 's'}`,
+      summary: (f) => {
+        if (!f.bodies || f.bodies === 'all') return 'Every body';
+        if (!f.bodies.length) return 'Nothing yet';
+        return f.bodies.length === 1 ? 'One body' : `${f.bodies.length} bodies`;
+      },
       clear: (f) => {
-        f.bodies = 'all';
+        f.bodies = [];
       },
       // Fusion asks for the body and then the tool, and so does this: one
       // click on the body moves on to the thing that cuts it.
@@ -5875,6 +5924,24 @@ function splitFields(feature) {
         if (!v) return;
         f.tools = f.tools || [];
         f.tools.push({ plane: planeSpecFromOption(v) });
+      }
+    },
+    {
+      key: 'extendTool',
+      label: 'How far the tool reaches',
+      type: 'select',
+      options: [
+        ['yes', 'Right through the part'],
+        ['no', 'Only as wide as the face']
+      ],
+      // A face is a particular size, and sometimes that size is the point:
+      // cutting a lug off where it meets a wall should not also cut
+      // everything else that wall's plane runs through. An origin plane has
+      // no size of its own, so the choice only means something with a face.
+      showIf: (f) => (f.tools || []).some((t) => !t.plane),
+      get: (f) => (f.extendTool === false ? 'no' : 'yes'),
+      set: (f, v) => {
+        f.extendTool = v !== 'no';
       }
     },
     {
@@ -9297,7 +9364,11 @@ function startSplit() {
     id: uid('f'),
     type: 'split',
     splitType: 'body',
-    bodies: bodySelectionOrAll(),
+    extendTool: true,
+    // What was chosen, and nothing if nothing was. It used to fall back to
+    // every body, which on a part made of two is how the body whose face was
+    // being used as the tool got cut in half as well.
+    bodies: chosenBodyIds(),
     // Written even when empty, so an absent list is reliably an old document
     // and empty reliably means nothing picked yet.
     tools: []
@@ -16630,8 +16701,90 @@ function renderPresetRow(feature, fields) {
   el.inspectorBody.appendChild(wrap);
 }
 
+/**
+ * Draw where a split's tools cut, as panels standing in the model.
+ *
+ * A plane is not a thing you can see, and the face that gave it says only
+ * where the cut crosses that one face. Held to the face, the panel is the
+ * face's own rectangle; extended, it is big enough to cross the whole part,
+ * which is what the cut itself does.
+ */
+function refreshSplitPreview() {
+  if (!state.vp?.setToolPlanes) return;
+  const feature = state.editing?.feature;
+  if (!feature || feature.type !== 'split') {
+    state.vp.setToolPlanes(null);
+    return;
+  }
+  const scope = resolveParameters(state.doc.parameters).scope;
+  const quads = [];
+  for (const tool of feature.tools || []) {
+    const frame = splitToolFrame(tool, scope);
+    if (!frame) continue;
+    const { plane, rect } = frame;
+    let box = rect;
+    if (!box || feature.extendTool !== false) {
+      const span = modelSpan() / 2 + 10;
+      box = { minU: -span, maxU: span, minV: -span, maxV: span };
+    }
+    const at = (u, v) => [0, 1, 2].map((k) => plane.origin[k] + plane.x[k] * u + plane.y[k] * v);
+    quads.push({
+      corners: [
+        at(box.minU, box.minV),
+        at(box.maxU, box.minV),
+        at(box.maxU, box.maxV),
+        at(box.minU, box.maxV)
+      ]
+    });
+  }
+  state.vp.setToolPlanes(quads);
+}
+
+/** How far across the whole model is, for anything that has to cover it. */
+function modelSpan() {
+  let span = 0;
+  for (const record of state.records || []) {
+    const b = record.topology?.bounds;
+    if (!b) continue;
+    span = Math.max(span, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]));
+  }
+  return span || 60;
+}
+
+/** A split tool's plane, and the size of the face it came from. */
+function splitToolFrame(tool, scope) {
+  if (!tool) return null;
+  if (tool.plane) {
+    const plane = resolvePlane(tool.plane, scope, state.result?.construction);
+    return plane ? { plane, rect: null } : null;
+  }
+  const record = (state.records || []).find((r) => r.id === tool.bodyId);
+  if (!record?.topology) return null;
+  const [face] = resolveFaceRefs(record.topology, [tool.face]);
+  if (!face || !face.planar) return null;
+  const basis = basisFor(face.normal);
+  const plane = { origin: face.centre, x: basis.x, y: basis.y, n: basis.n };
+  const rect = { minU: Infinity, maxU: -Infinity, minV: Infinity, maxV: -Infinity };
+  for (const e of record.topology.edges) {
+    if (e.faceA !== face.id && e.faceB !== face.id) continue;
+    for (const pt of e.points) {
+      const dx = pt[0] - plane.origin[0];
+      const dy = pt[1] - plane.origin[1];
+      const dz = pt[2] - plane.origin[2];
+      const u = dx * basis.x[0] + dy * basis.x[1] + dz * basis.x[2];
+      const v = dx * basis.y[0] + dy * basis.y[1] + dz * basis.y[2];
+      rect.minU = Math.min(rect.minU, u);
+      rect.maxU = Math.max(rect.maxU, u);
+      rect.minV = Math.min(rect.minV, v);
+      rect.maxV = Math.max(rect.maxV, v);
+    }
+  }
+  return { plane, rect: Number.isFinite(rect.minU) ? rect : null };
+}
+
 function renderFields() {
   const { feature, fields } = state.editing;
+  refreshSplitPreview();
   el.inspectorBody.innerHTML = '';
   const scope = resolveParameters(state.doc.parameters).scope;
   renderPresetRow(feature, fields);
@@ -17739,7 +17892,6 @@ function pickIntoEdit(hit) {
     const at = f.bodies.indexOf(hit.bodyId);
     if (at >= 0) f.bodies.splice(at, 1);
     else f.bodies.push(hit.bodyId);
-    if (!f.bodies.length) f.bodies = 'all';
   } else if (ed.pickInto === 'targets') {
     if (!hit.bodyId) return true;
     if (!Array.isArray(f.targets)) f.targets = [];
@@ -17861,6 +18013,7 @@ function commitEdit() {
   }
   hidePullValue();
   hideBlendValue();
+  state.vp?.setToolPlanes?.(null);
   state.hoverProfile = null;
   restorePlanes();
   restoreDialogAnalysis();
@@ -17906,6 +18059,7 @@ function cancelEdit() {
   if (!state.editing) return;
   // The pull box belongs to the edit that opened it, however that edit ends.
   hidePullValue();
+  state.vp?.setToolPlanes?.(null);
   hideBlendValue();
   state.hoverProfile = null;
   restorePlanes();
@@ -24574,6 +24728,18 @@ function describeFeature(feature) {
       return { title: 'Scale', fields: scaleFields() };
     case 'split':
       return { title: 'Split Body', fields: splitFields(feature) };
+    case 'removeBody':
+      return {
+        title: 'Remove',
+        fields: [
+          {
+            key: '__what',
+            label: '',
+            type: 'note',
+            text: `${(feature.bodies || []).length} body taken off the model. Delete this step to have it back.`
+          }
+        ]
+      };
     case 'offsetFace':
       return { title: 'Press Pull', fields: pressPullFields() };
     case 'mirror':

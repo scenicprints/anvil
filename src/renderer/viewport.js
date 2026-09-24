@@ -2298,6 +2298,71 @@ export class Viewport {
     this.invalidate();
   }
 
+  /**
+   * Translucent panels showing where a tool is about to cut.
+   *
+   * A split names a plane, and a plane is a thing you cannot see. What is on
+   * screen is a face somewhere on the part, which says where the cut passes
+   * through that face and nothing about where it passes through anything
+   * else. These are drawn big enough to answer that.
+   */
+  setToolPlanes(list) {
+    if (!this.toolPlaneGroup) {
+      this.toolPlaneGroup = new THREE.Group();
+      this.toolPlaneGroup.renderOrder = 11;
+      this.overlayGroup.add(this.toolPlaneGroup);
+    }
+    const g = this.toolPlaneGroup;
+    while (g.children.length) {
+      const c = g.children.pop();
+      c.geometry.dispose();
+      c.material.dispose();
+    }
+    for (const quad of list || []) {
+      const [a, b, c, d] = quad.corners;
+      const colour = quad.colour ?? 0x4aa3f0;
+      const face = new THREE.BufferGeometry();
+      face.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute([...a, ...b, ...c, ...a, ...c, ...d], 3)
+      );
+      const fill = new THREE.Mesh(
+        face,
+        new THREE.MeshBasicMaterial({
+          color: colour,
+          transparent: true,
+          opacity: 0.22,
+          side: THREE.DoubleSide,
+          // Drawn through the part rather than behind it. A cut runs inside
+          // the solid, which is exactly where the part hides it, and a panel
+          // you can only see the overhang of answers nothing.
+          depthTest: false,
+          depthWrite: false
+        })
+      );
+      fill.renderOrder = 11;
+      g.add(fill);
+
+      const edge = new THREE.BufferGeometry();
+      edge.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute([...a, ...b, ...c, ...d, ...a], 3)
+      );
+      const loop = new THREE.Line(
+        edge,
+        new THREE.LineBasicMaterial({
+          color: colour,
+          transparent: true,
+          opacity: 0.9,
+          depthTest: false
+        })
+      );
+      loop.renderOrder = 12;
+      g.add(loop);
+    }
+    this.invalidate();
+  }
+
   setHover(id) {
     if (this.hover === id) return;
     this.hover = id;

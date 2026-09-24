@@ -29,7 +29,11 @@ const PLUMBING = new Set([
   'primitive', 'pattern', 'split', 'form', 'plane', 'cylinder', 'sphere',
   'torus', 'quadball', 'insert',
   // Teacher Mode itself, which is not a modelling tool and cannot teach itself.
-  'teacher', 'teacherLedger'
+  'teacher', 'teacherLedger',
+  // A feature type, not a command: it reads as one only because reopening it
+  // from the timeline is a case in the same shape. The command that makes one
+  // is deleteBody, which has a button and a lesson of its own.
+  'removeBody'
 ]);
 
 const commands = new Set(

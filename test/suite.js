@@ -3822,6 +3822,121 @@ async function run() {
     near(bb.max[0], 37, 1e-3, 'going the distance asked for');
   });
 
+  test('split: a removed body stays removed', () => {
+    // Deleting a body used to delete the feature that made it, so deleting one
+    // half of a split deleted the split and the two halves came back as the
+    // one body they were cut from.
+    const doc = newDocument();
+    doc.features.push({
+      id: 'plate',
+      type: 'primitive',
+      shape: 'box',
+      op: 'new',
+      targets: 'all',
+      params: { width: '40', depth: '20', height: '10', centered: true, x: '0', y: '0', z: '0' }
+    });
+    doc.features.push({
+      id: 'cut',
+      type: 'split',
+      bodies: ['plate:0'],
+      tools: [{ plane: 'YZ' }],
+      splitType: 'body'
+    });
+    const both = rebuild(doc);
+    assert(both.bodies.length === 2, `expected two halves, got ${both.bodies.length}`);
+    const second = both.bodies[1];
+
+    doc.features.push({ id: 'gone', type: 'removeBody', bodies: [second.id] });
+    const res = rebuild(doc);
+    assert(!res.errors.length, `expected no complaint, got ${JSON.stringify(res.errors)}`);
+    assert(res.bodies.length === 1, `expected one body left, got ${res.bodies.length}`);
+    assert(res.bodies[0].id !== second.id, 'the wrong one was taken off');
+  });
+
+  test('split: nothing chosen splits nothing', () => {
+    const doc = newDocument();
+    doc.features.push({
+      id: 'plate',
+      type: 'primitive',
+      shape: 'box',
+      op: 'new',
+      targets: 'all',
+      params: { width: '40', depth: '20', height: '10', centered: true, x: '0', y: '0', z: '0' }
+    });
+    doc.features.push({
+      id: 'cut',
+      type: 'split',
+      bodies: [],
+      tools: [{ plane: 'YZ' }],
+      splitType: 'body'
+    });
+    const res = rebuild(doc);
+    assert(res.bodies.length === 1, 'nothing should have been cut');
+    assert(
+      res.errors.some((e) => /Pick the body to split/.test(e.message)),
+      `expected to be asked for a body, got ${JSON.stringify(res.errors)}`
+    );
+  });
+
+  test('split: a tool can be held to the face that gave it', () => {
+    // A plate sixty by forty by ten, with a lug ten square and twenty tall
+    // standing on it. The lug's outer side face is the tool.
+    const make = () => {
+      const doc = newDocument();
+      doc.features.push({
+        id: 'plate',
+        type: 'primitive',
+        shape: 'box',
+        op: 'new',
+        targets: 'all',
+        params: { width: '60', depth: '40', height: '10', centered: false, x: '0', y: '0', z: '0' }
+      });
+      doc.features.push({
+        id: 'lug',
+        type: 'primitive',
+        shape: 'box',
+        op: 'join',
+        targets: 'all',
+        params: { width: '10', depth: '10', height: '20', centered: false, x: '20', y: '15', z: '10' }
+      });
+      return doc;
+    };
+
+    const first = rebuild(make());
+    const body = first.bodies[0];
+    const topo = buildTopology(K.meshData(body.solid));
+    const lugSide = topo.faces.find(
+      (f) => f.planar && f.normal[0] > 0.99 && Math.abs(f.centre[0] - 30) < 1e-3
+    );
+    assert(lugSide, 'the lug should have an outer side face');
+
+    // Extended, that face's plane runs right through the plate, so the smaller
+    // piece is the half of the plate beyond it. Held to the face, the only
+    // thing the tool reaches is the lug, and the lug is what comes off.
+    for (const [extend, want] of [
+      [true, 12000],
+      [false, 2000]
+    ]) {
+      const doc = make();
+      doc.features.push({
+        id: 'cut',
+        type: 'split',
+        bodies: [body.id],
+        tools: [{ bodyId: body.id, face: faceReference(lugSide) }],
+        splitType: 'body',
+        extendTool: extend
+      });
+      const res = rebuild(doc);
+      assert(
+        res.bodies.length === 2,
+        `${extend ? 'extended' : 'held to the face'}: expected two bodies, got ${res.bodies.length}`
+      );
+      const sizes = res.bodies.map((b) => b.solid.volume()).sort((a, b) => a - b);
+      near(sizes[0], want, 5, `${extend ? 'extended' : 'held'} piece`);
+      near(sizes[0] + sizes[1], 26000, 10, 'the two pieces are the whole part');
+    }
+  });
+
   test('extrude: to object stops at what it was pointed at', () => {
     // A plate floating above the sketch plane, and a post extruded up to it.
     const doc = newDocument();
