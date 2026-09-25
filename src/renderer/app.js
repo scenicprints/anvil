@@ -4829,6 +4829,14 @@ function renderTree() {
         rebuildAll();
       },
       visible: !state.hiddenBodies.has(b.id),
+      // The row is where a body is easiest to get hold of, so it is also
+      // where getting rid of one should be: no selecting it first, no hunting
+      // for the command.
+      remove: () => {
+        state.selection.bodies.clear();
+        state.selection.bodies.add(b.id);
+        deleteSelectedBodies();
+      },
       onClick: () => {
         state.selection.bodies.clear();
         state.selection.bodies.add(b.id);
@@ -8253,6 +8261,29 @@ function selectAllConvexEdges() {
  */
 function showMarkingMenu(e) {
   closeMarkingMenu();
+  // A menu built from the selection needs a selection. Right clicking a body
+  // with nothing chosen offered Create Sketch and Fit View, which is not what
+  // anybody is right clicking a body for. So the click takes hold of what it
+  // is over first, the way the left button would.
+  if (
+    !state.sketcher.active &&
+    !state.selection.bodies.size &&
+    !state.selection.faces.size &&
+    !state.selection.edges.size &&
+    !state.selection.profiles.length
+  ) {
+    const hit = state.vp.pickEntity?.(e.clientX, e.clientY, { edges: false });
+    if (hit?.bodyId) {
+      if (hit.kind === 'face' && hit.faceId !== null) {
+        state.selection.faces.add(`${hit.bodyId}:${hit.faceId}`);
+      }
+      state.selection.bodies.add(hit.bodyId);
+      paintBodySelection();
+      refreshHighlight();
+      renderTree();
+      updateHints();
+    }
+  }
   const items = [];
 
   if (state.sketcher.active) {
@@ -8284,9 +8315,15 @@ function showMarkingMenu(e) {
       items.push({ label: 'Shell', run: () => startShell() });
     }
     if (state.selection.bodies.size) {
+      const many = state.selection.bodies.size > 1;
       items.push({ label: 'Move', run: () => runCommand('move') });
+      items.push({ label: 'Split Body', run: () => runCommand('splitBody') });
+      items.push({ label: 'Physical Material', run: () => runCommand('physicalMaterial') });
       items.push({ label: 'Hide', run: () => runCommand('hideSelected') });
-      items.push({ label: 'Delete', run: () => runCommand('deleteBody') });
+      items.push({
+        label: many ? 'Delete these bodies' : 'Delete this body',
+        run: () => runCommand('deleteBody')
+      });
     }
     if (!items.length) {
       items.push({ label: 'Create Sketch', run: () => cmdNewSketch() });

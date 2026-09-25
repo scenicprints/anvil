@@ -3853,6 +3853,83 @@ async function run() {
     assert(res.bodies[0].id !== second.id, 'the wrong one was taken off');
   });
 
+  test('split: a cut along a wall leaves no paper thin bodies', () => {
+    // A plate with two ribs whose near walls share a plane. Cutting with one
+    // of those walls means the cut runs along the other one, which is where
+    // the shells came from: geometry with no thickness, handed out as bodies.
+    const doc = newDocument();
+    doc.features.push({
+      id: 'plate',
+      type: 'primitive',
+      shape: 'box',
+      op: 'new',
+      targets: 'all',
+      params: { width: '60', depth: '40', height: '4', centered: false, x: '0', y: '0', z: '0' }
+    });
+    for (const [id, x] of [['ribA', '10'], ['ribB', '40']]) {
+      doc.features.push({
+        id,
+        type: 'primitive',
+        shape: 'box',
+        op: 'join',
+        targets: 'all',
+        params: { width: '8', depth: '12', height: '6', centered: false, x, y: '14', z: '4' }
+      });
+    }
+    const first = rebuild(doc);
+    const body = first.bodies[0];
+    const topo = buildTopology(K.meshData(body.solid));
+    const wall = topo.faces.find(
+      (f) => f.planar && f.normal[1] < -0.99 && Math.abs(f.centre[1] - 14) < 1e-3 && f.centre[2] > 4
+    );
+    assert(wall, 'the ribs should have a near wall');
+
+    doc.features.push({
+      id: 'cut',
+      type: 'split',
+      bodies: [body.id],
+      tools: [{ bodyId: body.id, face: faceReference(wall) }],
+      splitType: 'body'
+    });
+    const res = rebuild(doc);
+    for (const b of res.bodies) {
+      const box = b.solid.boundingBox();
+      const thinnest = Math.min(
+        box.max[0] - box.min[0],
+        box.max[1] - box.min[1],
+        box.max[2] - box.min[2]
+      );
+      assert(thinnest > 1e-6, `${b.name} has no thickness: ${JSON.stringify(box)}`);
+      assert(b.solid.volume() > 1e-6, `${b.name} has no volume`);
+    }
+  });
+
+  test('extrude: to object with nothing to reach builds nothing', () => {
+    // The prism is built long and cut back to the object. With no object
+    // there was nothing to cut it back with, so what stood was the full
+    // length prism: a slab across the whole model while the dialog was still
+    // asking what to reach.
+    const doc = newDocument();
+    const base = rectSketch(20, 20);
+    doc.sketches[base.id] = base;
+    doc.features.push({ id: uid('f'), type: 'sketch', sketch: base.id });
+    doc.features.push({
+      id: 'up',
+      type: 'extrude',
+      sketch: base.id,
+      extent: 'object',
+      direction: 'one',
+      extend: 'face',
+      op: 'new'
+    });
+    const res = rebuild(doc);
+    assert(!res.bodies.length, `expected nothing built, got ${res.bodies.length} bodies`);
+    assert(
+      res.errors.some((e) => /to reach/.test(e.message)),
+      `expected to be asked what to reach, got ${JSON.stringify(res.errors)}`
+    );
+  });
+
   test('split: nothing chosen splits nothing', () => {
     const doc = newDocument();
     doc.features.push({

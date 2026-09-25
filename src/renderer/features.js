@@ -594,6 +594,28 @@ const MIN_THREAD_STEP = 7.5;
  * A big slab covering everything on the near side of a plane, used wherever a
  * feature needs "the half of space behind this face".
  */
+/**
+ * Whether a lump of geometry is a body at all.
+ *
+ * A cut taken at a plane that other faces of the part already lie in leaves
+ * paper thin shells where it ran along a face rather than through material.
+ * Volume alone does not catch them: a shell of triangles reports a tiny
+ * positive volume from rounding rather than a clean zero, and anything small
+ * enough to be noise is also small enough to be a real thin wall. What tells
+ * them apart is thickness. A shell has a bounding box with a side of exactly
+ * nothing, and no part anybody models does.
+ */
+function isRealBody(solid) {
+  if (!solid || K.isEmpty(solid)) return false;
+  const box = K.boundingBox(solid);
+  const thinnest = Math.min(
+    box.max[0] - box.min[0],
+    box.max[1] - box.min[1],
+    box.max[2] - box.min[2]
+  );
+  return thinnest > 1e-6 && Math.abs(K.properties(solid).volume) > 1e-9;
+}
+
 function halfSpace(origin, normal, span, ks) {
   const basis = basisFor(normal);
   const box = K.box([span * 3, span * 3, span * 2], true, ks);
@@ -1742,8 +1764,12 @@ export function rebuild(doc, options = {}) {
     let world = K.transform(solid, planeMatrix(base).elements, ks);
 
     // Extending to an object is a trim rather than a length: the prism is built
-    // long above and then cut back to where the object is.
+    // long above and then cut back to where the object is. With nothing to
+    // reach to yet there is nothing to cut it back with, and what was left
+    // standing was that full length prism: a slab crossing the whole model
+    // while the dialog was still asking what to reach.
     if (feature.extent === 'object' && feature.direction !== 'symmetric') {
+      if (!feature.toObject) throw new Error('Click the face, plane or body to reach.');
       world = trimToObject(feature, world, base, scope, ks, errs);
     }
 
@@ -3996,6 +4022,18 @@ export function rebuild(doc, options = {}) {
       // Keeping only the near side is a trim rather than a split, and is what
       // you want when the far half was only ever in the way. With several
       // tools it is the near side of every one of them.
+      /*
+       * A piece with no volume is not a piece.
+       *
+       * Cutting at a plane that other faces of the same part already lie in,
+       * which on a pattern of raised squares is every wall along that line,
+       * leaves paper thin shells where the cut ran along a face instead of
+       * through material. They have no thickness and no volume, and they
+       * arrived in the browser as bodies: eight of them from one cut on his
+       * QR plate, which is what "it kept the face I split with" was.
+       */
+      const real = (solid) => isRealBody(solid);
+
       let pieces = [b.solid];
       let cutAnything = false;
       for (const { plane, rect } of planes) {
@@ -4007,8 +4045,8 @@ export function rebuild(doc, options = {}) {
         for (const piece of pieces) {
           const keep = K.intersection(piece, below, ks);
           const rest = K.difference(piece, below, ks);
-          const keptSomething = !K.isEmpty(keep);
-          const restSomething = !K.isEmpty(rest);
+          const keptSomething = real(keep);
+          const restSomething = real(rest);
           if (keptSomething && restSomething) cutAnything = true;
 
           if (feature.splitType === 'keep') {
@@ -7311,6 +7349,29 @@ export function rebuild(doc, options = {}) {
         g.solid = g.parts.length > 1 ? ks.track(Manifold.compose(g.parts)) : g.parts[0];
         g.volume = Math.abs(g.solid.volume());
       }
+      /*
+       * A shell with no thickness is not a body.
+       *
+       * A cut taken at a plane that other faces of the same part already lie
+       * in, which on a pattern of raised squares is every wall along that
+       * line, leaves paper thin shells where it ran along a face rather than
+       * through material. They have no volume, and arriving here they were
+       * handed out as bodies: eight of them from one cut on a QR plate, which
+       * is what "it kept the face I split with" was, and the stray edges
+       * drawn over the part came from the same shells.
+       *
+       * Dropping them means rebuilding the body from what is left, so the
+       * shells are gone from the geometry as well as from the browser.
+       */
+      const solidGroups = groups.filter((g) => isRealBody(g.solid));
+      if (!solidGroups.length) return keep();
+      if (solidGroups.length < groups.length) groups = solidGroups;
+      if (groups.length === 1) {
+        out = out || list.slice(0, i);
+        out.push({ ...b, solid: groups[0].solid });
+        return;
+      }
+
       const was = boxesBefore.get(b.id);
       const claim = (g) => (was ? overlap(g.box, was) : g.volume);
       groups.sort((a, c) => {
